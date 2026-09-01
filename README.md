@@ -37,6 +37,10 @@ bun run check-types
 
 The package targets Pascal `1.0.0-beta.5` or newer within the `1.x` plugin API.
 
+## Host API readiness
+
+[`HOST-API-READINESS.md`](./HOST-API-READINESS.md) tracks every feature that requires a Pascal Editor evolution beyond the published plugin API. Its open entries and deployment checklist must be reviewed before enabling selector zones or releasing the plugin.
+
 ## Scope
 
 Environment is intended to own large-scale brushes, masks, distributions, terrain-dependent water, atmosphere, surroundings, and environmental LOD. Nature remains responsible for procedural individual vegetation and EZ-Tree-specific behavior. The implementation sequence beyond the transferred Ground Cover prototype is intentionally deferred until the six-day mission plan is approved.
