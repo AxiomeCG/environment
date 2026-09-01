@@ -1,0 +1,58 @@
+{
+  "schema": "procedural-manifest/v1",
+  "project": {
+    "id": "procedural-surroundings",
+    "name": "Procedural Surroundings",
+    "targetRepository": "environment"
+  },
+  "sourceKind": "runtime-vfx",
+  "sourceBlendPath": null,
+  "contract": {
+    "path": "docs/mission/SIX-DAY-PLAN.md",
+    "sha256": "eefd7611651989e11ed1c908e601a0a263af09b914c1c144682e39378cd5ebe0",
+    "section": "Étude complémentaire — Procedural Surroundings"
+  },
+  "coordinates": {
+    "units": "meters",
+    "upAxis": "+Y",
+    "groundPlane": "XZ",
+    "space": "Pascal site/world coordinates through a read-only footprint adapter"
+  },
+  "completedPhases": [
+    "procedural-router"
+  ],
+  "humanApprovals": [
+    {
+      "date": "2026-09-01",
+      "scope": "technical-direction",
+      "decision": "Keep topology, PLU, macro terrain, Pascal primitive assembly and BufferGeometry generation authoritative in TypeScript/CPU; use BatchedMesh for varied house shells, InstancedMesh for exact repetitions, and WebGPU/TSL only for bounded visual enrichment. Compose through the public viewerSceneSlot and make only the minimal editor change needed for Preview visibility."
+    },
+    {
+      "date": "2026-09-01",
+      "scope": "craft-apprenticeship",
+      "decision": "Build the plugin one red-green-visible slice at a time. Adam owns consequential topology, terrain, PLU, shell and TSL mechanisms; the agent owns contracts, fixtures, boilerplate, diagnostics and evidence capture."
+    }
+  ],
+  "warnings": [
+    "The deterministic runtime contract is documented, but its normal, boundary and degenerate fixtures and meaningful red tests have not yet been created.",
+    "Project-scoped persistence for presentation-only presets and seeds has no public host sidecar yet and must remain runtime-only in the first slice.",
+    "The existing viewerSceneSlot is currently omitted from Preview, Studio, capture and first-person paths."
+  ],
+  "artifacts": {
+    "planningDocument": "docs/mission/SIX-DAY-PLAN.md",
+    "spec": {
+      "path": ".procedural/procedural-surroundings/SPEC.md",
+      "sha256": "8d795e707b13c396c28d76d7e5f0f2d821afa29ca7fdc406072ed5a068b0fedb"
+    },
+    "learningPath": {
+      "path": ".procedural/procedural-surroundings/LEARNING-PATH.md",
+      "sha256": "dfc93e105517440eb10dd6d581ce65af49de0822b8a98bfa73f63c2d73126642"
+    },
+    "lesson01": {
+      "path": ".procedural/procedural-surroundings/LESSON-01-RINGS.md",
+      "sha256": "2c5366fa075b53143f45a67c0e050728270144d3c18eed0a79918e8ac43e528d"
+    },
+    "vaultySubject": "Vaulty/subjects/procedural-surroundings/_index.md"
+  },
+  "recommendedNextSkill": "procedural-vfx"
+}

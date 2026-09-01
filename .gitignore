@@ -1,0 +1,10 @@
+node_modules
+.turbo
+dist
+*.tsbuildinfo
+.DS_Store
+
+# Local mission corpus
+/AGENTS.md
+/CONTEXT.md
+/docs/
