@@ -15,6 +15,10 @@ describe('Environment plugin manifest', () => {
     expect(environmentHostPanel.pluginId).toBe(environmentPlugin.id)
     expect(environmentHostPanel.kinds).toEqual(['environment:ground-cover'])
     expect(environmentHostPanel.defaultInstalled).toBe(true)
+    expect(environmentHostPanel.icon.kind).toBe('url')
+    if (environmentHostPanel.icon.kind === 'url') {
+      expect(environmentHostPanel.icon.src).toContain('environment-plugin-logo.webp')
+    }
     expect(environmentHostPanel.pluginUrl).toBe(
       'https://github.com/pascalorg/plugin-environment',
     )

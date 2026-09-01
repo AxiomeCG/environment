@@ -33,6 +33,7 @@ import {
   type PaintStroke,
 } from './paint-stroke'
 import { getGrassPaintRuntime, updateGrassPaintTexture } from './paint-texture'
+import { getGrassObstacleRuntime } from './obstacle-texture'
 import type { GrassFieldNode } from './schema'
 
 type PaintableGrassFieldNode = GrassFieldNode & { paintMap?: unknown }
@@ -199,6 +200,7 @@ export function GrassFieldPaintTool() {
         field,
         boundary: site.polygon.points,
         settings: latest.current.settings,
+        obstacleField: getGrassObstacleRuntime(grassField.id)?.field ?? null,
       })
       activeStrokeRef.current = {
         grassFieldId: grassField.id,

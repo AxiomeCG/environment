@@ -16,6 +16,9 @@ export const GrassFieldNode = BaseNode.extend({
   density: z.number().min(0).max(100).default(100),
   windStrength: z.number().min(0).max(200).default(100),
   grassWindInfluence: z.number().min(0).max(300).default(100),
+  obstacleBendRadius: z.number().min(0).max(3).default(0.75),
+  obstacleBendStrength: z.number().min(0).max(2).default(0.12),
+  obstacleFlattening: z.number().min(0).max(100).default(60),
   paintMap: GrassPaintFieldData.optional(),
 })
 
@@ -30,6 +33,9 @@ type GrassFieldDefaultsPatch = Pick<
   | 'density'
   | 'windStrength'
   | 'grassWindInfluence'
+  | 'obstacleBendRadius'
+  | 'obstacleBendStrength'
+  | 'obstacleFlattening'
 >
 
 export function getMissingGrassFieldDefaults(node: unknown): Partial<GrassFieldDefaultsPatch> {
@@ -53,6 +59,15 @@ export function getMissingGrassFieldDefaults(node: unknown): Partial<GrassFieldD
   if (source.windStrength === undefined) patch.windStrength = parsed.windStrength
   if (source.grassWindInfluence === undefined) {
     patch.grassWindInfluence = parsed.grassWindInfluence
+  }
+  if (source.obstacleBendRadius === undefined) {
+    patch.obstacleBendRadius = parsed.obstacleBendRadius
+  }
+  if (source.obstacleBendStrength === undefined) {
+    patch.obstacleBendStrength = parsed.obstacleBendStrength
+  }
+  if (source.obstacleFlattening === undefined) {
+    patch.obstacleFlattening = parsed.obstacleFlattening
   }
 
   return patch

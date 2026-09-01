@@ -54,6 +54,35 @@ export const grassFieldParametrics: ParametricDescriptor<GrassFieldNode> = {
       fields: [{ key: 'density', kind: 'number', unit: '%', min: 0, max: 100, step: 1 }],
     },
     {
+      label: 'Obstacles',
+      fields: [
+        {
+          key: 'obstacleBendRadius',
+          kind: 'number',
+          unit: 'm',
+          min: 0,
+          max: 3,
+          step: 0.05,
+        },
+        {
+          key: 'obstacleBendStrength',
+          kind: 'number',
+          unit: 'm',
+          min: 0,
+          max: 0.5,
+          step: 0.01,
+        },
+        {
+          key: 'obstacleFlattening',
+          kind: 'number',
+          unit: '%',
+          min: 0,
+          max: 100,
+          step: 5,
+        },
+      ],
+    },
+    {
       label: 'Wind',
       fields: [
         { key: 'windStrength', kind: 'number', unit: '%', min: 0, max: 200, step: 5 },

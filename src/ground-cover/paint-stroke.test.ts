@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { weightAt } from '@pascal-app/core'
+import { createGrassObstacleField } from './obstacle-field'
 import { type GrassPaintField } from './paint-field'
 import {
   advancePaintStroke,
@@ -197,6 +198,27 @@ describe('paint, erase, and smooth', () => {
     expect(rgbaAt(result, 2, 0)).toEqual([0, 0, 0, 0])
   })
 })
+describe('obstacle clipping', () => {
+  test('preserves paint below illegal obstacle cells while painting around them', () => {
+    const source = field()
+    const obstacles = createGrassObstacleField(
+      source,
+      [{ kind: 'box', center: [0, 0], halfSize: [0.75, 0.75], rotation: 0 }],
+    )
+    const stroke = beginPaintStroke({
+      field: source,
+      boundary: SITE,
+      obstacleField: obstacles,
+      settings: { radius: 2, strength: 1, falloff: 0, targetDensity: 1 },
+    })
+
+    advancePaintStroke(stroke, 0, 0)
+
+    expect(rgbaAt(stroke.result, 0, 0)[3]).toBe(0)
+    expect(rgbaAt(stroke.result, 1.5, 0)[3]).toBe(255)
+  })
+})
+
 
 describe('noise, site clipping, and stroke motion', () => {
   test('world-space noise is deterministic by seed and changes with another seed', () => {

@@ -6,6 +6,7 @@ import {
   type GrassPaintField,
   type RgbBytes,
 } from './paint-field'
+import { isGrassAllowedAt, type GrassObstacleField } from './obstacle-field'
 
 const DAB_SPACING_FRACTION = 0.25
 
@@ -37,6 +38,7 @@ export type PaintStroke = {
   readonly settings: PaintStrokeSettings
   readonly boundary: Array<[number, number]>
   readonly snapshot: GrassPaintField
+  readonly obstacles: GrassObstacleField | null
   readonly result: GrassPaintField
   readonly mask: Map<number, number>
   smoothed: Uint8Array | null
@@ -47,6 +49,7 @@ export type PaintStroke = {
 export function beginPaintStroke(options: {
   field: GrassPaintField
   boundary: ReadonlyArray<readonly [number, number]>
+  obstacleField?: GrassObstacleField | null
   settings?: Partial<PaintStrokeSettings>
 }): PaintStroke {
   assertField(options.field)
@@ -64,6 +67,7 @@ export function beginPaintStroke(options: {
     settings,
     boundary: options.boundary.map(([x, z]) => [x, z]),
     snapshot,
+    obstacles: options.obstacleField ?? null,
     result,
     mask: new Map(),
     smoothed: null,
@@ -93,6 +97,9 @@ export function advancePaintStroke(
       for (let col = range.col0; col <= range.col1; col += 1) {
         const sampleX = field.origin[0] + col * field.spacing
         if (!pointInPolygon2D([sampleX, sampleZ], stroke.boundary, { includeBoundary: true })) {
+          continue
+        }
+        if (stroke.obstacles && !isGrassAllowedAt(stroke.obstacles, sampleX, sampleZ)) {
           continue
         }
 

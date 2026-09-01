@@ -1,5 +1,6 @@
 import type { AnyNodeDefinition, Plugin } from '@pascal-app/core'
 import type { EditorHostPanel } from '@pascal-app/editor'
+import { ENVIRONMENT_PLUGIN_LOGO } from './art'
 import { grassFieldDefinition } from './ground-cover/definition'
 
 export const groundCoverDefinition = grassFieldDefinition
@@ -13,7 +14,7 @@ export const environmentPlugin: Plugin = {
 export const environmentHostPanel: EditorHostPanel = {
   id: 'pascal:environment:catalog',
   label: 'Environment',
-  icon: { kind: 'iconify', name: 'lucide:mountain-snow' },
+  icon: { kind: 'url', src: ENVIRONMENT_PLUGIN_LOGO },
   component: () => import('./panel'),
   kinds: ['environment:ground-cover'],
   pluginId: environmentPlugin.id,

@@ -27,6 +27,9 @@ export const grassFieldDefinition: GrassFieldDefinition = {
     density: 100,
     windStrength: 100,
     grassWindInfluence: 100,
+    obstacleBendRadius: 0.75,
+    obstacleBendStrength: 0.12,
+    obstacleFlattening: 60,
   }),
 
   capabilities: {
