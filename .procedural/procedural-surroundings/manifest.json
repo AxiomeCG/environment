@@ -9,14 +9,14 @@
   "sourceBlendPath": null,
   "contract": {
     "path": "docs/mission/SIX-DAY-PLAN.md",
-    "sha256": "eefd7611651989e11ed1c908e601a0a263af09b914c1c144682e39378cd5ebe0",
-    "section": "Étude complémentaire — Procedural Surroundings"
+    "sha256": "4e224cb552864bc597111c476bbf289874d9670854f4ff4ea422545dd0abc066",
+    "section": "Frontages du Site et contexte de voisinage"
   },
   "coordinates": {
     "units": "meters",
     "upAxis": "+Y",
     "groundPlane": "XZ",
-    "space": "Pascal site/world coordinates through a read-only footprint adapter"
+    "space": "Pascal Site-polygon and world coordinates through read-only boundary, Terrain and frontage adapters"
   },
   "completedPhases": [
     "procedural-router"
@@ -25,32 +25,60 @@
     {
       "date": "2026-09-01",
       "scope": "technical-direction",
+      "status": "superseded",
       "decision": "Keep topology, PLU, macro terrain, Pascal primitive assembly and BufferGeometry generation authoritative in TypeScript/CPU; use BatchedMesh for varied house shells, InstancedMesh for exact repetitions, and WebGPU/TSL only for bounded visual enrichment. Compose through the public viewerSceneSlot and make only the minimal editor change needed for Preview visibility."
     },
     {
       "date": "2026-09-01",
       "scope": "craft-apprenticeship",
+      "status": "superseded",
       "decision": "Build the plugin one red-green-visible slice at a time. Adam owns consequential topology, terrain, PLU, shell and TSL mechanisms; the agent owns contracts, fixtures, boilerplate, diagnostics and evidence capture."
+    },
+    {
+      "date": "2026-09-02",
+      "scope": "scope-and-topology-refresh",
+      "status": "approved",
+      "decision": "Use the Pascal Site polygon as the authoritative boundary. Each polygon segment can be selected as a frontage with no road, a secondary road or a primary road, and a presentation-only Streetscape corridor can be juxtaposed outside that segment to separate the active property from nearby derived properties. Keep access crossings independent from road separation. Use world-coordinate chunks and distance-to-boundary fields for continuous terrain, vegetation and LOD; use only a small derived neighbor band for immediate property relationships. Deliver open-meadow and woodland-edge before the optional Sims-like suburb extension; generated houses and PLU remain deferred."
+    },
+    {
+      "date": "2026-09-02",
+      "scope": "craft-apprenticeship-refresh",
+      "status": "approved",
+      "decision": "Build one red-green-visible concept at a time. Adam owns polygon/frontage geometry, deterministic fields, terrain transitions, population grammar, TSL behavior and perceptual acceptance; the agent owns contracts, fixtures, scaffolding, diagnostics, repetitive integration and evidence capture."
+    },
+    {
+      "date": "2026-09-02",
+      "scope": "evening-suburb-blockout",
+      "status": "approved",
+      "decision": "Time-box a runtime-only blocky suburb demonstrator after the frontage selector: a disposable presentation root, one frontage-driven road/property band, and a few deterministic low-poly house shells. Keep neighbor elevation flat for the first proof and defer the layered Site collar, landform noise, road profile and property levels. Try optical concealment only after geometry reads; the active Site, author geometry, gizmos and overlays must remain sharp, and distance haze is the fallback if no clean viewer-owned selective DOF seam fits the timebox."
+    },
+    {
+      "date": "2026-09-02",
+      "scope": "frontage-selector-interaction-and-orientation",
+      "status": "approved",
+      "decision": "Configure every Site edge with an explicit native selector for no road, secondary road or primary road; do not cycle states through repeated edge clicks. Orient the complete mini-plan with Pascal's public camera azimuth and floorplan convention where world -Z is screen-up at north alignment."
     }
   ],
   "warnings": [
-    "The deterministic runtime contract is documented, but its normal, boundary and degenerate fixtures and meaningful red tests have not yet been created.",
-    "Project-scoped persistence for presentation-only presets and seeds has no public host sidecar yet and must remain runtime-only in the first slice.",
-    "The existing viewerSceneSlot is currently omitted from Preview, Studio, capture and first-person paths."
+    "The automated E0 gate is green, including direct separator selection and camera-relative -Z-up preview contracts, and E1/E2 are implemented from one shared 2D Site-polygon layout with adjacent-road junctions; presentation-root isolation and visual calibration still await human acceptance.",
+    "Project-scoped persistence for presentation-only presets, seeds and frontages has no public host sidecar; Site polygon segments also have no stable IDs, so frontage selection must remain runtime-only in the first slice.",
+    "The existing viewerSceneSlot is currently omitted from Preview, Studio, capture and first-person paths.",
+    "Streetscape publicly exposes roadStyleWidth and road-graph operators, but presentation-only reuse of its full road cross-section and renderer still requires a focused tracer bullet; deep imports and registered author RoadNetworkNode objects are forbidden.",
+    "Pascal's viewer owns a custom WebGPU/TSL RenderPipeline but exposes no generic DOF or Site-protection mask. Standard depth DOF cannot guarantee sharpness across the full active Site; use a viewer-owned selective seam or retain distance haze as the evening fallback."
   ],
   "artifacts": {
     "planningDocument": "docs/mission/SIX-DAY-PLAN.md",
     "spec": {
       "path": ".procedural/procedural-surroundings/SPEC.md",
-      "sha256": "8d795e707b13c396c28d76d7e5f0f2d821afa29ca7fdc406072ed5a068b0fedb"
+      "sha256": "f472099fb9df3305864a101be1ad703bbcde5f368a82a4415efe261e60280091"
     },
     "learningPath": {
       "path": ".procedural/procedural-surroundings/LEARNING-PATH.md",
-      "sha256": "dfc93e105517440eb10dd6d581ce65af49de0822b8a98bfa73f63c2d73126642"
+      "sha256": "6ac22137a58ceebb6ea903ba7aeef3c3a0e8bc020b6ecbf47d39ce1b71627d5b"
     },
     "lesson01": {
-      "path": ".procedural/procedural-surroundings/LESSON-01-RINGS.md",
-      "sha256": "2c5366fa075b53143f45a67c0e050728270144d3c18eed0a79918e8ac43e528d"
+      "path": ".procedural/procedural-surroundings/LESSON-01-FRONTAGES.md",
+      "sha256": "405900da2eeb6a49346b3de6f6cc927e84922eb36cf0304a2f8a6db28c495d33"
     },
     "vaultySubject": "Vaulty/subjects/procedural-surroundings/_index.md"
   },
