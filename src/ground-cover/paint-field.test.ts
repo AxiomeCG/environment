@@ -77,7 +77,7 @@ describe('field creation and resolution', () => {
     expect(bounds).toEqual({ minX: 100.1, maxX: 123.4, minZ: -20.2, maxZ: 7.7 })
     expect(field.cols).toBe(field.rows)
     expect([...GRASS_PAINT_FIELD_SIZES] as number[]).toContain(field.cols)
-    expect(field.spacing).toBe(DEFAULT_GRASS_PAINT_FIELD_SPACING)
+    expect(field.spacing).toBeGreaterThanOrEqual(DEFAULT_GRASS_PAINT_FIELD_SPACING)
     expect(field.origin[0] / field.spacing).toBeCloseTo(
       Math.round(field.origin[0] / field.spacing),
       9,
@@ -91,6 +91,16 @@ describe('field creation and resolution', () => {
     expect(maxX).toBeGreaterThanOrEqual(bounds.maxX)
     expect(maxZ).toBeGreaterThanOrEqual(bounds.maxZ)
     expect(grassPaintFieldCoversBounds(field, bounds)).toBe(true)
+  })
+
+  test('creates a fully cleared field at zero density', () => {
+    const field = createGrassPaintField(
+      { minX: -1, maxX: 1, minZ: -1, maxZ: 1 },
+      '#ffffff',
+      0,
+    )
+
+    expect(field.values.every((value, index) => index % 4 !== 3 || value === 0)).toBe(true)
   })
 
   test('caps huge sites at 513 samples and coarsens enough to cover them', () => {
@@ -116,6 +126,20 @@ describe('field creation and resolution', () => {
     }
   })
 
+  test('refines legacy coarse fields to the current brush resolution', () => {
+    const bounds = { minX: 0, maxX: 2, minZ: 0, maxZ: 2 }
+    const coarse = createGrassPaintField(bounds, '#204060', 0.4, 0.25)
+    const refined = resolveGrassPaintField(
+      encodeGrassPaintField(coarse),
+      bounds,
+      '#abcdef',
+    )
+
+    expect(refined.spacing).toBe(DEFAULT_GRASS_PAINT_FIELD_SPACING)
+    expect(paintAt(refined, 1, 1)).toEqual(paintAt(coarse, 1, 1))
+  })
+
+
   test('expansion preserves old RGBA and initializes only new space', () => {
     const original = createGrassPaintField(
       { minX: 0, maxX: 2, minZ: 0, maxZ: 2 },
@@ -132,12 +156,15 @@ describe('field creation and resolution', () => {
     )
 
     expect(expanded.cols).toBeGreaterThan(original.cols)
-    expect(paintAt(expanded, 0.5, 0.5)).toEqual({
-      r: 240 / 255,
-      g: 120 / 255,
-      b: 60 / 255,
-      a: 32 / 255,
-    })
+    const preserved = paintAt(
+      expanded,
+      original.origin[0] + 2 * original.spacing,
+      original.origin[1] + 2 * original.spacing,
+    )
+    expect(preserved.r).toBeCloseTo(240 / 255, 12)
+    expect(preserved.g).toBeCloseTo(120 / 255, 12)
+    expect(preserved.b).toBeCloseTo(60 / 255, 12)
+    expect(preserved.a).toBeCloseTo(32 / 255, 12)
     expect(paintAt(expanded, -3.5, -3.5)).toEqual({
       r: 0xab / 255,
       g: 0xcd / 255,

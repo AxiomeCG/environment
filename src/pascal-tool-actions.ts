@@ -6,6 +6,45 @@ export type PascalToolActionTarget = Pick<
   'setActiveSidebarPanel' | 'setMode'
 >
 
+export const GROUND_COVER_TOOL = 'environment:ground-cover'
+export const SURFACE_MATERIAL_TOOL = 'environment:surface-material'
+
+export type GroundCoverToolActionTarget = Pick<
+  ReturnType<typeof useEditor.getState>,
+  'mode' | 'setMode' | 'setViewMode' | 'tool' | 'viewMode'
+> & {
+  setTool: (tool: string | null) => void
+}
+
+export function activateGroundCoverTool(editor: GroundCoverToolActionTarget): void {
+  if (editor.viewMode === '2d') editor.setViewMode('split')
+  editor.setTool(GROUND_COVER_TOOL)
+  editor.setMode('build')
+}
+
+export function activateSurfaceMaterialTool(editor: GroundCoverToolActionTarget): void {
+  if (editor.viewMode === '2d') editor.setViewMode('split')
+  editor.setTool(SURFACE_MATERIAL_TOOL)
+  editor.setMode('build')
+}
+
+export function cancelEnvironmentPaintToolFor2D(
+  editor: GroundCoverToolActionTarget,
+): boolean {
+  if (
+    editor.viewMode !== '2d' ||
+    editor.mode !== 'build' ||
+    (editor.tool !== GROUND_COVER_TOOL && editor.tool !== SURFACE_MATERIAL_TOOL)
+  ) {
+    return false
+  }
+
+  editor.setMode('select')
+  return true
+}
+
+export const cancelGroundCoverToolFor2D = cancelEnvironmentPaintToolFor2D
+
 export function applyPascalShortcut(
   tool: EnvironmentTool,
   editor: PascalToolActionTarget,

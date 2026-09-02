@@ -1,9 +1,21 @@
 import type { NodeDefinition } from '@pascal-app/core'
+import { buildGrassFieldBakeGeometry } from './bake-geometry'
+import { buildGrassFieldFloorplan } from './floorplan'
 import { buildGrassFieldGeometry } from './geometry'
 import { grassFieldParametrics } from './parametrics'
 import { GrassFieldNode } from './schema'
 
-type GrassFieldDefinition = NodeDefinition<typeof GrassFieldNode> & Record<string, unknown>
+type GrassFieldDefinition = Omit<
+  NodeDefinition<typeof GrassFieldNode>,
+  'capabilities' | 'floorplanScope'
+> &
+  Record<string, unknown> & {
+    bakeGeometry: typeof buildGrassFieldBakeGeometry
+    capabilities: NodeDefinition<typeof GrassFieldNode>['capabilities'] & {
+      selectionHighlight?: boolean
+    }
+    floorplanScope: 'site'
+  }
 
 export const grassFieldDefinition: GrassFieldDefinition = {
   kind: 'environment:ground-cover',
@@ -34,12 +46,18 @@ export const grassFieldDefinition: GrassFieldDefinition = {
 
   capabilities: {
     selectable: { hitVolume: 'bbox' },
+    selectionHighlight: false,
     duplicable: false,
     deletable: false,
   },
 
   parametrics: grassFieldParametrics,
   geometry: buildGrassFieldGeometry,
+  bake: 'replace',
+  bakeGeometry: buildGrassFieldBakeGeometry,
+  bakeReplaceRenderer: { module: () => import('./static-renderer') },
+  floorplan: buildGrassFieldFloorplan,
+  floorplanScope: 'site',
   system: { module: () => import('./system'), priority: 1 },
   tool: () => import('./tool'),
   toolHints: [

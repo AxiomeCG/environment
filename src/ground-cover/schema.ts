@@ -20,6 +20,7 @@ export const GrassFieldNode = BaseNode.extend({
   obstacleBendStrength: z.number().min(0).max(2).default(0.12),
   obstacleFlattening: z.number().min(0).max(100).default(60),
   paintMap: GrassPaintFieldData.optional(),
+  heightMap: GrassPaintFieldData.optional(),
 })
 
 export type GrassFieldNode = z.infer<typeof GrassFieldNode>

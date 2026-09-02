@@ -4,9 +4,9 @@ const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 const BASE64_PATTERN = /^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/
 
 export const GRASS_PAINT_FIELD_SIZES = [33, 65, 129, 257, 513] as const
-export const DEFAULT_GRASS_PAINT_FIELD_SPACING = 0.25
+export const DEFAULT_GRASS_PAINT_FIELD_SPACING = 0.05
 export const DEFAULT_GRASS_PAINT_COLOR = '#3f6b2f'
-export const CLEARED_GRASS_PAINT_COLOR = '#ffffff'
+export const CLEARED_GRASS_PAINT_COLOR = DEFAULT_GRASS_PAINT_COLOR
 export const MAX_GRASS_PAINT_FIELD_SIDE = 513
 
 export type SiteBounds = {
@@ -73,34 +73,39 @@ function decodeCanonicalBase64(text: string): Uint8Array | null {
   return encodeBase64(bytes) === text ? bytes : null
 }
 
-export const GrassPaintFieldData = z
-  .object({
-    type: z.literal('grass-paint-field'),
-    origin: z.tuple([z.number().finite(), z.number().finite()]),
-    spacing: z.number().finite().positive(),
-    cols: z.number().int().positive().max(MAX_GRASS_PAINT_FIELD_SIDE),
-    rows: z.number().int().positive().max(MAX_GRASS_PAINT_FIELD_SIDE),
-    values: z.string(),
-  })
-  .strict()
-  .superRefine((data, context) => {
-    const bytes = decodeCanonicalBase64(data.values)
-    if (!bytes) {
-      context.addIssue({
-        code: 'custom',
-        message: 'values must be canonical base64',
-        path: ['values'],
-      })
-      return
-    }
-    if (bytes.length !== data.cols * data.rows * 4) {
-      context.addIssue({
-        code: 'custom',
-        message: 'values byte length must equal cols * rows * 4',
-        path: ['values'],
-      })
-    }
-  })
+export function createRgbaPaintFieldDataSchema<const Type extends string>(type: Type) {
+  return z
+    .object({
+      type: z.literal(type),
+      origin: z.tuple([z.number().finite(), z.number().finite()]),
+      spacing: z.number().finite().positive(),
+      cols: z.number().int().positive().max(MAX_GRASS_PAINT_FIELD_SIDE),
+      rows: z.number().int().positive().max(MAX_GRASS_PAINT_FIELD_SIDE),
+      values: z.string(),
+    })
+    .strict()
+    .superRefine((data, context) => {
+      const bytes = decodeCanonicalBase64(data.values)
+      if (!bytes) {
+        context.addIssue({
+          code: 'custom',
+          message: 'values must be canonical base64',
+          path: ['values'],
+        })
+        return
+      }
+      if (bytes.length !== data.cols * data.rows * 4) {
+        context.addIssue({
+          code: 'custom',
+          message: 'values byte length must equal cols * rows * 4',
+          path: ['values'],
+        })
+      }
+    })
+}
+
+export const GrassPaintFieldData = createRgbaPaintFieldDataSchema('grass-paint-field')
+
 
 export type GrassPaintFieldData = z.infer<typeof GrassPaintFieldData>
 export type PersistedGrassPaintField = GrassPaintFieldData
@@ -148,8 +153,9 @@ export function createGrassPaintField(
   bounds: SiteBounds,
   colorHex: string,
   density = 1,
+  preferredSpacing = DEFAULT_GRASS_PAINT_FIELD_SPACING,
 ): GrassPaintField {
-  const extent = fieldExtent(normalizeBounds(bounds))
+  const extent = fieldExtent(normalizeBounds(bounds), preferredSpacing)
   const color = hexToRgb(colorHex)
   const alpha = Math.round(clamp01(density) * 255)
   const values = new Uint8Array(extent.cols * extent.rows * 4)
@@ -212,37 +218,38 @@ export function resolveGrassPaintField(
   const normalizedBounds = normalizeBounds(bounds)
   const existing = decodeGrassPaintField(data)
   if (!existing) return createGrassPaintField(normalizedBounds, defaultColorHex, 1)
-  if (grassPaintFieldCoversBounds(existing, normalizedBounds)) return existing
 
-  const oldBounds = boundsOfField(existing)
-  const expanded = createGrassPaintField(
-    {
-      minX: Math.min(oldBounds.minX, normalizedBounds.minX),
-      maxX: Math.max(oldBounds.maxX, normalizedBounds.maxX),
-      minZ: Math.min(oldBounds.minZ, normalizedBounds.minZ),
-      maxZ: Math.max(oldBounds.maxZ, normalizedBounds.maxZ),
-    },
+  const resolved = createGrassPaintField(
+    normalizedBounds,
     defaultColorHex,
     1,
+    Math.min(DEFAULT_GRASS_PAINT_FIELD_SPACING, existing.spacing),
   )
+  const tolerance = Math.max(existing.spacing, resolved.spacing) * 1e-9
+  if (
+    grassPaintFieldCoversBounds(existing, normalizedBounds) &&
+    existing.spacing <= resolved.spacing + tolerance
+  ) {
+    return existing
+  }
 
-  const tolerance = Math.max(existing.spacing, expanded.spacing) * 1e-9
-  for (let row = 0; row < expanded.rows; row += 1) {
-    const z = expanded.origin[1] + row * expanded.spacing
+  const oldBounds = boundsOfField(existing)
+  for (let row = 0; row < resolved.rows; row += 1) {
+    const z = resolved.origin[1] + row * resolved.spacing
     if (z < oldBounds.minZ - tolerance || z > oldBounds.maxZ + tolerance) continue
-    for (let col = 0; col < expanded.cols; col += 1) {
-      const x = expanded.origin[0] + col * expanded.spacing
+    for (let col = 0; col < resolved.cols; col += 1) {
+      const x = resolved.origin[0] + col * resolved.spacing
       if (x < oldBounds.minX - tolerance || x > oldBounds.maxX + tolerance) continue
       const sample = paintAt(existing, x, z)
-      const index = (row * expanded.cols + col) * 4
-      expanded.values[index] = Math.round(sample.r * 255)
-      expanded.values[index + 1] = Math.round(sample.g * 255)
-      expanded.values[index + 2] = Math.round(sample.b * 255)
-      expanded.values[index + 3] = Math.round(sample.a * 255)
+      const index = (row * resolved.cols + col) * 4
+      resolved.values[index] = Math.round(sample.r * 255)
+      resolved.values[index + 1] = Math.round(sample.g * 255)
+      resolved.values[index + 2] = Math.round(sample.b * 255)
+      resolved.values[index + 3] = Math.round(sample.a * 255)
     }
   }
 
-  return expanded
+  return resolved
 }
 
 export function paintAt(field: GrassPaintField, x: number, z: number): GrassPaintSample {
@@ -263,20 +270,20 @@ export function paintAt(field: GrassPaintField, x: number, z: number): GrassPain
   }
 }
 
-function fieldExtent(bounds: SiteBounds): {
+function fieldExtent(bounds: SiteBounds, preferredSpacing: number): {
   origin: [number, number]
   spacing: number
   cols: number
   rows: number
 } {
-  let spacing = DEFAULT_GRASS_PAINT_FIELD_SPACING
+  let spacing = preferredSpacing
   let indices = latticeIndices(bounds, spacing)
   let wanted = Math.max(indices.maxCol - indices.minCol, indices.maxRow - indices.minRow) + 1
   let size = GRASS_PAINT_FIELD_SIZES.find((candidate) => candidate >= wanted)
 
   if (!size) {
     const span = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ)
-    spacing = Math.max(DEFAULT_GRASS_PAINT_FIELD_SPACING, span / (MAX_GRASS_PAINT_FIELD_SIDE - 2))
+    spacing = Math.max(preferredSpacing, span / (MAX_GRASS_PAINT_FIELD_SIDE - 2))
     for (let attempt = 0; attempt < 8; attempt += 1) {
       indices = latticeIndices(bounds, spacing)
       wanted = Math.max(indices.maxCol - indices.minCol, indices.maxRow - indices.minRow) + 1

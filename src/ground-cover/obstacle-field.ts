@@ -14,6 +14,13 @@ export type GrassObstacleField = {
   readonly values: Uint8Array
 }
 
+export type GrassObstacleSample = {
+  distance: number
+  directionX: number
+  directionZ: number
+  allowed: number
+}
+
 export type GrassObstacleShape =
   | {
       kind: 'polygon'
@@ -76,6 +83,60 @@ export function isGrassAllowedAt(field: GrassObstacleField, x: number, z: number
   const row = Math.round((z - field.origin[1]) / field.spacing)
   if (col < 0 || row < 0 || col >= field.cols || row >= field.rows) return true
   return (field.values[(row * field.cols + col) * 4 + 3] ?? 255) >= 128
+}
+
+export function sampleGrassObstacle(
+  field: GrassObstacleField,
+  x: number,
+  z: number,
+): GrassObstacleSample {
+  const u = Math.max(
+    0,
+    Math.min(field.cols - 1, (x - field.origin[0]) / field.spacing),
+  )
+  const v = Math.max(
+    0,
+    Math.min(field.rows - 1, (z - field.origin[1]) / field.spacing),
+  )
+  const col0 = Math.floor(u)
+  const row0 = Math.floor(v)
+  const col1 = Math.min(field.cols - 1, col0 + 1)
+  const row1 = Math.min(field.rows - 1, row0 + 1)
+  const tx = u - col0
+  const tz = v - row0
+
+  return {
+    distance:
+      (bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 0) / 255) *
+      MAX_GRASS_OBSTACLE_DISTANCE,
+    directionX:
+      (bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 1) / 255) * 2 -
+      1,
+    directionZ:
+      (bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 2) / 255) * 2 -
+      1,
+    allowed:
+      bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 3) / 255,
+  }
+}
+
+function bilinearObstacleChannel(
+  field: GrassObstacleField,
+  col0: number,
+  row0: number,
+  col1: number,
+  row1: number,
+  tx: number,
+  tz: number,
+  channel: number,
+): number {
+  const topLeft = field.values[(row0 * field.cols + col0) * 4 + channel] ?? 0
+  const topRight = field.values[(row0 * field.cols + col1) * 4 + channel] ?? 0
+  const bottomLeft = field.values[(row1 * field.cols + col0) * 4 + channel] ?? 0
+  const bottomRight = field.values[(row1 * field.cols + col1) * 4 + channel] ?? 0
+  const top = topLeft + (topRight - topLeft) * tx
+  const bottom = bottomLeft + (bottomRight - bottomLeft) * tx
+  return top + (bottom - top) * tz
 }
 
 function rasterizeShape(

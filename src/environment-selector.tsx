@@ -20,7 +20,7 @@ export const ENVIRONMENT_TOOL_LABELS: Record<EnvironmentTool, string> = {
   surroundings: 'Surroundings',
   build: 'Build',
   terrain: 'Terrain',
-  path: 'Ground Texturing',
+  path: 'Surface',
   water: 'Water',
 }
 
@@ -30,7 +30,7 @@ const ENVIRONMENT_TOOL_DESCRIPTIONS: Record<EnvironmentTool, string> = {
   surroundings: 'Configure forests and distant scenery.',
   build: 'Open Pascal building tools.',
   terrain: 'Raise, lower, flatten, and smooth the terrain.',
-  path: 'Texture paths and other ground surfaces.',
+  path: 'Paint terrain-conforming surface materials.',
   water: 'Create and adjust ponds and water levels.',
 }
 
@@ -89,7 +89,7 @@ export default function EnvironmentSelector({
     if (mapTitle) mapTitle.textContent = 'Pascal Environment tools'
     if (mapDescription) {
       mapDescription.textContent =
-        'An interactive site map for Ground Cover, Atmosphere, Surroundings, Build, Terrain, Ground Texturing, and Water.'
+        'An interactive site map for Ground Cover, Atmosphere, Surroundings, Build, Terrain, Surface, and Water.'
     }
 
     const activate = (target: EventTarget | null) => {

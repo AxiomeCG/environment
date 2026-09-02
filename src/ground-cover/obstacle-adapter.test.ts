@@ -129,7 +129,7 @@ describe('Pascal plan obstacle adapter', () => {
     expect(polygons[0]?.kind === 'polygon' ? polygons[0].points[0] : null).toEqual([4, 4])
   })
   test('uses registered floorPlaced footprints for props', () => {
-    const restoreRegistry = nodeRegistry._snapshot()
+    const registryDefinitions = Array.from(nodeRegistry.entries(), ([, definition]) => definition)
     try {
       registerNode({
         kind: 'item',
@@ -151,7 +151,15 @@ describe('Pascal plan obstacle adapter', () => {
       const site = SiteNode.parse({
         id: 'site_prop',
         children: ['building_prop'],
-        polygon: { type: 'polygon', points: SITE_POINTS },
+        polygon: {
+          type: 'polygon',
+          points: [
+            [-10, -10],
+            [10, -10],
+            [10, 10],
+            [-10, 10],
+          ],
+        },
       })
       const building = BuildingNode.parse({
         id: 'building_prop',
@@ -173,7 +181,7 @@ describe('Pascal plan obstacle adapter', () => {
           category: 'test',
           name: 'Prop',
           thumbnail: '',
-          src: 'asset:test',
+          src: 'asset://test',
           dimensions: [2, 1, 4],
           source: 'library',
         },
@@ -191,7 +199,8 @@ describe('Pascal plan obstacle adapter', () => {
         rotation: Math.PI / 4,
       })
     } finally {
-      restoreRegistry()
+      nodeRegistry._reset()
+      for (const definition of registryDefinitions) nodeRegistry._register(definition)
     }
   })
 

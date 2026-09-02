@@ -403,6 +403,13 @@ test("uses painted RGB and density alpha for the ground material", () => {
 	expect(runtime?.field.values.slice(0, 4)).toEqual(
 		Uint8Array.from([0x20, 0x40, 0x60, 64]),
 	);
+	const textureValues = runtime?.texture.image.data;
+	expect(textureValues).toBeInstanceOf(Uint8Array);
+	if (textureValues instanceof Uint8Array) {
+		expect(textureValues.slice(0, 4)).toEqual(
+			Uint8Array.from([0x0c, 0x1e, 0x30, 64]),
+		);
+	}
 	expect(runtime?.texture.image.width).toBe(paintField.cols);
 	expect(runtime?.texture.image.height).toBe(paintField.rows);
 	expect(ground).toBeInstanceOf(Mesh);

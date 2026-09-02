@@ -15,6 +15,8 @@ export type PaintMode = 'paint' | 'erase' | 'smooth'
 export type PaintStrokeSettings = BrushSettings & {
   mode: PaintMode
   targetDensity: number
+  premultiplyColorByDensity: boolean
+  clipToBoundary: boolean
   color: string
   noiseAmount: number
   noiseScale: number
@@ -28,6 +30,8 @@ export const DEFAULT_PAINT_STROKE_SETTINGS: PaintStrokeSettings = {
   shape: 'round',
   mode: 'paint',
   targetDensity: 1,
+  premultiplyColorByDensity: false,
+  clipToBoundary: true,
   color: DEFAULT_GRASS_PAINT_COLOR,
   noiseAmount: 0,
   noiseScale: 1,
@@ -96,7 +100,10 @@ export function advancePaintStroke(
       const sampleZ = field.origin[1] + row * field.spacing
       for (let col = range.col0; col <= range.col1; col += 1) {
         const sampleX = field.origin[0] + col * field.spacing
-        if (!pointInPolygon2D([sampleX, sampleZ], stroke.boundary, { includeBoundary: true })) {
+        if (
+          stroke.settings.clipToBoundary &&
+          !pointInPolygon2D([sampleX, sampleZ], stroke.boundary, { includeBoundary: true })
+        ) {
           continue
         }
         if (stroke.obstacles && !isGrassAllowedAt(stroke.obstacles, sampleX, sampleZ)) {
@@ -149,9 +156,18 @@ function resolveSample(stroke: PaintStroke, sampleIndex: number, color: RgbBytes
   const baseA = values[offset + 3] ?? 0
 
   if (stroke.settings.mode === 'erase') {
-    result[offset] = baseR
-    result[offset + 1] = baseG
-    result[offset + 2] = baseB
+    const target = stroke.settings.premultiplyColorByDensity ? 0 : baseR
+    result[offset] = blendByte(baseR, target, amount)
+    result[offset + 1] = blendByte(
+      baseG,
+      stroke.settings.premultiplyColorByDensity ? 0 : baseG,
+      amount,
+    )
+    result[offset + 2] = blendByte(
+      baseB,
+      stroke.settings.premultiplyColorByDensity ? 0 : baseB,
+      amount,
+    )
     result[offset + 3] = blendByte(baseA, 0, amount)
     return
   }
@@ -162,6 +178,15 @@ function resolveSample(stroke: PaintStroke, sampleIndex: number, color: RgbBytes
     result[offset + 1] = blendByte(baseG, smoothed[offset + 1] ?? baseG, amount)
     result[offset + 2] = blendByte(baseB, smoothed[offset + 2] ?? baseB, amount)
     result[offset + 3] = blendByte(baseA, smoothed[offset + 3] ?? baseA, amount)
+    return
+  }
+
+  if (stroke.settings.premultiplyColorByDensity) {
+    const targetAlpha = Math.round(stroke.settings.targetDensity * 255)
+    result[offset] = blendByte(baseR, Math.round((color.r * targetAlpha) / 255), amount)
+    result[offset + 1] = blendByte(baseG, Math.round((color.g * targetAlpha) / 255), amount)
+    result[offset + 2] = blendByte(baseB, Math.round((color.b * targetAlpha) / 255), amount)
+    result[offset + 3] = blendByte(baseA, targetAlpha, amount)
     return
   }
 
@@ -273,7 +298,14 @@ function hashValue(x: number, z: number, seed: number): number {
 
 function normalizeSettings(settings: Partial<PaintStrokeSettings> | undefined): PaintStrokeSettings {
   const merged = { ...DEFAULT_PAINT_STROKE_SETTINGS, ...settings }
-  const color = rgbToHex(hexToRgb(merged.color))
+  const runtimeColor = settings?.color
+  const color = rgbToHex(
+    hexToRgb(
+      typeof runtimeColor === 'string'
+        ? runtimeColor
+        : DEFAULT_PAINT_STROKE_SETTINGS.color,
+    ),
+  )
   return Object.freeze({
     radius:
       Number.isFinite(merged.radius) && merged.radius > 0
@@ -288,6 +320,8 @@ function normalizeSettings(settings: Partial<PaintStrokeSettings> | undefined): 
       DEFAULT_PAINT_STROKE_SETTINGS.targetDensity,
     ),
     color,
+    premultiplyColorByDensity: merged.premultiplyColorByDensity === true,
+    clipToBoundary: merged.clipToBoundary !== false,
     noiseAmount: finiteClamp01(merged.noiseAmount, DEFAULT_PAINT_STROKE_SETTINGS.noiseAmount),
     noiseScale:
       Number.isFinite(merged.noiseScale) && merged.noiseScale > 0
@@ -298,6 +332,7 @@ function normalizeSettings(settings: Partial<PaintStrokeSettings> | undefined): 
       : DEFAULT_PAINT_STROKE_SETTINGS.seed,
   })
 }
+
 
 function assertField(field: GrassPaintField): void {
   if (

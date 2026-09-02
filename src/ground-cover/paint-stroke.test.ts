@@ -19,9 +19,13 @@ const SITE: Array<[number, number]> = [
   [-4, 4],
 ]
 
-function field(color: [number, number, number] = [20, 40, 60], alpha = 0): GrassPaintField {
-  const cols = 17
-  const rows = 17
+function field(
+  color: [number, number, number] = [20, 40, 60],
+  alpha = 0,
+  spacing = 0.5,
+): GrassPaintField {
+  const cols = Math.round(8 / spacing) + 1
+  const rows = cols
   const values = new Uint8Array(cols * rows * 4)
   for (let index = 0; index < values.length; index += 4) {
     values[index] = color[0]
@@ -29,7 +33,7 @@ function field(color: [number, number, number] = [20, 40, 60], alpha = 0): Grass
     values[index + 2] = color[2]
     values[index + 3] = alpha
   }
-  return { origin: [-4, -4], spacing: 0.5, cols, rows, values }
+  return { origin: [-4, -4], spacing, cols, rows, values }
 }
 
 function rgbaAt(target: GrassPaintField, x: number, z: number): [number, number, number, number] {
@@ -64,6 +68,8 @@ describe('paint stroke settings and snapshot', () => {
       shape: 'round',
       mode: 'paint',
       targetDensity: 1,
+      premultiplyColorByDensity: false,
+      clipToBoundary: true,
       color: '#3f6b2f',
       noiseAmount: 0,
       noiseScale: 1,
@@ -75,6 +81,16 @@ describe('paint stroke settings and snapshot', () => {
     expect(weightAt(DEFAULT_PAINT_STROKE_SETTINGS, 1.5, 0)).toBe(1)
     expect(weightAt(DEFAULT_PAINT_STROKE_SETTINGS, 1.9, 0)).toBeCloseTo(0.5)
     expect(weightAt(DEFAULT_PAINT_STROKE_SETTINGS, 2, 0)).toBe(0)
+  })
+
+  test('restores the default color when a stale runtime brush omits it', () => {
+    const result = runStroke(
+      field(),
+      { radius: 1, falloff: 0, strength: 1, color: undefined } as unknown as Partial<PaintStrokeSettings>,
+      [[0, 0]],
+    )
+
+    expect(rgbaAt(result, 0, 0)).toEqual([63, 107, 47, 255])
   })
 
   test('freezes a byte snapshot and exposes a separate live result', () => {
@@ -94,6 +110,39 @@ describe('paint stroke settings and snapshot', () => {
     ])
     expect(rgbaAt(stroke.result, 0, 0)).toEqual([255, 255, 255, 255])
     expect(stroke.result.values).not.toBe(stroke.snapshot.values)
+  })
+
+  test('premultiplies first-stroke RGB by the resulting density when enabled', () => {
+    const result = runStroke(
+      field([0, 0, 0], 0),
+      {
+        strength: 0.5,
+        falloff: 0,
+        radius: 1,
+        color: '#ffffff',
+        targetDensity: 1,
+        premultiplyColorByDensity: true,
+      },
+      [[0, 0]],
+    )
+
+    expect(rgbaAt(result, 0, 0)).toEqual([128, 128, 128, 128])
+  })
+
+  test('clears premultiplied paint to transparent black', () => {
+    const result = runStroke(
+      field([128, 64, 0], 128),
+      {
+        mode: 'erase',
+        strength: 1,
+        falloff: 0,
+        radius: 1,
+        premultiplyColorByDensity: true,
+      },
+      [[0, 0]],
+    )
+
+    expect(rgbaAt(result, 0, 0)).toEqual([0, 0, 0, 0])
   })
 })
 
@@ -149,6 +198,76 @@ describe('paint, erase, and smooth', () => {
     expect(rgbaAt(result, 1, 0)[3]).toBe(Math.round(weightAt(settings, 1, 0) * 255))
     expect(rgbaAt(result, 2, 0)[3]).toBe(0)
   })
+
+  test('feathers a premultiplied Surface stroke across several 5 cm samples', () => {
+    const result = runStroke(
+      field([0, 0, 0], 0, 0.05),
+      {
+        mode: 'paint',
+        radius: 0.5,
+        strength: 1,
+        falloff: 0.5,
+        color: '#ffffff',
+        targetDensity: 1,
+        premultiplyColorByDensity: true,
+        noiseAmount: 0,
+      },
+      [[0, 0]],
+    )
+    const alphas = [0, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55].map(
+      (distance) => rgbaAt(result, distance, 0)[3],
+    )
+    const partialAlphas = alphas.filter((alpha) => alpha > 0 && alpha < 255)
+
+    expect(alphas[0]).toBe(255)
+    expect(alphas[1]).toBe(255)
+    expect(partialAlphas.length).toBeGreaterThanOrEqual(4)
+    for (let index = 1; index < partialAlphas.length; index += 1) {
+      expect(partialAlphas[index]).toBeLessThan(partialAlphas[index - 1]!)
+    }
+    expect(alphas.at(-2)).toBe(0)
+    expect(alphas.at(-1)).toBe(0)
+
+    for (const distance of [0.3, 0.35, 0.4, 0.45]) {
+      const [red, green, blue, alpha] = rgbaAt(result, distance, 0)
+      expect([red, green, blue]).toEqual([alpha, alpha, alpha])
+    }
+  })
+
+  test('can paint support texels beyond a polygon edge for filtered Surface masks', () => {
+    const boundary: Array<[number, number]> = [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ]
+    const settings = {
+      radius: 1,
+      strength: 1,
+      falloff: 0,
+      targetDensity: 1,
+      premultiplyColorByDensity: true,
+      color: '#ffffff',
+      noiseAmount: 0,
+    }
+    const clipped = runStroke(
+      field([0, 0, 0], 0, 0.05),
+      { ...settings, clipToBoundary: true },
+      [[0.9, 0]],
+      boundary,
+    )
+    const supported = runStroke(
+      field([0, 0, 0], 0, 0.05),
+      { ...settings, clipToBoundary: false },
+      [[0.9, 0]],
+      boundary,
+    )
+
+    expect(rgbaAt(clipped, 1.5, 0)[3]).toBe(0)
+    expect(rgbaAt(supported, 1.5, 0)).toEqual([255, 255, 255, 255])
+    expect(rgbaAt(supported, 0.9, 0)).toEqual([255, 255, 255, 255])
+  })
+
 
   test('one stroke saturates under dwelling and re-crossing', () => {
     const settings = { radius: 1.5, strength: 0.5, falloff: 0, targetDensity: 1 }

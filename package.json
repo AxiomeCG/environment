@@ -1,44 +1,11 @@
 {
   "name": "@pascal-app/plugin-environment",
   "version": "0.1.0",
-  "description": "Pascal plugin for terrain-dependent ground cover and future environment systems.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pascalorg/plugin-environment.git"
   },
-  "homepage": "https://editor.pascal.app/docs/developers/plugins",
-  "bugs": {
-    "url": "https://github.com/pascalorg/plugin-environment/issues"
-  },
-  "type": "module",
   "main": "./src/index.ts",
-  "types": "./src/index.ts",
-  "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
-    }
-  },
-  "files": [
-    "src",
-    "README.md"
-  ],
-  "scripts": {
-    "check-types": "tsc --noEmit",
-    "dev:pascal": "bun scripts/sync-pascal-editor.mjs --watch",
-    "sync:pascal": "bun scripts/sync-pascal-editor.mjs",
-    "test": "bun test"
-  },
-  "peerDependencies": {
-    "@pascal-app/core": ">=1.0.0-beta.5 <2",
-    "@pascal-app/editor": ">=1.0.0-beta.5 <2",
-    "@pascal-app/viewer": ">=1.0.0-beta.5 <2",
-    "@react-three/fiber": "^9",
-    "react": "^18 || ^19",
-    "three": "^0.185",
-    "zod": "^4",
-    "zustand": "^5"
-  },
   "devDependencies": {
     "@pascal-app/core": "1.0.0-beta.5",
     "@pascal-app/editor": "1.0.0-beta.5",
@@ -52,12 +19,39 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@types/three": "^0.184.0",
+    "lucide-react": "^1.7.0",
     "react": "^19",
     "three": "^0.185",
     "typescript": "6.0.3",
     "zod": "^4",
     "zustand": "^5"
   },
+  "peerDependencies": {
+    "@pascal-app/core": ">=1.0.0-beta.5 <2",
+    "@pascal-app/editor": ">=1.0.0-beta.5 <2",
+    "@pascal-app/viewer": ">=1.0.0-beta.5 <2",
+    "@react-three/fiber": "^9",
+    "react": "^18 || ^19",
+    "lucide-react": "^1.7.0",
+    "three": "^0.185",
+    "zod": "^4",
+    "zustand": "^5"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "bugs": {
+    "url": "https://github.com/pascalorg/plugin-environment/issues"
+  },
+  "description": "Pascal plugin for terrain-dependent ground cover and future environment systems.",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "homepage": "https://editor.pascal.app/docs/developers/plugins",
   "keywords": [
     "pascal",
     "3d",
@@ -67,5 +61,13 @@
     "plugin"
   ],
   "license": "MIT",
-  "packageManager": "bun@1.3.14"
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "dev:pascal": "bun scripts/sync-pascal-editor.mjs --watch",
+    "sync:pascal": "bun scripts/sync-pascal-editor.mjs",
+    "test": "bun test"
+  },
+  "type": "module",
+  "types": "./src/index.ts"
 }

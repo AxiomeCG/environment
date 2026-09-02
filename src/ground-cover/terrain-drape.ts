@@ -89,8 +89,13 @@ export function buildDrapedGroundGeometry(
 		}
 	}
 
+	const uvs: number[] = [];
+	for (let index = 0; index < positions.length; index += 3) {
+		uvs.push(positions[index] as number, positions[index + 2] as number);
+	}
 	geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
 	geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
+	geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
 	geometry.computeBoundingBox();
 	geometry.computeBoundingSphere();
 	return geometry;
