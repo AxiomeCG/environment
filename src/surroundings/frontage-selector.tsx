@@ -3,6 +3,7 @@
 import {
   deriveSurroundingsLayout,
   orientedRectangleCorners,
+  STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
 } from './corridor'
 import {
   cameraAzimuthToPreviewRotationDegrees,
@@ -72,7 +73,10 @@ export default function FrontageSelector({
     )
   }
 
-  const layout = deriveSurroundingsLayout(segments)
+  const layout = deriveSurroundingsLayout(
+    segments,
+    STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+  )
   const corridorShapes = layout.corridors.map((corridor) => ({
     id: corridor.id,
     road: orientedRectangleCorners(corridor.road, corridor.frame),
@@ -87,6 +91,10 @@ export default function FrontageSelector({
         corridor.frame,
       ),
     })),
+  }))
+  const junctionShapes = layout.roadJunctions.map((junction) => ({
+    id: junction.id,
+    points: junction.corners,
   }))
   const siteXValues = points.map(([x]) => x)
   const siteZValues = points.map(([, z]) => z)
@@ -124,9 +132,11 @@ export default function FrontageSelector({
       diagramPoints.push(...property.points)
     }
   }
-  for (const junction of layout.roadJunctions) {
-    diagramPoints.push(...junction.corners)
+
+  for (const shape of junctionShapes) {
+    diagramPoints.push(...shape.points)
   }
+
   for (const shape of segmentShapes) {
     diagramPoints.push(shape.arrowEnd)
   }
@@ -175,13 +185,17 @@ export default function FrontageSelector({
               />
             </g>
           ))}
-          {layout.roadJunctions.map((junction) => (
+
+          {junctionShapes.map((shape) => (
             <polygon
-              className="fill-sidebar-foreground/20"
-              key={junction.id}
-              points={svgPolygonPoints(junction.corners)}
+              className="fill-sidebar-foreground/20 stroke-sidebar-foreground/50"
+              key={shape.id}
+              points={svgPolygonPoints(shape.points)}
+              strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
             />
           ))}
+
           <polygon
             className="fill-sidebar-accent/70 stroke-sidebar-border"
             points={polygonPoints}

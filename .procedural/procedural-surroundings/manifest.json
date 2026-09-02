@@ -9,7 +9,7 @@
   "sourceBlendPath": null,
   "contract": {
     "path": "docs/mission/SIX-DAY-PLAN.md",
-    "sha256": "4e224cb552864bc597111c476bbf289874d9670854f4ff4ea422545dd0abc066",
+    "sha256": "18d6ac4fca2d4622e3a7324e47bd12976d11a8addfd09e32d70382668da96c69",
     "section": "Frontages du Site et contexte de voisinage"
   },
   "coordinates": {
@@ -19,7 +19,13 @@
     "space": "Pascal Site-polygon and world coordinates through read-only boundary, Terrain and frontage adapters"
   },
   "completedPhases": [
-    "procedural-router"
+    "procedural-router",
+    "fast-track-e0-implementation",
+    "fast-track-e1-presentation-root",
+    "fast-track-e2-diagnostic-topology",
+    "fast-track-e2b-pinned-road-presentation-snapshot",
+    "fast-track-e2c-straight-road-integration",
+    "fast-track-e2d-adjacent-degree-two-bend"
   ],
   "humanApprovals": [
     {
@@ -57,30 +63,62 @@
       "scope": "frontage-selector-interaction-and-orientation",
       "status": "approved",
       "decision": "Configure every Site edge with an explicit native selector for no road, secondary road or primary road; do not cycle states through repeated edge clicks. Orient the complete mini-plan with Pascal's public camera azimuth and floorplan convention where world -Z is screen-up at north alignment."
+    },
+    {
+      "date": "2026-09-02",
+      "scope": "canonical-road-grammar",
+      "status": "approved",
+      "decision": "Use Streetscape as the sole visual and procedural authority for suburban roads. Environment owns frontage-to-centerline placement and disposable lifetime only; it must not evolve competing cross-sections, materials, junctions or markings."
+    },
+    {
+      "date": "2026-09-02",
+      "scope": "temporary-streetscape-snapshot",
+      "status": "approved",
+      "decision": "Do not patch node_modules or deep-import Streetscape internals. Until Streetscape exposes a public pure presentation seam, duplicate only the minimal straight-road values and functions locally, pin their provenance to commit 1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef, forbid junctions, markings and regional packs, and delete the snapshot when that seam exists."
+    },
+    {
+      "date": "2026-09-02",
+      "scope": "low-energy-pairing-mode",
+      "status": "approved",
+      "decision": "For the late-evening session, let the agent implement bounded, tested and reversible production slices while Adam performs only simple visual acceptance or requests concrete adjustments. Defer cold probes, mathematical derivations and explain-backs; agent-authored code is not learner evidence."
+    },
+    {
+      "date": "2026-09-03",
+      "scope": "adjacent-frontage-degree-two-bend",
+      "status": "approved",
+      "decision": "Do not suppress the connection between adjacent selected road frontages. Match Streetscape's degree-two bend language by deriving a tangent bend centerline in Environment and feeding one merged straight-to-bend-to-straight alignment into the pinned cross-section/ribbon snapshot for compatible styles. Keep the old miter/bevel patch as 2D topology only; do not copy the degree-three-plus junction solver, exact mixed-style transitions, markings or regional packs."
     }
   ],
   "warnings": [
-    "The automated E0 gate is green, including direct separator selection and camera-relative -Z-up preview contracts, and E1/E2 are implemented from one shared 2D Site-polygon layout with adjacent-road junctions; presentation-root isolation and visual calibration still await human acceptance.",
+    "Fast-track E0-E2D implementation is automated-green: 13/13 focused road tests and 116/116 Environment tests pass, Environment and Editor host typechecks pass, and the exact Next/Turbopack production build compiles with only the known MCP dynamic-filesystem tracing warning. Human visual acceptance of the corrected bend, presentation-root isolation and WebGPU lifecycle fix remains open before E3.",
     "Project-scoped persistence for presentation-only presets, seeds and frontages has no public host sidecar; Site polygon segments also have no stable IDs, so frontage selection must remain runtime-only in the first slice.",
     "The existing viewerSceneSlot is currently omitted from Preview, Studio, capture and first-person paths.",
-    "Streetscape publicly exposes roadStyleWidth and road-graph operators, but presentation-only reuse of its full road cross-section and renderer still requires a focused tracer bullet; deep imports and registered author RoadNetworkNode objects are forbidden.",
+    "The local road-presentation compatibility snapshot is pinned to Streetscape commit 1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef and can drift when Streetscape changes. Do not extend it beyond the copied presets, cross-section bands, material rhythm and pure ribbons; delete it when a public pure presentation seam exists.",
+    "Secondary road maps to local-street. Collector is only a provisional primary-road candidate and still requires human visual acceptance.",
+    "Adjacent same-style frontages now merge into one degree-two bend alignment before ribbon generation. Mixed primary/secondary corners still use a separate provisional primary connector; exact transitions, degree-three-plus junctions and markings remain deferred to a public Streetscape presentation seam.",
+    "Transient road geometry and materials now use R3F's deferred disposal lifecycle after an immediate manual cleanup produced an uncaptured WebGPU missing-vertex-buffer error during remount. Confirm visually after a full refresh that the error no longer recurs.",
     "Pascal's viewer owns a custom WebGPU/TSL RenderPipeline but exposes no generic DOF or Site-protection mask. Standard depth DOF cannot guarantee sharpness across the full active Site; use a viewer-owned selective seam or retain distance haze as the evening fallback."
   ],
   "artifacts": {
     "planningDocument": "docs/mission/SIX-DAY-PLAN.md",
     "spec": {
       "path": ".procedural/procedural-surroundings/SPEC.md",
-      "sha256": "f472099fb9df3305864a101be1ad703bbcde5f368a82a4415efe261e60280091"
+      "sha256": "bcbc3f8e475300ba3cc57ebd2f2f8705efa68cd079b3b7acd9dc27aef840ffc3"
     },
     "learningPath": {
       "path": ".procedural/procedural-surroundings/LEARNING-PATH.md",
-      "sha256": "6ac22137a58ceebb6ea903ba7aeef3c3a0e8bc020b6ecbf47d39ce1b71627d5b"
+      "sha256": "10a338b38c27c7e2515efbd6104d54d137c5e093c745d54538f9cbe97443f948"
     },
     "lesson01": {
       "path": ".procedural/procedural-surroundings/LESSON-01-FRONTAGES.md",
       "sha256": "405900da2eeb6a49346b3de6f6cc927e84922eb36cf0304a2f8a6db28c495d33"
     },
+    "roadPresentationSnapshot": {
+      "path": "src/surroundings/streetscape-road-presentation.ts",
+      "sourceCommit": "1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef"
+    },
+    "roadPresentationTests": "src/surroundings/streetscape-road-presentation.test.ts",
     "vaultySubject": "Vaulty/subjects/procedural-surroundings/_index.md"
   },
-  "recommendedNextSkill": "procedural-vfx"
+  "recommendedNextSkill": "procedural-validate"
 }

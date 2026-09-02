@@ -37,7 +37,7 @@ The agent may prepare:
 - fixtures and red tests;
 - R3F wiring that carries no hidden procedural decision;
 - test commands, diagnostics and profiling harnesses;
-- focused source research and the repetitive upstream wiring for a pure Streetscape presentation seam;
+- focused source research, the temporary pinned Streetscape snapshot, and later repetitive upstream wiring for a pure presentation seam;
 - session notes and evidence status.
 
 A complete solution is not revealed while a smaller hint can unblock the learner.
@@ -287,13 +287,13 @@ Acceptance:
 
 ## Time-boxed evening fast track — blocky suburb
 
-The natural curriculum remains the production path, but the 2 September evening demo may temporarily bring forward one disposable suburb tracer bullet. This fast track reuses Lesson 1 and must not silently solve the later terrain or PLU lessons with ad hoc production code. Streetscape is now the approved road grammar, so the fast track includes a few small Streetscape parity sessions before any house shell.
+The natural curriculum remains the production path, but the 2 September evening demo may temporarily bring forward one disposable suburb tracer bullet. This fast track reuses Lesson 1 and must not silently solve the later terrain or PLU lessons with ad hoc production code. Streetscape is the approved road grammar. Because its installed package has no stable public presentation builder, the road cross-section/ribbon parity slice uses a pinned local snapshot instead of patching or deep-importing Streetscape; this is agent-authored compatibility work, not learner evidence.
 
 ### Fast track E0 — Close the current visual gate
 
 Restore the touched build/test baseline, then visually accept the frontage selector: explicit non-cycling selectors, outward arrows, one-edge-only state changes, keyboard parity, shared camera-relative floorplan orientation and paint-tool cancellation. Do not expand scope while the editor cannot render the probe reliably.
 
-Status: automated gate green (`107/107` Environment tests; Environment and Editor host typechecks pass). The explicit-selector and camera-orientation correction is implemented with focused pure contracts. Human visual acceptance remains open.
+Status: automated gate green (`112/112` Environment tests; Environment and Editor host typechecks pass). The explicit-selector and camera-orientation correction is implemented with focused pure contracts. Human visual acceptance remains open.
 
 ### Fast track E1 — Disposable presentation root
 
@@ -307,9 +307,9 @@ Human decision: identify visually which geometry belongs to the authored Site an
 
 From one selected frontage, derive a straight diagnostic road strip and a shallow band of neighboring property descriptors. Keep elevation flat for this proof and render the property boundaries before houses.
 
-Status: implemented test-first as one pure 2D layout derived from `Site.polygon`, then projected in both the SVG selector and 3D scene. Tangent and outward normal orient each road/property band. Adjacent road frontages at convex vertices receive an explicit mitered junction patch with a bevel limit; concave vertices rely on the existing overlap. The current agent-authored calibration is `6 m` secondary / `9 m` primary road width, `22 m` neighbor depth and approximately `8 m` target property frontage. The E2 correction now replaces cycling controls with explicit selectors and aligns the SVG scene with Pascal’s camera-relative, `-Z`-up floorplan convention. Focused contracts and typechecks are green.
+Status: implemented test-first as one pure 2D layout derived from `Site.polygon`, then consumed by both the SVG selector and 3D scene. Tangent and outward normal orient each road/property band. The agent-authored `6 m / 9 m` rectangles remain covered as **diagnostic topology**. The miter/bevel junction polygon remains a 2D topology representation, while retained 3D presentation uses a tangent centerline and Streetscape-compatible bands. The neighboring band remains `22 m` deep with approximately `8 m` target property frontage. Explicit selectors and Pascal’s camera-relative, `-Z`-up floorplan convention are implemented. Focused contracts and typechecks are green.
 
-The road widths, colors and custom junction patches are now frozen as **diagnostic topology**, not a visual calibration target. Streetscape is the canonical road grammar. E2 remains valuable because it proves where a road belongs and which neighboring cells depend on it; it must not become a second road system.
+Streetscape is the canonical road grammar. E2 remains valuable because it proves where a road belongs and which neighboring cells depend on it; it must not become a second road system.
 
 Human decision: choose the visible road side and verify that the same frontage drives both 2D and 3D. No unaided polygon-math exercise is required.
 
@@ -321,29 +321,33 @@ Agent scaffold: expose the relevant preset data in a small diagnostic table and 
 
 Human decision: accept `local-street` as the secondary-road mapping and judge whether `collector` has the right primary-road mood. The goal is visual vocabulary, not memorizing dimensions.
 
-### Fast track E2B — Pure Streetscape presentation seam
+### Fast track E2B — Pinned local road cross-section snapshot
 
-Add the smallest public module that turns one style plus one straight alignment into disposable surface descriptors by composing Streetscape's existing pure mechanisms. It must import no React, editor store, registry, selection or persisted node behavior.
+Copy the smallest pure subset needed for the bounded road proof from Streetscape commit `1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef`: `local-street` and `collector` values, ordered cross-section bands, material rhythm and pure ribbon geometry. Keep it in one Environment compatibility module with provenance and deletion criteria. Do not patch `node_modules`, deep-import Streetscape, or copy junction topology/solvers, transitions, markings and regional packs.
 
-Agent scaffold: API shell, dependency guard tests, compatibility probe against Pascal `1.0.0-beta.5`, exports and repetitive descriptor plumbing. This is explicitly agent-authored infrastructure and does not count as procedural learner evidence.
+Agent scaffold: isolated types/functions, parity tests for `10.4 m` and `15.7 m`, descriptor plumbing and dependency guards. This is explicitly agent-authored infrastructure and does not count as procedural learner evidence.
 
-Human mechanism: explain the boundary in one sentence—Environment says **where the road goes**; Streetscape says **what the road is made of**—and review the descriptor sequence in the diagnostic table.
+Status: implemented in `src/surroundings/streetscape-road-presentation.ts` with exact commit provenance. The module is limited to `local-street`, `collector`, ordered road bands, material descriptors and pure ribbon geometry for caller-supplied alignments. It has no React, store, registry, selection, junction topology, marking or regional-pack dependency. Automated parity contracts are green; snapshot drift remains an explicit maintenance warning until the module can be deleted.
+
+Human mechanism, deferred in low-energy mode: later explain the boundary in one sentence—Environment says **where the road goes**; Streetscape says **what the road is made of**—and review the descriptor sequence.
 
 ### Fast track E2C — One frontage, one matching road
 
-Convert one frontage frame into a two-point centerline and feed it to the public Streetscape builder. Render carriageway, gutter, curb, verge and sidewalk under `environment-surroundings-root`. Move the neighbor cells outward using `roadStyleWidth(style)` instead of `6 m / 9 m`.
+Convert one frontage frame into a two-point centerline and feed it to the pinned local builder. Render carriageway, gutter, curb, verge and sidewalk under `environment-surroundings-root`. Move the neighbor cells outward using the copied complete cross-section width instead of `6 m / 9 m`.
 
 Agent scaffold: one red parity contract, R3F descriptor rendering and scene-mutation snapshots.
 
+Status: implemented. The 2D preview and neighboring-cell offsets use the complete `10.4 m / 15.7 m` widths. The 3D layer renders carriageway, gutter, curb, verge and sidewalk under `environment-surroundings-root`, disables road raycasting and releases transient resources through R3F's deferred object lifecycle. `secondary-road` maps to `local-street`; `collector` remains a provisional primary-road candidate.
+
 Human decision: compare the derived road beside the authored Streetscape road and accept or reject width, band order, material rhythm and orientation. Only one straight secondary road is in scope.
 
-### Fast track E2D — Adjacent frontages and one junction
+### Fast track E2D — Adjacent frontages and one degree-two bend
 
-Turn two adjacent selected frontages into a small runtime road graph. Replace Environment's custom rectangle patch with Streetscape's junction-boundary result. Add markings only after the road surfaces and curbs match.
+Connect two adjacent same-style selected frontages without waiting for the full Streetscape junction seam. Environment derives a tangent 11-point centerline at the convex shared vertex, then merges straight → bend → straight into one presentation alignment before the pinned ribbon builder generates every cross-section band. The old miter/bevel polygon stays a 2D topology representation and is never the retained 3D road. Degree-three-plus junction boundaries, exact mixed-style transitions and markings still wait for the public Streetscape seam.
 
-Agent scaffold: deterministic graph IDs, convex/concave fixtures and an A/B overlay for the old diagnostic patch versus the Streetscape junction.
+Agent-authored status: implemented in low-energy mode with a red regression contract reproducing the separate-ribbon seam. Focused road tests pass `13/13`; the complete Environment suite passes `116/116`, both Environment/Editor typechecks pass, and the Next/Turbopack production build completes with only the known MCP dynamic-filesystem tracing warning. This implementation does not count as learner mastery.
 
-Human decision: inspect the corner from the shared 2D/3D view and accept the continuity. This is a shape-reading session, not a derivation quiz.
+Human decision: select two adjacent edges with the same road type and verify that every band remains closed through both joins. Then inspect one mixed primary/secondary corner only to decide whether its provisional primary connector is acceptable. This is visual acceptance, not a derivation quiz.
 
 ### Fast track E3 — Blocky suburban shells
 
@@ -372,7 +376,7 @@ The approved topology leaves a Sims-like production extension open without treat
 
 ### Extension S1 — Frontage-driven Streetscape corridor
 
-Promote the proven E2A–E2D tracer into the optional production suburb extension without changing its ownership: selected frontages remain Environment boundary conditions, and Streetscape remains the sole source for road cross-sections, materials, junctions and markings. No deep import and no author `RoadNetworkNode` are allowed.
+Replace the temporary E2B snapshot with the future public Streetscape presentation seam, then promote the E2A–E2D tracer without changing ownership: selected frontages remain Environment boundary conditions, and Streetscape remains the sole maintained source for road cross-sections, materials, junctions and markings. No deep import and no author `RoadNetworkNode` are allowed.
 
 ### Extension S2 — Neighbor property and build line
 
@@ -410,4 +414,4 @@ A lesson advances only when:
 
 ## Immediate next step
 
-In low-energy pairing mode, the agent now scaffolds fast track E2B: the smallest upstream pure Streetscape presentation API plus dependency guards and the Pascal `1.0.0-beta.5` compatibility probe. It then wires one `local-street` frontage in E2C and presents a simple visual A/B for Adam to accept or adjust. No cold probe or cross-section quiz is required. Do not tune Environment's `6 m / 9 m` rectangles, start E3 shells, terrain elevation or DOF until that one straight road matches its authored Streetscape reference.
+Run one low-energy visual acceptance pass for E2D. Activate Surroundings and set two adjacent edges to the same road type. Verify that straight → bend → straight is continuous with no triangular gap, every carriageway/gutter/curb/verge/sidewalk band follows the corner, the road remains outside the Site, neighboring cells start beyond the complete width, nothing appears in outliner/history and Site interaction is not intercepted. Then inspect one mixed `Primary road` / `Secondary road` corner only long enough to accept or reject the provisional primary connector. Fix only visible road-continuity issues before E3 shells; keep terrain elevation, intersections 3+, markings and DOF deferred.
