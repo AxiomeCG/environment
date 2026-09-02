@@ -18,6 +18,7 @@ This living register records every Environment feature that cannot be implemente
 | Status | **Host change required — deployment blocker while the Terrain zone is enabled** |
 | Observed | 2026-09-01 |
 | Host repository | `pascalorg/editor` |
+| Local implementation | `pascalorg/editor@2a260502` |
 | Host issue / PR | TBD |
 | Required Pascal version | TBD after release |
 | Plugin evidence | `src/pascal-tool-actions.ts` |
@@ -80,6 +81,7 @@ Acceptance checks:
 | Status | **Host change required — implemented locally; release blocker for Ground Cover display in Editor 2D** |
 | Observed | 2026-09-02 |
 | Host repository | `pascalorg/editor` |
+| Local implementation | `pascalorg/editor@2a260502` |
 | Host issue / PR | TBD |
 | Required Pascal version | TBD after release |
 | Plugin evidence | `src/ground-cover/definition.ts`, `src/ground-cover/floorplan.ts`, `src/ground-cover/floorplan.test.ts` |
@@ -111,6 +113,7 @@ Acceptance checks:
 | Status | **Host change required — implemented locally; release blocker for faithful generic-GLB output** |
 | Observed | 2026-09-02 |
 | Host repository | `pascalorg/editor` |
+| Local implementation | `pascalorg/editor@2a260502` |
 | Host issue / PR | TBD |
 | Required Pascal version | TBD after release |
 | Plugin evidence | `src/ground-cover/definition.ts`, `src/ground-cover/bake-geometry.ts`, `src/ground-cover/bake-geometry.test.ts`, `src/ground-cover/static-renderer.tsx` |
@@ -140,6 +143,7 @@ Acceptance checks:
 | Status | **Host change required — implemented locally; release blocker for faithful Ground Cover and Surface editing** |
 | Observed | 2026-09-02 |
 | Host repository | `pascalorg/editor` |
+| Local implementation | `pascalorg/editor@2a260502` |
 | Host issue / PR | TBD |
 | Required Pascal version | TBD after release |
 | Plugin evidence | `src/ground-cover/definition.ts`, `src/surface-material/definition.ts` |
@@ -166,6 +170,7 @@ Acceptance checks:
 | Status | **Host change required — local direct mount only; release blocker for Surroundings** |
 | Observed | 2026-09-02 |
 | Host repository | `pascalorg/editor` |
+| Local implementation | Not implemented; the direct app mount is an uncommitted validation harness |
 | Host issue / PR | TBD |
 | Required Pascal version | TBD after release |
 | Plugin evidence | `src/surroundings/layer.tsx`, `src/index.ts` |
