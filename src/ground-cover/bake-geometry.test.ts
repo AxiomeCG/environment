@@ -34,7 +34,7 @@ describe('Ground Cover static bake geometry', () => {
     if (!(blades instanceof Mesh)) return
 
     expect(blades.material).toBeInstanceOf(MeshStandardMaterial)
-    expect(blades.geometry.getAttribute('position').count).toBe(28)
+    expect(blades.geometry.getAttribute('position').count).toBe(126)
     expect(blades.geometry.getIndex()?.array).toBeInstanceOf(Uint16Array)
     const normals = blades.geometry.getAttribute('normal')
     const normalLengths = Array.from({ length: normals.count }, (_, index) =>
@@ -56,7 +56,7 @@ describe('Ground Cover static bake geometry', () => {
     const positionAccessor =
       exported.meshes?.[0]?.primitives[0]?.attributes.POSITION
     expect(typeof positionAccessor).toBe('number')
-    expect(exported.accessors?.[positionAccessor ?? -1]?.count).toBe(28)
+    expect(exported.accessors?.[positionAccessor ?? -1]?.count).toBe(126)
     expect(exported.materials).toHaveLength(1)
     expect(exported.meshes).toHaveLength(1)
   })
@@ -148,7 +148,7 @@ describe('Ground Cover static bake geometry', () => {
     })
 
     const root = buildGrassFieldBakeGeometry(node, contextFor(site, [site]))
-    expect(root.children).toHaveLength(2)
+    expect(root.children).toHaveLength(4)
     let vertexCount = 0
     for (const child of root.children) {
       expect(child).toBeInstanceOf(Mesh)
@@ -158,7 +158,7 @@ describe('Ground Cover static bake geometry', () => {
       expect(child.geometry.getIndex()?.array).toBeInstanceOf(Uint16Array)
       vertexCount += positions.count
     }
-    expect(vertexCount).toBe(70_000)
+    expect(vertexCount).toBe(218_750)
   })
 
   test('omits the mesh when effective density is zero', () => {

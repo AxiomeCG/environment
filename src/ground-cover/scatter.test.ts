@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { GrassFieldNode } from './schema'
-import { visitGrassCandidates } from './scatter'
+import { grassCandidateCapacity, visitGrassCandidates } from './scatter'
 
 const BOUNDARY: ReadonlyArray<readonly [number, number]> = [
   [0, 0],
@@ -38,6 +38,30 @@ function collectCandidateRandomness(): Array<{
 }
 
 describe('visitGrassCandidates', () => {
+  test('uses a denser grid and keeps partial edge cells', () => {
+    const bounds = { minX: 0, maxX: 1, minZ: 0, maxZ: 1 }
+    const boundary: ReadonlyArray<readonly [number, number]> = [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ]
+    let emitted = 0
+
+    visitGrassCandidates(
+      GrassFieldNode.parse({ id: 'grass-field_density' }),
+      boundary,
+      bounds,
+      null,
+      () => {
+        emitted += 1
+      },
+    )
+
+    expect(grassCandidateCapacity(bounds)).toBe(169)
+    expect(emitted).toBe(169)
+  })
+
   test('emits deterministic, varied tint independently of density threshold', () => {
     const first = collectCandidateRandomness()
     const second = collectCandidateRandomness()

@@ -7,7 +7,7 @@ import { mulberry32 } from '../variant-utils'
 import type { SiteBounds } from './paint-field'
 import type { GrassFieldNode } from './schema'
 
-export const GRASS_CANDIDATE_CELL_SIZE = 0.1
+export const GRASS_CANDIDATE_CELL_SIZE = 0.08
 
 export type GrassCandidateVisitor = (
   x: number,
@@ -52,8 +52,10 @@ export function visitGrassCandidates(
     for (let column = 0; column < columns; column += 1) {
       const cellX = bounds.minX + column * GRASS_CANDIDATE_CELL_SIZE
       const cellZ = bounds.minZ + row * GRASS_CANDIDATE_CELL_SIZE
-      const x = cellX + random() * GRASS_CANDIDATE_CELL_SIZE
-      const z = cellZ + random() * GRASS_CANDIDATE_CELL_SIZE
+      const cellWidth = Math.min(GRASS_CANDIDATE_CELL_SIZE, bounds.maxX - cellX)
+      const cellDepth = Math.min(GRASS_CANDIDATE_CELL_SIZE, bounds.maxZ - cellZ)
+      const x = cellX + random() * cellWidth
+      const z = cellZ + random() * cellDepth
       const yaw = random() * Math.PI * 2
       const widthFactor = 1 + (random() * 2 - 1) * widthVariation
       const heightFactor = 1 + (random() * 2 - 1) * heightVariation

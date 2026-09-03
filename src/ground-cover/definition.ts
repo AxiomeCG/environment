@@ -3,7 +3,11 @@ import { buildGrassFieldBakeGeometry } from './bake-geometry'
 import { buildGrassFieldFloorplan } from './floorplan'
 import { buildGrassFieldGeometry } from './geometry'
 import { grassFieldParametrics } from './parametrics'
-import { GrassFieldNode } from './schema'
+import {
+  DEFAULT_GRASS_BLADE_HEIGHT,
+  DEFAULT_GRASS_BLADE_WIDTH,
+  GrassFieldNode,
+} from './schema'
 
 type GrassFieldDefinition = Omit<
   NodeDefinition<typeof GrassFieldNode>,
@@ -30,9 +34,9 @@ export const grassFieldDefinition: GrassFieldDefinition = {
     metadata: {},
     position: [0, 0, 0],
     rotation: [0, 0, 0],
-    bladeWidth: 0.06,
+    bladeWidth: DEFAULT_GRASS_BLADE_WIDTH,
     bladeWidthVariation: 20,
-    bladeHeight: 0.25,
+    bladeHeight: DEFAULT_GRASS_BLADE_HEIGHT,
     bladeHeightVariation: 20,
     bladeTintVariation: 20,
     bladeTipBrightness: 300,

@@ -173,26 +173,41 @@ export function buildSurfaceUnderlayColorNodes(
   blendTexture: Texture,
   field: SurfacePaintFieldTopology,
   textureSize: number,
+  derivativePosition: Node<'vec2'> = sitePosition,
 ): SurfaceUnderlayColorNodes {
   const sets = getSurfaceMaterialTextureSets()
   const blend = buildSurfaceBlendNodes(sitePosition, blendTexture, field)
   return {
-    color: sampleDirectBaseColor(sets['flowered-grass'], sitePosition, textureSize)
+    color: sampleBaseColor(
+      sets['flowered-grass'],
+      sitePosition,
+      textureSize,
+      derivativePosition,
+    )
       .mul(blend.grass)
       .add(
-        sampleDirectBaseColor(sets['road-path'], sitePosition, textureSize).mul(
-          blend.road,
-        ),
+        sampleBaseColor(
+          sets['road-path'],
+          sitePosition,
+          textureSize,
+          derivativePosition,
+        ).mul(blend.road),
       )
       .add(
-        sampleDirectBaseColor(sets['desert-ground'], sitePosition, textureSize).mul(
-          blend.desert,
-        ),
+        sampleBaseColor(
+          sets['desert-ground'],
+          sitePosition,
+          textureSize,
+          derivativePosition,
+        ).mul(blend.desert),
       )
       .add(
-        sampleDirectBaseColor(sets['paved-road'], sitePosition, textureSize).mul(
-          blend.paved,
-        ),
+        sampleBaseColor(
+          sets['paved-road'],
+          sitePosition,
+          textureSize,
+          derivativePosition,
+        ).mul(blend.paved),
       ),
     coverage: blend.coverage,
   }
@@ -232,13 +247,16 @@ function buildSurfaceBlendNodes(
   }
 }
 
-function sampleDirectBaseColor(
+function sampleBaseColor(
   set: SurfaceMaterialTextureSet,
   sitePosition: Node<'vec2'>,
   textureSize: number,
+  derivativePosition: Node<'vec2'> = sitePosition,
 ): Node<'vec3'> {
-  const uv = sitePosition.div(set.worldScale * (textureSize / 100))
-  return texture(set.baseColor, uv).rgb
+  const scale = set.worldScale * (textureSize / 100)
+  const uv = sitePosition.div(scale)
+  const derivativeUv = derivativePosition.div(scale)
+  return stochasticSample(set.baseColor, uv, derivativeUv).rgb
 }
 
 function sampleTextureSet(
@@ -254,23 +272,27 @@ function sampleTextureSet(
   const uv = sitePosition.div(set.worldScale * (textureSize / 100))
   const arm = stochasticSample(set.arm, uv)
   return {
-    color: stochasticSample(set.baseColor, uv).rgb,
+    color: sampleBaseColor(set, sitePosition, textureSize),
     normal: stochasticSample(set.normal, uv).rgb,
     roughness: arm.g,
     ao: arm.r,
   }
 }
 
-function stochasticSample(map: Texture, uv: Node<'vec2'>): Node<'vec4'> {
+function stochasticSample(
+  map: Texture,
+  uv: Node<'vec2'>,
+  derivativeUv: Node<'vec2'> = uv,
+): Node<'vec4'> {
   const cell = floor(uv)
   const local = fract(uv)
   const blend = (
     smoothstep as unknown as (min: number, max: number, value: Node<'vec2'>) => Node<'vec2'>
   )(0.2, 0.8, local)
-  const topLeft = sampleCell(map, uv, cell)
-  const topRight = sampleCell(map, uv, cell.add(vec2(1, 0)))
-  const bottomLeft = sampleCell(map, uv, cell.add(vec2(0, 1)))
-  const bottomRight = sampleCell(map, uv, cell.add(vec2(1, 1)))
+  const topLeft = sampleCell(map, uv, cell, derivativeUv)
+  const topRight = sampleCell(map, uv, cell.add(vec2(1, 0)), derivativeUv)
+  const bottomLeft = sampleCell(map, uv, cell.add(vec2(0, 1)), derivativeUv)
+  const bottomRight = sampleCell(map, uv, cell.add(vec2(1, 1)), derivativeUv)
   return mix(
     mix(topLeft, topRight, blend.x),
     mix(bottomLeft, bottomRight, blend.x),
@@ -278,14 +300,19 @@ function stochasticSample(map: Texture, uv: Node<'vec2'>): Node<'vec4'> {
   ) as Node<'vec4'>
 }
 
-function sampleCell(map: Texture, uv: Node<'vec2'>, cell: Node<'vec2'>): Node<'vec4'> {
+function sampleCell(
+  map: Texture,
+  uv: Node<'vec2'>,
+  cell: Node<'vec2'>,
+  derivativeUv: Node<'vec2'>,
+): Node<'vec4'> {
   const seed = cell.x.mul(127.1).add(cell.y.mul(311.7))
   const offset = vec2(hash(seed), hash(seed.add(71.7)))
   const sampleUv = uv.sub(cell).add(offset)
   const sampleNode = texture(map, sampleUv) as Node<'vec4'> & {
     grad: (x: Node<'vec2'>, y: Node<'vec2'>) => Node<'vec4'>
   }
-  return sampleNode.grad(dFdx(uv), dFdy(uv))
+  return sampleNode.grad(dFdx(derivativeUv), dFdy(derivativeUv))
 }
 
 function loadSet(

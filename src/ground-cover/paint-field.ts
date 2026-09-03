@@ -5,7 +5,7 @@ const BASE64_PATTERN = /^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3
 
 export const GRASS_PAINT_FIELD_SIZES = [33, 65, 129, 257, 513] as const
 export const DEFAULT_GRASS_PAINT_FIELD_SPACING = 0.05
-export const DEFAULT_GRASS_PAINT_COLOR = '#3f6b2f'
+export const DEFAULT_GRASS_PAINT_COLOR = '#202f1e'
 export const CLEARED_GRASS_PAINT_COLOR = DEFAULT_GRASS_PAINT_COLOR
 export const MAX_GRASS_PAINT_FIELD_SIDE = 513
 

@@ -70,7 +70,7 @@ describe('paint stroke settings and snapshot', () => {
       targetDensity: 1,
       premultiplyColorByDensity: false,
       clipToBoundary: true,
-      color: '#3f6b2f',
+      color: '#202f1e',
       noiseAmount: 0,
       noiseScale: 1,
       seed: 1,
@@ -90,7 +90,7 @@ describe('paint stroke settings and snapshot', () => {
       [[0, 0]],
     )
 
-    expect(rgbaAt(result, 0, 0)).toEqual([63, 107, 47, 255])
+    expect(rgbaAt(result, 0, 0)).toEqual([32, 47, 30, 255])
   })
 
   test('freezes a byte snapshot and exposes a separate live result', () => {

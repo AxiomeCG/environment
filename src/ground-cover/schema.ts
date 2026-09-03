@@ -2,14 +2,17 @@ import { BaseNode, nodeType, objectId } from '@pascal-app/core'
 import { z } from 'zod'
 import { GrassPaintFieldData } from './paint-field'
 
+export const DEFAULT_GRASS_BLADE_WIDTH = 0.035
+export const DEFAULT_GRASS_BLADE_HEIGHT = 0.15
+
 export const GrassFieldNode = BaseNode.extend({
   id: objectId('grass-field'),
   type: nodeType('environment:ground-cover'),
   position: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   rotation: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
-  bladeWidth: z.number().positive().default(0.06),
+  bladeWidth: z.number().positive().default(DEFAULT_GRASS_BLADE_WIDTH),
   bladeWidthVariation: z.number().min(0).max(100).default(20),
-  bladeHeight: z.number().positive().default(0.25),
+  bladeHeight: z.number().positive().default(DEFAULT_GRASS_BLADE_HEIGHT),
   bladeHeightVariation: z.number().min(0).max(100).default(20),
   bladeTintVariation: z.number().min(0).max(100).default(20),
   bladeTipBrightness: z.number().min(0).max(500).default(300),
@@ -27,6 +30,8 @@ export type GrassFieldNode = z.infer<typeof GrassFieldNode>
 
 type GrassFieldDefaultsPatch = Pick<
   GrassFieldNode,
+  | 'bladeWidth'
+  | 'bladeHeight'
   | 'bladeWidthVariation'
   | 'bladeHeightVariation'
   | 'bladeTintVariation'
@@ -43,6 +48,14 @@ export function getMissingGrassFieldDefaults(node: unknown): Partial<GrassFieldD
   const parsed = GrassFieldNode.parse(node)
   const source = node as Partial<GrassFieldDefaultsPatch>
   const patch: Partial<GrassFieldDefaultsPatch> = {}
+  const usesLegacyScale = source.bladeWidth === 0.06 && source.bladeHeight === 0.25
+
+  if (source.bladeWidth === undefined || usesLegacyScale) {
+    patch.bladeWidth = DEFAULT_GRASS_BLADE_WIDTH
+  }
+  if (source.bladeHeight === undefined || usesLegacyScale) {
+    patch.bladeHeight = DEFAULT_GRASS_BLADE_HEIGHT
+  }
 
   if (source.bladeWidthVariation === undefined) {
     patch.bladeWidthVariation = parsed.bladeWidthVariation

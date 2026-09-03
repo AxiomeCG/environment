@@ -46,10 +46,12 @@ const context: GeometryContext = {
 	}),
 };
 
-test("grass-field percentage controls have stable defaults", () => {
+test("grass-field controls have stable defaults", () => {
 	const field = GrassFieldNode.parse({});
 
+	expect(field.bladeWidth).toBe(0.035);
 	expect(field.bladeWidthVariation).toBe(20);
+	expect(field.bladeHeight).toBe(0.15);
 	expect(field.bladeHeightVariation).toBe(20);
 	expect(field.bladeTintVariation).toBe(20);
 	expect(field.bladeTipBrightness).toBe(300);
@@ -64,6 +66,8 @@ test("grass-field percentage controls have stable defaults", () => {
 
 test("missing controls receive defaults without replacing explicit zeroes", () => {
 	expect(getMissingGrassFieldDefaults({})).toEqual({
+		bladeWidth: 0.035,
+		bladeHeight: 0.15,
 		bladeWidthVariation: 20,
 		bladeHeightVariation: 20,
 		bladeTintVariation: 20,
@@ -78,6 +82,27 @@ test("missing controls receive defaults without replacing explicit zeroes", () =
 
 	expect(
 		getMissingGrassFieldDefaults({
+			bladeWidth: 0.06,
+			bladeHeight: 0.25,
+		}),
+	).toMatchObject({
+		bladeWidth: 0.035,
+		bladeHeight: 0.15,
+	});
+	expect(
+		getMissingGrassFieldDefaults({
+			bladeWidth: 0.04,
+			bladeHeight: 0.2,
+		}),
+	).not.toMatchObject({
+		bladeWidth: expect.anything(),
+		bladeHeight: expect.anything(),
+	});
+
+	expect(
+		getMissingGrassFieldDefaults({
+			bladeWidth: 0.04,
+			bladeHeight: 0.2,
 			bladeWidthVariation: 0,
 			bladeHeightVariation: 0,
 			bladeTintVariation: 0,
@@ -193,8 +218,8 @@ test("full density scatters one candidate per site cell", () => {
 
 	expect(blade).toBeInstanceOf(InstancedMesh);
 	if (!(blade instanceof InstancedMesh)) return;
-	expect(blade.instanceMatrix.count).toBe(4);
-	expect(blade.count).toBe(4);
+	expect(blade.instanceMatrix.count).toBe(9);
+	expect(blade.count).toBe(9);
 	expect(blade.material).toBeInstanceOf(MeshStandardNodeMaterial);
 	if (blade.material instanceof MeshStandardNodeMaterial) {
 		expect(blade.material.positionNode).not.toBeNull();
@@ -205,12 +230,17 @@ test("full density scatters one candidate per site cell", () => {
 	const roots = blade.geometry.getAttribute("grassRoot");
 	const thresholds = blade.geometry.getAttribute("grassDensityThreshold");
 	const tints = blade.geometry.getAttribute("grassTintVariation");
+	const surfaceSampleBases = blade.geometry.getAttribute(
+		"grassSurfaceSampleBasis",
+	);
 	expect(roots).toBeInstanceOf(InstancedBufferAttribute);
 	expect(thresholds).toBeInstanceOf(InstancedBufferAttribute);
 	expect(tints).toBeInstanceOf(InstancedBufferAttribute);
+	expect(surfaceSampleBases).toBeInstanceOf(InstancedBufferAttribute);
 	expect(roots.count).toBe(blade.count);
 	expect(thresholds.count).toBe(blade.count);
 	expect(tints.count).toBe(blade.count);
+	expect(surfaceSampleBases.count).toBe(blade.count);
 	expect(
 		Array.from(thresholds.array as ArrayLike<number>).every(
 			(value) => value >= 0 && value < 1,
@@ -229,7 +259,9 @@ test("full density scatters one candidate per site cell", () => {
 
 	expect(scale.x).toBeCloseTo(field.bladeWidth);
 	expect(scale.y).toBeCloseTo(field.bladeHeight);
-	expect(scale.z).toBeCloseTo(1);
+	expect(scale.z).toBeCloseTo(field.bladeWidth);
+	expect(surfaceSampleBases.getX(0)).toBeCloseTo(matrix.elements[0] as number);
+	expect(surfaceSampleBases.getY(0)).toBeCloseTo(-(matrix.elements[2] as number));
 });
 
 test("drapes roots and painted ground over slopes while blades remain upright", () => {
@@ -371,8 +403,8 @@ test("density is GPU-gated without changing candidate instances", () => {
 		!(fullBlade instanceof InstancedMesh)
 	)
 		return;
-	expect(emptyBlade.instanceMatrix.count).toBe(4);
-	expect(emptyBlade.count).toBe(4);
+	expect(emptyBlade.instanceMatrix.count).toBe(9);
+	expect(emptyBlade.count).toBe(9);
 	expect(fullBlade.count).toBe(emptyBlade.count);
 	expect(
 		Array.from(

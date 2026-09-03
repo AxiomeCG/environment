@@ -164,7 +164,11 @@ export function buildGrassFieldBakeGeometry(
       }
 
       position.set(x, y, z)
-      scale.set(node.bladeWidth * widthFactor, bladeHeight, 1)
+      scale.set(
+        node.bladeWidth * widthFactor,
+        bladeHeight,
+        node.bladeWidth * widthFactor,
+      )
       matrix.compose(position, rotation, scale)
       normalMatrix.getNormalMatrix(matrix)
 
