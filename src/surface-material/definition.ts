@@ -1,17 +1,19 @@
 import type { NodeDefinition } from '@pascal-app/core'
 import { buildSurfaceMaterialBakeGeometry } from './bake-geometry'
+import { buildSurfaceMaterialFloorplan } from './floorplan'
 import { buildSurfaceMaterialGeometry } from './geometry'
 import { SurfaceMaterialNode, SURFACE_MATERIAL_KIND } from './schema'
 
 type SurfaceMaterialDefinition = Omit<
   NodeDefinition<typeof SurfaceMaterialNode>,
-  'capabilities'
+  'capabilities' | 'floorplanScope'
 > &
   Record<string, unknown> & {
     bakeGeometry: typeof buildSurfaceMaterialBakeGeometry
     capabilities: NodeDefinition<typeof SurfaceMaterialNode>['capabilities'] & {
       selectionHighlight?: boolean
     }
+    floorplanScope: 'site'
   }
 
 export const surfaceMaterialDefinition: SurfaceMaterialDefinition = {
@@ -42,6 +44,8 @@ export const surfaceMaterialDefinition: SurfaceMaterialDefinition = {
   bake: 'replace',
   bakeGeometry: buildSurfaceMaterialBakeGeometry,
   bakeReplaceRenderer: { module: () => import('./static-renderer') },
+  floorplan: buildSurfaceMaterialFloorplan,
+  floorplanScope: 'site',
   system: { module: () => import('./system'), priority: 1 },
   tool: () => import('./tool'),
   toolHints: [

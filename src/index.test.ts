@@ -22,6 +22,8 @@ describe('Environment plugin manifest', () => {
   test('registers the 2D, portable bake, and Pascal replacement paths', async () => {
     expect(groundCoverDefinition.floorplanScope).toBe('site')
     expect(groundCoverDefinition.floorplan).toBeFunction()
+    expect(surfaceMaterialDefinition.floorplanScope).toBe('site')
+    expect(surfaceMaterialDefinition.floorplan).toBeFunction()
     expect(groundCoverDefinition.bake).toBe('replace')
     expect(groundCoverDefinition.bakeGeometry).toBeFunction()
     const replacement = await groundCoverDefinition.bakeReplaceRenderer?.module()

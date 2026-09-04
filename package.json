@@ -7,6 +7,7 @@
   },
   "main": "./src/index.ts",
   "devDependencies": {
+    "@dgreenheck/ez-tree": "^1.1.0",
     "@pascal-app/core": "1.0.0-beta.5",
     "@pascal-app/editor": "1.0.0-beta.5",
     "@pascal-app/viewer": "1.0.0-beta.5",
@@ -27,6 +28,7 @@
     "zustand": "^5"
   },
   "peerDependencies": {
+    "@dgreenheck/ez-tree": "^1.1.0",
     "@pascal-app/core": ">=1.0.0-beta.5 <2",
     "@pascal-app/editor": ">=1.0.0-beta.5 <2",
     "@pascal-app/viewer": ">=1.0.0-beta.5 <2",

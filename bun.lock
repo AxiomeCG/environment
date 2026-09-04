@@ -5,6 +5,7 @@
     "": {
       "name": "@pascal-app/plugin-environment",
       "devDependencies": {
+        "@dgreenheck/ez-tree": "^1.1.0",
         "@pascal-app/core": "1.0.0-beta.5",
         "@pascal-app/editor": "1.0.0-beta.5",
         "@pascal-app/viewer": "1.0.0-beta.5",
@@ -39,6 +40,8 @@
   },
   "packages": {
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
+
+    "@dgreenheck/ez-tree": ["@dgreenheck/ez-tree@1.1.0", "", { "peerDependencies": { "three": ">=0.167" } }, "sha512-6pvS6hD6B6h00dm0SnkgYeT4ABU5Y1Z9M44p1tXiV5C0eKrQy2sKECXshoaUv0qAOqYVL68w/PwadUxDFDiHUg=="],
 
     "@dimforge/rapier3d-compat": ["@dimforge/rapier3d-compat@0.12.0", "", {}, "sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow=="],
 

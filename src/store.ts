@@ -34,6 +34,7 @@ type EnvironmentStore = {
   groundCoverHeightAmount: number
   surfaceBrush: PaintStrokeSettings
   surfaceMaterial: SurfaceMaterialId
+  surroundingsEnabled: boolean
   setActiveSection: (section?: EnvironmentTool) => void
   setFrontageSeparator: (index: number, separator: FrontageSeparator) => void
   setGroundCoverBrush: (patch: Partial<PaintStrokeSettings>) => void
@@ -41,6 +42,7 @@ type EnvironmentStore = {
   setGroundCoverHeightAmount: (amount: number) => void
   setSurfaceBrush: (patch: SurfaceBrushPatch) => void
   setSurfaceMaterial: (material: SurfaceMaterialId) => void
+  setSurroundingsEnabled: (enabled: boolean) => void
 }
 
 export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
@@ -60,6 +62,7 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
     targetDensity: 1,
   },
   surfaceMaterial: DEFAULT_SURFACE_MATERIAL,
+  surroundingsEnabled: true,
   setActiveSection: (activeSection) => set({ activeSection }),
   setFrontageSeparator: (index, separator) =>
     set((state) => ({
@@ -81,4 +84,5 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
         targetDensity: 1,
       },
     })),
+  setSurroundingsEnabled: (surroundingsEnabled) => set({ surroundingsEnabled }),
 }))

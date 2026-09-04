@@ -16,6 +16,14 @@ import {
   type FrontageSeparator,
   type Point2,
 } from './frontages'
+import {
+  deriveHousePlans,
+  deriveNeighborCellClassifications,
+  houseGarageFootprint,
+  houseOpeningSegment,
+  houseRoofRidge,
+} from './neighborhood'
+import { deriveRuntimeRoadNetwork } from './runtime-road-graph'
 
 const SEPARATOR_PRESENTATION: Record<
   FrontageSeparator,
@@ -77,24 +85,49 @@ export default function FrontageSelector({
     segments,
     STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
   )
+  const neighborhood = (() => {
+    try {
+      const network = deriveRuntimeRoadNetwork(layout)
+      const cells = deriveNeighborCellClassifications(segments, layout, network)
+      return { cells, houses: deriveHousePlans(cells) }
+    } catch {
+      return {
+        cells: layout.neighborCells.map((cell) => ({
+          ...cell,
+          lotIndex: 0,
+          roadCoverage: 0,
+          use: 'residual' as const,
+        })),
+        houses: [],
+      }
+    }
+  })()
+  const cellShapes = neighborhood.cells.map((cell) => ({
+    id: cell.id,
+    kind: cell.kind,
+    points: cell.polygon,
+    use: cell.use,
+  }))
   const corridorShapes = layout.corridors.map((corridor) => ({
     id: corridor.id,
     road: orientedRectangleCorners(corridor.road, corridor.frame),
-    properties: corridor.properties.map((property) => ({
-      id: property.id,
-      points: orientedRectangleCorners(
-        {
-          center: property.center,
-          length: property.frontageWidth,
-          width: property.depth,
-        },
-        corridor.frame,
-      ),
-    })),
   }))
   const junctionShapes = layout.roadJunctions.map((junction) => ({
     id: junction.id,
     points: junction.corners,
+  }))
+  const houseShapes = neighborhood.houses.map((house) => ({
+    access: house.access.point,
+    footprint: house.footprint,
+    garage: houseGarageFootprint(house),
+    id: house.id,
+    openings: house.facades.flatMap((facade) => facade.openings
+      .filter((opening) => opening.bottom < 2.5)
+      .map((opening) => ({
+        kind: opening.kind,
+        segment: houseOpeningSegment(house, facade, opening),
+      }))),
+    ridge: houseRoofRidge(house),
   }))
   const siteXValues = points.map(([x]) => x)
   const siteZValues = points.map(([, z]) => z)
@@ -126,15 +159,20 @@ export default function FrontageSelector({
     }
   })
   const diagramPoints: Point2[] = [...points]
+  for (const shape of cellShapes) {
+    diagramPoints.push(...shape.points)
+  }
+
   for (const shape of corridorShapes) {
     diagramPoints.push(...shape.road)
-    for (const property of shape.properties) {
-      diagramPoints.push(...property.points)
-    }
   }
 
   for (const shape of junctionShapes) {
     diagramPoints.push(...shape.points)
+  }
+
+  for (const shape of houseShapes) {
+    diagramPoints.push(...shape.footprint, ...shape.ridge, shape.access)
   }
 
   for (const shape of segmentShapes) {
@@ -166,39 +204,119 @@ export default function FrontageSelector({
         viewBox={viewBox}
       >
         <g transform={sceneTransform}>
-          {corridorShapes.map((shape) => (
-            <g key={shape.id}>
-              {shape.properties.map((property) => (
-                <polygon
-                  className="fill-emerald-500/15 stroke-emerald-500/50"
-                  key={property.id}
-                  points={svgPolygonPoints(property.points)}
-                  strokeWidth="1"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ))}
+          {cellShapes.map((shape) => {
+            const color = shape.use === 'transport'
+              ? 'var(--sidebar-foreground)'
+              : shape.use === 'residual'
+                ? '#f59e0b'
+                : '#10b981'
+            const fillOpacity = shape.use === 'transport' ? 0.08 : 0.12
+            const strokeOpacity = shape.use === 'transport'
+              ? 0.25
+              : shape.kind === 'corner'
+                ? 0.55
+                : 0.45
+
+            return (
               <polygon
-                className="fill-sidebar-foreground/20 stroke-sidebar-foreground/50"
-                points={svgPolygonPoints(shape.road)}
+                fill={color}
+                fillOpacity={fillOpacity}
+                key={shape.id}
+                points={svgPolygonPoints(shape.points)}
+                stroke={color}
+                strokeOpacity={strokeOpacity}
                 strokeWidth="1"
                 vectorEffect="non-scaling-stroke"
               />
-            </g>
-          ))}
+            )
+          })}
 
-          {junctionShapes.map((shape) => (
+          {corridorShapes.map((shape) => (
             <polygon
-              className="fill-sidebar-foreground/20 stroke-sidebar-foreground/50"
+              fill="var(--sidebar-foreground)"
+              fillOpacity="0.16"
               key={shape.id}
-              points={svgPolygonPoints(shape.points)}
+              points={svgPolygonPoints(shape.road)}
+              stroke="var(--sidebar-foreground)"
+              strokeOpacity="0.45"
               strokeWidth="1"
               vectorEffect="non-scaling-stroke"
             />
           ))}
 
+          {junctionShapes.map((shape) => (
+            <polygon
+              fill="var(--sidebar-foreground)"
+              fillOpacity="0.16"
+              key={shape.id}
+              points={svgPolygonPoints(shape.points)}
+              stroke="var(--sidebar-foreground)"
+              strokeOpacity="0.45"
+              strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+
+          {houseShapes.map((house) => (
+            <g key={house.id}>
+              <polygon
+                fill="var(--sidebar-foreground)"
+                fillOpacity="0.32"
+                points={svgPolygonPoints(house.footprint)}
+                stroke="var(--sidebar-foreground)"
+                strokeLinejoin="round"
+                strokeOpacity="0.8"
+                strokeWidth="1.25"
+                vectorEffect="non-scaling-stroke"
+              />
+              {house.garage && (
+                <polygon
+                  fill="var(--sidebar-foreground)"
+                  fillOpacity="0.16"
+                  points={svgPolygonPoints(house.garage)}
+                  stroke="var(--sidebar-foreground)"
+                  strokeLinejoin="round"
+                  strokeOpacity="0.6"
+                  strokeWidth="1"
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
+              <line
+                stroke="var(--sidebar-foreground)"
+                strokeDasharray="3 2"
+                strokeOpacity="0.55"
+                strokeWidth="1"
+                vectorEffect="non-scaling-stroke"
+                x1={svgPoint(house.ridge[0])[0]}
+                x2={svgPoint(house.ridge[1])[0]}
+                y1={svgPoint(house.ridge[0])[1]}
+                y2={svgPoint(house.ridge[1])[1]}
+              />
+              {house.openings.map((opening, index) => {
+                const start = svgPoint(opening.segment[0])
+                const end = svgPoint(opening.segment[1])
+                return (
+                  <line
+                    key={`${opening.kind}-${index}`}
+                    stroke={opening.kind === 'door' ? '#d97706' : '#0ea5e9'}
+                    strokeLinecap="round"
+                    strokeWidth={opening.kind === 'door' ? 2.5 : 2}
+                    vectorEffect="non-scaling-stroke"
+                    x1={start[0]}
+                    x2={end[0]}
+                    y1={start[1]}
+                    y2={end[1]}
+                  />
+                )
+              })}
+            </g>
+          ))}
+
           <polygon
-            className="fill-sidebar-accent/70 stroke-sidebar-border"
+            fill="var(--sidebar-accent)"
+            fillOpacity="0.7"
             points={polygonPoints}
+            stroke="var(--sidebar-border)"
             strokeWidth="1.5"
             vectorEffect="non-scaling-stroke"
           />

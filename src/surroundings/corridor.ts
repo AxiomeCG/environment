@@ -3,6 +3,7 @@ import {
   type RoadFrontageSeparator,
   STREETSCAPE_COMPATIBLE_ROAD_WIDTHS,
 } from './streetscape-road-presentation'
+import { seededRange } from './seeded-random'
 
 export type SurroundingsFrame = Readonly<{
   origin: Point2
@@ -17,11 +18,13 @@ export type RoadStripDescriptor = Readonly<{
   width: number
 }>
 
-export type NeighborPropertyDescriptor = Readonly<{
+export type NeighborCellKind = 'frontage' | 'corner'
+
+export type NeighborCellDescriptor = Readonly<{
   id: string
-  center: Point2
-  frontageWidth: number
-  depth: number
+  kind: NeighborCellKind
+  frontageIndices: readonly number[]
+  polygon: readonly Point2[]
 }>
 
 export type SurroundingsCorridorDescriptor = Readonly<{
@@ -30,7 +33,6 @@ export type SurroundingsCorridorDescriptor = Readonly<{
   separator: RoadFrontageSeparator
   frame: SurroundingsFrame
   road: RoadStripDescriptor
-  properties: readonly NeighborPropertyDescriptor[]
 }>
 
 export type RoadJunctionDescriptor = Readonly<{
@@ -52,6 +54,7 @@ export type RoadPresentationAlignmentDescriptor = Readonly<{
 
 export type SurroundingsLayoutDescriptor = Readonly<{
   corridors: readonly SurroundingsCorridorDescriptor[]
+  neighborCells: readonly NeighborCellDescriptor[]
   roadJunctions: readonly RoadJunctionDescriptor[]
 }>
 
@@ -59,15 +62,18 @@ export type SurroundingsCorridorDimensions = Readonly<{
   primaryRoadWidth: number
   secondaryRoadWidth: number
   neighborDepth: number
-  targetPropertyFrontage: number
 }>
+export type NeighborCellVariationParameters = Readonly<{
+  seed: string
+  depthVariation: number
+}>
+
 
 export const DEFAULT_SURROUNDINGS_CORRIDOR_DIMENSIONS: SurroundingsCorridorDimensions =
   Object.freeze({
     primaryRoadWidth: 9,
     secondaryRoadWidth: 6,
     neighborDepth: 22,
-    targetPropertyFrontage: 8,
   })
 
 export const STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS: SurroundingsCorridorDimensions =
@@ -76,6 +82,40 @@ export const STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS: SurroundingsCorridorD
     primaryRoadWidth: STREETSCAPE_COMPATIBLE_ROAD_WIDTHS['primary-road'],
     secondaryRoadWidth: STREETSCAPE_COMPATIBLE_ROAD_WIDTHS['secondary-road'],
   })
+export const DEFAULT_NEIGHBOR_CELL_VARIATION: NeighborCellVariationParameters =
+  Object.freeze({
+    seed: 'pascal-neighborhood-v1',
+    depthVariation: 0.2,
+  })
+
+
+function neighborRingDepth(
+  dimensions: SurroundingsCorridorDimensions,
+): number {
+  return Math.max(
+    dimensions.primaryRoadWidth,
+    dimensions.secondaryRoadWidth,
+  ) + dimensions.neighborDepth
+}
+function neighborCellDepth(
+  segment: BoundarySegment,
+  dimensions: SurroundingsCorridorDimensions,
+  variation: NeighborCellVariationParameters,
+): number {
+  const infrastructureDepth = Math.max(
+    dimensions.primaryRoadWidth,
+    dimensions.secondaryRoadWidth,
+  )
+  const variationAmount = Math.max(0, Math.min(0.35, variation.depthVariation))
+  const depthScale = seededRange(
+    variation.seed,
+    `frontage-depth:${segment.index}`,
+    1 - variationAmount,
+    1 + variationAmount,
+  )
+  return infrastructureDepth + dimensions.neighborDepth * depthScale
+}
+
 
 function offsetPoint(point: Point2, direction: Point2, distance: number): Point2 {
   return [
@@ -86,6 +126,14 @@ function offsetPoint(point: Point2, direction: Point2, distance: number): Point2
 
 function cross(a: Point2, b: Point2): number {
   return a[0] * b[1] - a[1] * b[0]
+}
+
+function isConvexCorner(
+  previous: BoundarySegment,
+  next: BoundarySegment,
+): boolean {
+  const windingSign = -cross(previous.tangent, previous.outwardNormal)
+  return cross(previous.tangent, next.tangent) * windingSign > 1e-9
 }
 
 function lineIntersection(
@@ -106,6 +154,72 @@ function lineIntersection(
     firstDirection,
     cross(betweenPoints, secondDirection) / denominator,
   )
+}
+
+function secondaryRunBoundarySeparator(
+  segments: readonly BoundarySegment[],
+  startIndex: number,
+  direction: -1 | 1,
+): BoundarySegment['context']['separator'] {
+  let currentIndex = startIndex
+
+  for (let step = 0; step < segments.length; step += 1) {
+    const adjacentIndex = (
+      currentIndex + direction + segments.length
+    ) % segments.length
+    const current = segments[currentIndex]!
+    const adjacent = segments[adjacentIndex]!
+    const previous = direction === 1 ? current : adjacent
+    const next = direction === 1 ? adjacent : current
+
+    if (!isConvexCorner(previous, next)) return 'none'
+    if (adjacent.context.separator !== 'secondary-road') {
+      return adjacent.context.separator
+    }
+    currentIndex = adjacentIndex
+  }
+
+  return 'secondary-road'
+}
+
+function extendSecondaryCorridor(
+  corridor: SurroundingsCorridorDescriptor,
+  segmentIndex: number,
+  segments: readonly BoundarySegment[],
+  dimensions: SurroundingsCorridorDimensions,
+): SurroundingsCorridorDescriptor {
+  if (corridor.separator !== 'secondary-road') return corridor
+
+  const previous = segments[
+    (segmentIndex - 1 + segments.length) % segments.length
+  ]!
+  const next = segments[(segmentIndex + 1) % segments.length]!
+  const runTouchesPrimary =
+    secondaryRunBoundarySeparator(segments, segmentIndex, -1) === 'primary-road'
+    || secondaryRunBoundarySeparator(segments, segmentIndex, 1) === 'primary-road'
+  const startExtension = runTouchesPrimary
+    && previous.context.separator === 'none'
+    ? neighborRingDepth(dimensions)
+    : 0
+  const endExtension = runTouchesPrimary
+    && next.context.separator === 'none'
+    ? neighborRingDepth(dimensions)
+    : 0
+
+  if (startExtension === 0 && endExtension === 0) return corridor
+
+  return {
+    ...corridor,
+    road: {
+      ...corridor.road,
+      center: offsetPoint(
+        corridor.road.center,
+        corridor.frame.tangent,
+        (endExtension - startExtension) / 2,
+      ),
+      length: corridor.road.length + startExtension + endExtension,
+    },
+  }
 }
 
 function cubicBezierPoint(
@@ -206,6 +320,76 @@ export function orientedRectangleCorners(
   ]
 }
 
+export function deriveNeighborCells(
+  segments: readonly BoundarySegment[],
+  dimensions = DEFAULT_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+  variation = DEFAULT_NEIGHBOR_CELL_VARIATION,
+): NeighborCellDescriptor[] {
+  const depthByFrontage = new Map(
+    segments.map((segment) => [
+      segment.index,
+      neighborCellDepth(segment, dimensions, variation),
+    ]),
+  )
+  const frontageCells = segments.map((segment): NeighborCellDescriptor => {
+    const depth = depthByFrontage.get(segment.index)!
+    return {
+      id: `surroundings-cell-frontage-${segment.index}`,
+      kind: 'frontage',
+      frontageIndices: [segment.index],
+      polygon: [
+        segment.start,
+        segment.end,
+        offsetPoint(segment.end, segment.outwardNormal, depth),
+        offsetPoint(segment.start, segment.outwardNormal, depth),
+      ],
+    }
+  })
+  const cornerCells = segments.flatMap(
+    (previous, index): NeighborCellDescriptor[] => {
+      const next = segments[(index + 1) % segments.length]
+      if (!next) return []
+
+      if (!isConvexCorner(previous, next)) return []
+
+      const vertex = previous.end
+      const previousDepth = depthByFrontage.get(previous.index)!
+      const nextDepth = depthByFrontage.get(next.index)!
+      const previousOuter = offsetPoint(
+        vertex,
+        previous.outwardNormal,
+        previousDepth,
+      )
+      const nextOuter = offsetPoint(vertex, next.outwardNormal, nextDepth)
+      const outerCorner = lineIntersection(
+        previousOuter,
+        previous.tangent,
+        nextOuter,
+        next.tangent,
+      )
+      if (!outerCorner) return []
+
+      const miterLength = Math.hypot(
+        outerCorner[0] - vertex[0],
+        outerCorner[1] - vertex[1],
+      )
+      const miterLimit = Math.max(previousDepth, nextDepth) * 3
+      const polygon = miterLength <= miterLimit
+        ? [vertex, previousOuter, outerCorner, nextOuter]
+        : [vertex, previousOuter, nextOuter]
+
+      return [{
+        id: `surroundings-cell-corner-${previous.index}-${next.index}`,
+        kind: 'corner',
+        frontageIndices: [previous.index, next.index],
+        polygon,
+      }]
+    },
+  )
+
+  return [...frontageCells, ...cornerCells]
+}
+
 export function deriveSurroundingsCorridor(
   segment: BoundarySegment,
   dimensions = DEFAULT_SURROUNDINGS_CORRIDOR_DIMENSIONS,
@@ -221,26 +405,6 @@ export function deriveSurroundingsCorridor(
     ? dimensions.primaryRoadWidth
     : dimensions.secondaryRoadWidth
   const id = `surroundings-frontage-${segment.index}`
-  const propertyCount = Math.max(
-    1,
-    Math.round(segment.length / dimensions.targetPropertyFrontage),
-  )
-  const frontageWidth = segment.length / propertyCount
-  const propertyBandCenter = offsetPoint(
-    origin,
-    segment.outwardNormal,
-    roadWidth + dimensions.neighborDepth / 2,
-  )
-  const properties = Array.from({ length: propertyCount }, (_, index) => ({
-    id: `${id}-property-${index}`,
-    center: offsetPoint(
-      propertyBandCenter,
-      segment.tangent,
-      (index + 0.5) * frontageWidth - segment.length / 2,
-    ),
-    frontageWidth,
-    depth: dimensions.neighborDepth,
-  }))
 
   return {
     id,
@@ -254,10 +418,11 @@ export function deriveSurroundingsCorridor(
     road: {
       id: `${id}-road`,
       center: offsetPoint(origin, segment.outwardNormal, roadWidth / 2),
-      length: segment.length,
+      length: separator === 'primary-road'
+        ? segment.length + neighborRingDepth(dimensions) * 2
+        : segment.length,
       width: roadWidth,
     },
-    properties,
   }
 }
 
@@ -265,17 +430,29 @@ export function deriveSurroundingsCorridors(
   segments: readonly BoundarySegment[],
   dimensions = DEFAULT_SURROUNDINGS_CORRIDOR_DIMENSIONS,
 ): SurroundingsCorridorDescriptor[] {
-  return segments.flatMap((segment) => {
+  const corridors = segments.flatMap((segment) => {
     const corridor = deriveSurroundingsCorridor(segment, dimensions)
     return corridor ? [corridor] : []
   })
+  const segmentIndexByFrontage = new Map(
+    segments.map((segment, index) => [segment.index, index]),
+  )
+
+  return corridors.map((corridor) => extendSecondaryCorridor(
+    corridor,
+    segmentIndexByFrontage.get(corridor.frontageIndex)!,
+    segments,
+    dimensions,
+  ))
 }
 
 export function deriveSurroundingsLayout(
   segments: readonly BoundarySegment[],
   dimensions = DEFAULT_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+  cellVariation = DEFAULT_NEIGHBOR_CELL_VARIATION,
 ): SurroundingsLayoutDescriptor {
   const corridors = deriveSurroundingsCorridors(segments, dimensions)
+  const neighborCells = deriveNeighborCells(segments, dimensions, cellVariation)
   const corridorByFrontage = new Map(
     corridors.map((corridor) => [corridor.frontageIndex, corridor]),
   )
@@ -288,9 +465,7 @@ export function deriveSurroundingsLayout(
     const nextCorridor = corridorByFrontage.get(next.index)
     if (!previousCorridor || !nextCorridor) return []
 
-    const windingSign = -cross(previous.tangent, previous.outwardNormal)
-    const signedTurn = cross(previous.tangent, next.tangent) * windingSign
-    if (signedTurn <= 1e-9) return []
+    if (!isConvexCorner(previous, next)) return []
 
     const vertex = previous.end
     const previousOuter = offsetPoint(
@@ -338,7 +513,7 @@ export function deriveSurroundingsLayout(
     },
   )
 
-  return { corridors, roadJunctions }
+  return { corridors, neighborCells, roadJunctions }
 }
 
 function corridorCenterline(
@@ -363,11 +538,9 @@ export function deriveRoadPresentationAlignments(
   const compatibleJunctions = layout.roadJunctions.filter((junction) => {
     const previous = corridorByFrontage.get(junction.previousFrontageIndex)
     const next = corridorByFrontage.get(junction.nextFrontageIndex)
-    return previous?.separator === next?.separator
+    return previous?.separator === 'secondary-road'
+      && next?.separator === 'secondary-road'
   })
-  const compatibleJunctionIds = new Set(
-    compatibleJunctions.map((junction) => junction.id),
-  )
   const outgoingJunctionByFrontage = new Map(
     compatibleJunctions.map((junction) => [
       junction.previousFrontageIndex,
@@ -427,17 +600,6 @@ export function deriveRoadPresentationAlignments(
 
   for (const corridor of layout.corridors) {
     if (!visitedFrontages.has(corridor.frontageIndex)) appendAlignment(corridor)
-  }
-
-  for (const junction of layout.roadJunctions) {
-    if (compatibleJunctionIds.has(junction.id)) continue
-    alignments.push({
-      id: junction.id,
-      separator: junction.separator,
-      centerline: junction.centerline,
-      corridorIds: [],
-      junctionIds: [junction.id],
-    })
   }
 
   return alignments

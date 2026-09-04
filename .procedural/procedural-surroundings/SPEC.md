@@ -1,13 +1,13 @@
 # Procedural Surroundings — Runtime Contract
 
-> Status: refreshed scope and topology approved; E0–E2D are implemented. Explicit frontage selection, camera-relative floorplan orientation, the disposable presentation root, the E2 diagnostic topology, pinned Streetscape-compatible road rendering and same-style degree-two bends are in place. Focused tests, the full Environment suite, both Environment/Editor typechecks and the Next/Turbopack production build are green. Human visual acceptance of the corrected bend remains open before E3. Streetscape remains the canonical procedural/visual road grammar; no package patch or private import is allowed.
+> Status: refreshed scope and topology approved; E0–E2D are implemented and human-accepted. E2E-A replaces road-dependent property rectangles with a deterministic candidate-cell ring containing frontage cells and explicit convex-corner cells around the complete Site, even when no road is selected. The cell substrate is rendered in the camera-relative 2D preview and under the disposable 3D presentation root. Streetscape remains the visual reference for roads, but the plugins are intentionally independent: Environment may carry a pinned local copy of the pure presentation algorithms required for junction parity. No package patch or private runtime import is allowed. Human visual acceptance of the final junction result remains open.
 > Source of planning truth: `docs/mission/SIX-DAY-PLAN.md`, especially “Frontages du Site et contexte de voisinage”.
 
 ## Mission
 
 Build a deterministic, runtime-generated presentation layer beyond the Pascal Site polygon. The first accepted experience provides `Prairie ouverte` and `Lisière boisée`: continuous exterior terrain, deterministic vegetation and a naturally masked horizon while preserving the authoring document, node evaluation, bake and export.
 
-The Site polygon is authoritative. Its segments may also carry optional frontage context—no road, secondary road or primary road—so a Sims-like suburb mode can place a Streetscape-consistent visual corridor between the active property and nearby derived properties. A time-boxed evening demonstrator may bring this forward as a presentation-only blockout with simple house-shell proxies. Environment's rectangular E2 roads are topology diagnostics only. Until Streetscape exposes a stable public presentation seam, the bounded road proof may use one pinned, minimal local snapshot of its pure cross-section and ribbon grammar; Environment may feed it a straight or degree-two-bend centerline, but the snapshot remains disposable integration code rather than a second road product, junction solver or authored road node. Generated houses and PLU remain deferred.
+The Site polygon is authoritative. Its segments may also carry optional frontage context—no road, secondary road or primary road—so a Sims-like suburb mode can place a Streetscape-consistent visual corridor between the active property and nearby derived properties. A time-boxed evening demonstrator may bring this forward as a presentation-only blockout with simple house-shell proxies. Environment's rectangular E2 roads are topology diagnostics only. Because Environment and Streetscape have no runtime interconnection, the bounded road proof may carry a pinned local copy of Streetscape's pure cross-section, transition, junction-boundary and marking algorithms. Environment adapts its disposable frontage axes to that local kernel without creating an authored road node. Generated houses and PLU remain deferred.
 
 The system is not an asset generator and not a second scene graph. It derives disposable presentation from read-only Pascal output.
 
@@ -64,20 +64,18 @@ graph TD
     R --> C
     R --> T[Three.js / R3F / TSL]
     A --> P[Public Pascal interfaces]
-    C --> SS[Pinned local Streetscape cross-section snapshot]
-    SS -. future replacement .-> SI[Streetscape public pure presentation seam]
+    C --> SS[Pinned local Streetscape presentation kernel]
 ```
 
 | Module | May know | Must not know |
 |---|---|---|
-| surroundings core | plain values, arrays, deterministic rules, pinned Streetscape cross-section snapshot values | React, Three.js, Pascal stores, Streetscape private imports |
+| surroundings core | plain values, arrays, deterministic rules, pinned Streetscape-derived presentation algorithms | React, Three.js scene objects, Pascal stores, runtime imports from Streetscape |
 | surroundings rendering | core output, Three.js, R3F, TSL | editor internals, scene mutation, Streetscape author renderer |
 | Environment adapter | core/rendering and public Pascal interfaces | private deep imports from `editor/` or Streetscape |
-| temporary Streetscape snapshot | copied `local-street`/`collector` values, cross-section ordering and pure ribbons from the pinned commit | React, stores, registry, selection, nodes, junction topology/solvers, markings, regional packs or independent evolution |
-| future Streetscape presentation builder | road styles, cross-sections, ribbons, junctions, regional packs and markings | React, editor stores, registry, selection, persisted node mutation |
+| pinned Streetscape presentation kernel | copied `local-street`/`collector` values, cross-sections, transition profiles, junction boundaries, regional rules and markings from the pinned commit | React, stores, registry, selection, authored nodes, history, bake/export hooks, bridges, earthworks or decorations |
 | Pascal host | generic composition through `viewerSceneSlot` | frontage classification, terrain-noise or vegetation-generation rules |
 
-Stop before modifying Pascal when a plugin integration proves one exact missing public capability. The upstream proposal must expose the smallest generic capability rather than move Environment logic into Pascal.
+Do not modify Pascal or Streetscape for this slice. Keep the copied algorithms structurally isolated and record their exact source commit so later parity fixes can be ported intentionally.
 
 ## Operator graph
 
@@ -195,65 +193,38 @@ The woodland preset uses a continuous world-space density field, deterministic c
 
 ### Streetscape frontage corridor
 
-A selected road frontage defines a corridor immediately outside the Site boundary. The segment tangent sets road direction and its outward normal sets the exterior side. Environment owns this conversion from Site frontage to disposable centerline/topology intent; it does not own the retained road cross-section or visual grammar.
+A selected road frontage defines a corridor immediately outside the Site boundary. The segment tangent sets road direction and its outward normal sets the exterior side. Environment owns this conversion from Site frontage to disposable centerline/topology intent and owns the lifetime of the copied runtime implementation.
 
-The host currently pins `@pascal-app/plugin-streetscape` at commit `1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef`. Its public entry point exports `RoadStylePreset`, `roadStyleWidth` and pure road-graph operators, but not the complete presentation builder needed by Environment. Existing private pure modules build road cross-sections, ribbons, junction bands, regional rules and markings, while the complete React renderer also imports editor stores, selection, registry access, live overrides and persisted `RoadNetworkNode` behavior.
+The reference snapshot is `@pascal-app/plugin-streetscape` commit `1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef`. Its pure modules define the cross-sections, transition profiles, automatic degree-three/four junction boundaries, nested side bands, regional rules and markings required for visual parity. Its React renderer and editor integrations remain excluded.
 
-The approved ownership rule is **same grammar, different lifetime**:
+The approved ownership rule is **same source grammar, independent plugin runtime**:
 
-- authored Streetscape roads and generated Environment roads use the same retained visual grammar;
-- Environment roads remain runtime DTOs under `environment-surroundings-root`, never `RoadNetworkNode` objects;
+- authored Streetscape roads and generated Environment roads start from the same pinned algorithms and preset values;
+- Environment roads remain runtime DTOs under `environment-surroundings-root`, never Pascal scene nodes;
 - no generated road receives `pascalId`, registry membership, selection behavior, history, bake or author export;
-- Environment may not patch `node_modules`, deep-import Streetscape private files or mount the editor-aware renderer;
-- for the bounded road tracer only, Environment may carry a minimal snapshot of the required preset values, cross-section ordering, material rhythm and pure ribbon builder from the pinned commit;
-- Environment may provide that builder with a degree-two bend centerline and must merge compatible adjacent roads before triangulation, but the snapshot cannot acquire junction topology, a degree-three-plus solver, transition, marking or regional-pack logic and must be removed when the preferred public seam exists.
+- Environment does not patch `node_modules`, deep-import Streetscape private files at runtime or mount the editor-aware renderer;
+- Environment may copy the pure geometry and presentation dependency closure needed for parity, with provenance and focused parity tests;
+- editor validation, selection, mutation, decorations, bridges, earthworks and roadside openings stay outside the copied kernel.
 
-The preferred upstream addition remains one deep public presentation module rather than a broad export of implementation internals. Its conceptual contract is:
+The local presentation contract is a pure descriptor seam:
 
 ```ts
-type RoadPresentationInput = {
-  graph: RoadNetworkGraph
-  styles: Record<string, RoadStylePreset>
-  regionalPack: 'left-driving' | 'right-driving'
-  quality: 'blockout' | 'full'
+type RuntimeRoadNetwork = {
+  graphNodes: Record<string, RuntimeRoadGraphNode>
+  edges: Record<string, RuntimeRoadGraphEdge>
+  junctions: Record<string, RuntimeRoadJunction>
 }
 
 type RoadPresentationPlan = {
-  surfaces: Array<{
-    id: string
-    positions: number[]
-    indices: number[]
-    color: string
-    roughness: number
-    elevationOffset: number
-  }>
-  markings: Array<{
-    id: string
-    color: string
-    points: readonly [number, number, number][]
-  }>
+  surfaces: RoadPresentationSurface[]
 }
 
-function buildRoadPresentationPlan(
-  input: RoadPresentationInput,
-): RoadPresentationPlan
+function buildRoadPresentationPlan(network: RuntimeRoadNetwork): RoadPresentationPlan
 ```
 
-The exact names remain an upstream API-design decision. The invariant is that this future builder composes Streetscape's existing pure mechanisms without React, stores, scene mutation or registry access.
+The graph tracer is implemented as one in-memory `RoadNetworkNode`: primary frontages continue through the candidate-cell ring, secondary approaches meet primaries at shared degree-three nodes, adjacent primaries form shared degree-four crossings, and compatible three-frontage secondary runs retain one curved alignment. Feeder extension is derived from the actual intersection geometry rather than a fixed distance cap, including acute Site corners.
 
-The first tracer bullet is intentionally narrower than the full contract and uses the temporary snapshot:
-
-1. record the exact Streetscape source commit and copy only the two required presets, cross-section ordering, material rhythm and pure ribbon builder;
-2. map `secondary-road` to `local-street` and evaluate `collector` as the initial `primary-road` candidate;
-3. convert one frontage frame into a two-point centerline;
-4. connect two adjacent same-style frontages with one tangent degree-two bend and merge both straight segments with that bend before triangulation;
-5. render carriageway, gutter, curb, verge and sidewalk descriptors under `PresentationRoot`;
-6. test the observed `10.4 m` / `15.7 m` widths and compare component order, dimensions and material rhythm against an authored Streetscape road using the same style;
-7. prove that scene nodes, registry, history and export input remain unchanged.
-
-Implementation status: E2B–E2D now satisfy the automated portion of this tracer bullet. The pinned compatibility module produces ordered road surfaces along straight or multi-point alignments, the 2D and 3D projections use the complete cross-section widths, neighboring cells start beyond those widths, and transient road resources are non-raycastable and released through R3F's deferred object lifecycle. For adjacent same-style frontages, Environment builds one 11-point tangent bend and merges straight → bend → straight into one render alignment so ribbon normals and indices remain continuous at both seams. The diagnostic miter/bevel polygon remains a 2D topology representation, not the retained 3D road. Human comparison and visual acceptance remain open; `collector` is still only a provisional primary-road mapping.
-
-Adjacent frontage roads must not grow a second full Environment junction system. The implemented degree-two bend is only an Environment-owned centerline consumed by the pinned Streetscape cross-section grammar. Degree-three-plus junction boundaries, exact mixed-style transitions and markings wait for Streetscape's public presentation solution.
+The seven copied Streetscape algorithm files remain byte-identical to commit `1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef`. One deliberate host-specific deviation lives in Environment's presentation adapter after visual rejection of the first junction render: approach carriageways are generated from their clipped transition-profile samples and stop at the approach cuts, so the collector-colored junction footprint is the sole carriageway owner inside the intersection. Streetscape's current untrimmed carriageway underlap produced overlapping triangles, visible depth conflict and black fan artifacts in Pascal's WebGPU host. Indexed mesh normals are therefore also derived from actual triangle winding rather than hard-coded to `+Y`. Closed all-secondary rings additionally reuse one canonical endpoint and cyclic seam tangent for the first/last ribbon samples; treating the loop as an open ribbon produced a diagonal side-band wedge across the road. Mixed primary/secondary junction bands are class-aware in the local adapter: each side-path component matches the source road's width at one approach, interpolates around the curb return, and matches the destination road at the other approach. Components absent from an approach taper to zero there, so the collector's green bike lane still meets collector cuts but does not wrap at full width around the secondary mouth. The copied band definitions still provide component order, material and elevation values; the seven source files remain unchanged. Automated contracts cover T junctions, four-way crossings, markings, finite geometry, acute corners, closed-loop continuity, class-aware mixed bands and the trimmed ownership rule; human visual acceptance of the corrected presentation remains the completion gate.
 
 If the Site boundary coincides with the near outer edge of a road corridor:
 
@@ -268,14 +239,18 @@ The formula is recorded for the optional suburb extension. It does not authorize
 
 The evening demonstrator may generate a deliberately coarse, disposable neighborhood before the natural presets are visually complete. Its purpose is to validate frontage composition and the feeling of a world beyond the parcel, not architectural detail.
 
-- The original E2 diagnostic road strip is retained only as pure topology evidence. The successful E2B–E2D tracer replaces it in retained presentation with pinned Streetscape-compatible surfaces along straight and degree-two-bend centerlines; the diagnostic strip is not a production fallback and must not evolve its own profiles, materials, full junction solver or markings.
-- A small derived neighbor band supplies property descriptors without creating Pascal nodes.
+- The original E2 diagnostic road strip is retained only as pure topology evidence. Retained presentation uses the pinned Streetscape-derived kernel for straight roads, degree-two bends, profiles, junction surfaces, side bands and markings; the old independent-ribbon renderer is not a production fallback.
+- A deterministic candidate-cell ring exists independently of road selection: each Site frontage contributes one row of cells and each convex corner contributes one explicit corner cell.
+- The ring depth is derived from the widest supported road plus the neighbor depth, leaving enough spatial substrate for roads to traverse cells and for usable residuals to remain beyond them.
+- Road selection never moves candidate-cell IDs or polygons. Later topology classifies road occupation, residual buildability and road-relative access before any shell is eligible.
 - A few seeded shells use only footprint, height, roof direction and restrained palette variation.
 - Doors, windows, interiors, PLU, driveways, collision and semantic selection are excluded.
 - The entire blockout remains under `environment-surroundings-root`, runtime-only and absent from bake/export.
 - Flat neighbor elevations are acceptable for this proof; the layered elevation stack is the next refinement.
 
-The original E2 calibration remains deliberately provisional and diagnostic: secondary roads are `6 m` wide, primary roads `9 m`, the neighboring band is `22 m` deep and its target frontage is approximately `8 m`. `src/surroundings/corridor.ts` derives oriented corridor rectangles, property cells and convex-corner junction patches with a bounded miter/bevel rule from `Site.polygon`; those values and patches now remain pure topology evidence only. The selector exposes one explicit native road-type selector per edge and orients its complete SVG scene from Pascal’s public camera azimuth using the same `-Z`-up floorplan convention. Retained E2B–E2D presentation uses the pinned Streetscape-compatible `10.4 m / 15.7 m` cross-sections in both the preview extent and 3D road surfaces, offsets properties by the complete selected width, and uses one merged multi-point alignment for compatible adjacent roads rather than promoting the custom junction patch as 3D geometry.
+The original E2 calibration remains deliberately provisional and diagnostic: secondary roads are `6 m` wide, primary roads `9 m`, the neighboring depth is `22 m` and the target cell frontage is approximately `8 m`. `src/surroundings/corridor.ts` derives oriented road rectangles and convex-corner junction patches with a bounded miter/bevel rule from `Site.polygon`; those values and patches remain 2D topology evidence only. The selector exposes one explicit native road-type selector per edge and orients its complete SVG scene from Pascal’s public camera azimuth using the same `-Z`-up floorplan convention. Retained presentation uses the copied Streetscape-compatible `10.4 m / 15.7 m` styles and graph-based junction geometry rather than promoting the custom preview patch as 3D geometry.
+
+E2E-A introduces the road-independent spatial substrate required by the approved road-first model. `deriveNeighborCells` emits stable quadrilateral frontage cells across every Site segment and one bounded convex-corner cell between adjacent segments. For the Streetscape-compatible dimensions, the ring depth is `max(10.4 m, 15.7 m) + 22 m = 37.7 m`. The same polygons feed the SVG preview and flat, non-raycastable R3F meshes under `environment-neighbor-cells`. Selecting or changing a road leaves this substrate unchanged. Road graph and presentation failures must not remove valid candidate cells.
 
 ### Optical concealment probe
 
@@ -402,13 +377,18 @@ Measurements distinguish boundary/distance queries, terrain generation, meadow/w
 4. For the pinned `local-street` and `collector` snapshots, the derived neighbor build line uses the complete `10.4 m` and `15.7 m` road width plus its setback.
 5. The pinned snapshot matches the inspected Streetscape total width, cross-section component order and presentation descriptors for one road.
 6. Two adjacent same-style frontage roads produce one render alignment containing straight → tangent bend → straight, with each seam represented once and no retained diagnostic patch.
-7. Same snapshots, preset, quality and seeds produce identical ordered output and checksums.
-8. Adjacent terrain chunks share bit-identical border heights.
-9. Distance zero at the Site contour reproduces the Pascal Terrain edge sample.
-10. Surroundings activation and regeneration do not change node count, author serialization or prepared bake/export output.
-11. No surroundings or frontage-road object enters `sceneRegistry` or carries `pascalId`.
-12. Environment imports no private Streetscape path, does not modify `node_modules`, and the local snapshot imports no editor store, registry or selection mechanism.
-13. Repeated regeneration and unmount release all unowned resources.
+7. The candidate-cell ring exists around every Site frontage without requiring a selected road, includes explicit bounded cells at convex corners, and keeps identical IDs and polygons when frontage road classifications change.
+8. Same snapshots, preset, quality and seeds produce identical ordered output and checksums.
+9. Adjacent terrain chunks share bit-identical border heights.
+10. Distance zero at the Site contour reproduces the Pascal Terrain edge sample.
+11. Surroundings activation and regeneration do not change node count, author serialization or prepared bake/export output.
+12. No surroundings or frontage-road object enters `sceneRegistry` or carries `pascalId`.
+13. Environment imports no private Streetscape path at runtime, does not modify `node_modules`, and the pinned local kernel imports no editor store, registry, selection, history or export mechanism.
+14. A primary/secondary T and adjacent-primary crossing produce shared graph nodes, finite approach cuts, a junction carriageway footprint, continuous side bands and Streetscape-equivalent markings.
+15. Every approach carriageway stops at its approach cut, the junction footprint solely owns intersection carriageway coverage, and indexed normals agree with actual triangle winding.
+16. An all-secondary closed frontage ring emits one self-loop whose first and last carriageway/side-band boundary vertices are identical, with no diagonal closure wedge.
+17. At a primary/secondary T, the collector bike lane reaches each collector cut at its authored offset but tapers to zero at the secondary carriageway edge instead of wrapping around the secondary mouth.
+18. Repeated regeneration and unmount release all unowned resources.
 
 ## Visual acceptance
 
@@ -423,6 +403,10 @@ Human-only acceptance criteria:
 - outer limits are masked naturally rather than forming a square, circle or uniform wall;
 - LOD reduction is progressive rather than a visible band switch;
 - when the frontage probe is active, its road remains outside the Site and matches the width, band hierarchy, material rhythm and junction language of the equivalent authored Streetscape road;
+- primary/secondary T junctions have no black triangle fans or depth flicker, the junction carriageway matches the primary road, feeders stop cleanly at the approach cut, and curb returns/crosswalks remain intact;
+- the collector bike lane tapers through mixed curb returns and does not form a continuous green band around the secondary mouth or a large diagonal side-band seam;
+- an all-secondary frontage loop closes every carriageway and side band without a diagonal wedge or escaping strip at its final seam;
+- the candidate cells form one legible first ring around the complete Site, including corner cells, without reading as overlapping road-dependent strips;
 - blocky suburb shells read as an intentional neighborhood mass rather than detailed architecture;
 - optical concealment never softens the active Site, author geometry, gizmos or overlays;
 - the active parcel remains legible and editable despite the immersion.
@@ -437,7 +421,7 @@ Human-only acceptance criteria:
 - physics, traffic or agent simulation;
 - project-scoped persistence before stable frontage identity and a generic presentation sidecar exist;
 - deep imports or `node_modules` patches for Streetscape or Nature;
-- an independently evolving second road grammar, Environment-owned degree-three-plus junction solver, transitions, markings or preservation of the E2 diagnostic rectangles as a production fallback; the pinned cross-section/ribbon snapshot and Environment-owned degree-two centerline are temporary compatibility exceptions with an explicit deletion condition;
+- an independently invented road grammar or preservation of the E2 diagnostic rectangles as a production fallback; the pinned junction/profile/marking implementation must remain traceable to the recorded Streetscape source commit and change only through intentional parity ports;
 - semantic DOF/postprocessing state or direct pipeline mutation in Environment; a viewer-owned selective-blur experiment may consume only an explicit capability;
 - cinematic material completeness before the CPU contracts are green.
 
@@ -451,7 +435,7 @@ These remain explicit gates rather than hidden agent choices:
 4. horizon masking composition;
 5. visual LOD transition style;
 6. target platform and viewport for final budgets;
-7. whether the provisional `primary-road` → `collector` mapping has the right visual width and mood; `secondary-road` → `local-street` is the retained straight-road mapping;
+7. whether the provisional `primary-road` → `collector` mapping and corrected clipped, class-aware T/crossing presentation have the right visual width, color and transition; `secondary-road` → `local-street` is the retained straight-road mapping;
 8. whether frontage persistence requires stable Site edge IDs or a generic project sidecar;
 9. driveway/path access semantics and UI after the separator selector is understood.
 

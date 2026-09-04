@@ -454,7 +454,9 @@ function SurroundingsControls() {
 		(state) => state.navigationSyncPose?.azimuth ?? 0,
 	);
 	const contexts = useEnvironmentStore((state) => state.frontageContexts);
+	const enabled = useEnvironmentStore((state) => state.surroundingsEnabled);
 	const setFrontageSeparator = useEnvironmentStore((state) => state.setFrontageSeparator);
+	const setEnabled = useEnvironmentStore((state) => state.setSurroundingsEnabled);
 
 	if (!site) {
 		return <p className="text-destructive text-xs" role="alert">A root Site is required to configure surroundings.</p>;
@@ -462,13 +464,22 @@ function SurroundingsControls() {
 
 	return (
 		<div className="flex flex-col gap-3">
+			<label className="flex items-center justify-between gap-3 rounded-md border border-sidebar-border px-3 py-2 text-xs">
+				<span>Show neighborhood</span>
+				<input
+					aria-label="Show neighborhood"
+					checked={enabled}
+					onChange={(event) => setEnabled(event.target.checked)}
+					type="checkbox"
+				/>
+			</label>
 			<FrontageSelector
 				cameraAzimuth={cameraAzimuth}
 				contexts={contexts}
 				onSeparatorChange={setFrontageSeparator}
 				points={site.polygon.points}
 			/>
-			<p className="text-sidebar-foreground/50 text-xs">Preview only — frontage settings remain in memory and are not saved yet.</p>
+			<p className="text-sidebar-foreground/50 text-xs">Runtime only — visibility and frontage settings remain in memory and are not saved yet.</p>
 		</div>
 	);
 }

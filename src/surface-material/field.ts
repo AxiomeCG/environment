@@ -5,6 +5,7 @@ import {
   encodeGrassPaintField,
   paintAt,
   type GrassPaintField,
+  type GrassPaintSample,
   type SiteBounds,
 } from '../ground-cover/paint-field'
 import type { SurfaceMaterialId } from './material-types'
@@ -87,27 +88,49 @@ export function resolveSurfaceMaterialField(
 }
 
 
-export function surfaceMaterialWeightsAt(
-  field: SurfaceMaterialField,
-  x: number,
-  z: number,
-): SurfaceMaterialWeights {
-  const sample = paintAt(field, x, z)
-  if (sample.a <= Number.EPSILON) return [1, 0, 0, 0]
+export function writeSurfaceMaterialWeights(
+  sample: GrassPaintSample,
+  output: [number, number, number, number],
+): void {
+  if (sample.a <= Number.EPSILON) {
+    output[0] = 1
+    output[1] = 0
+    output[2] = 0
+    output[3] = 0
+    return
+  }
 
   const red = sample.r / sample.a
   const green = sample.g / sample.a
   const blue = sample.b / sample.a
   const paved = (red + green + blue - 1) / 2
-  const weights = [
-    Math.max(0, red - paved),
-    Math.max(0, green - paved),
-    Math.max(0, blue - paved),
-    Math.max(0, paved),
-  ] as const
-  const sum = weights[0] + weights[1] + weights[2] + weights[3]
-  if (sum <= Number.EPSILON) return [1, 0, 0, 0]
-  return [weights[0] / sum, weights[1] / sum, weights[2] / sum, weights[3] / sum]
+  const grass = Math.max(0, red - paved)
+  const road = Math.max(0, green - paved)
+  const desert = Math.max(0, blue - paved)
+  const pavedRoad = Math.max(0, paved)
+  const sum = grass + road + desert + pavedRoad
+  if (sum <= Number.EPSILON) {
+    output[0] = 1
+    output[1] = 0
+    output[2] = 0
+    output[3] = 0
+    return
+  }
+
+  output[0] = grass / sum
+  output[1] = road / sum
+  output[2] = desert / sum
+  output[3] = pavedRoad / sum
+}
+
+export function surfaceMaterialWeightsAt(
+  field: SurfaceMaterialField,
+  x: number,
+  z: number,
+): SurfaceMaterialWeights {
+  const weights: [number, number, number, number] = [0, 0, 0, 0]
+  writeSurfaceMaterialWeights(paintAt(field, x, z), weights)
+  return weights
 }
 
 export function surfaceMaterialTarget(

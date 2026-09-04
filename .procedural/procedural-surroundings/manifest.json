@@ -25,7 +25,9 @@
     "fast-track-e2-diagnostic-topology",
     "fast-track-e2b-pinned-road-presentation-snapshot",
     "fast-track-e2c-straight-road-integration",
-    "fast-track-e2d-adjacent-degree-two-bend"
+    "fast-track-e2d-adjacent-degree-two-bend",
+    "fast-track-e2d-human-visual-validation",
+    "fast-track-e2e-a-visible-candidate-cell-ring"
   ],
   "humanApprovals": [
     {
@@ -87,27 +89,47 @@
       "scope": "adjacent-frontage-degree-two-bend",
       "status": "approved",
       "decision": "Do not suppress the connection between adjacent selected road frontages. Match Streetscape's degree-two bend language by deriving a tangent bend centerline in Environment and feeding one merged straight-to-bend-to-straight alignment into the pinned cross-section/ribbon snapshot for compatible styles. Keep the old miter/bevel patch as 2D topology only; do not copy the degree-three-plus junction solver, exact mixed-style transitions, markings or regional packs."
+    },
+    {
+      "date": "2026-09-03",
+      "scope": "e2d-visual-acceptance",
+      "status": "approved",
+      "decision": "The corrected same-style straight-to-bend-to-straight presentation is visually acceptable as the completed E2D tracer, including the R3F-owned resource lifecycle correction. Preserve the bend mechanism for topology that explicitly represents a turn, but do not treat every pair of adjacent frontage roads as one turning road."
+    },
+    {
+      "date": "2026-09-03",
+      "scope": "road-first-neighbor-topology",
+      "status": "approved",
+      "decision": "Derive roads before neighboring properties. A primary-road frontage creates a stable through-axis that continues in both tangent directions to the bounded surroundings extent. The extended corridor traverses the first neighbor ring: cells substantially occupied by it are transport space or low-probability residual lots, while buildable cells touching either signed side acquire frontage and access relationships to the primary road. Adjacent primary and secondary road axes form a real smooth junction or crossing rather than a default turn. Environment owns road axes, graph topology, cell clipping/classification and disposable lifetime; Streetscape defines the reference junction appearance."
+    },
+    {
+      "date": "2026-09-03",
+      "scope": "independent-plugin-road-presentation",
+      "status": "approved",
+      "decision": "Do not design or require an inter-plugin presentation seam. Environment and Streetscape are independent plugins for now. Environment may duplicate the pinned pure Streetscape cross-section, transition, junction-boundary, regional-pack and marking algorithms needed for visual parity, while excluding all editor/store/selection/registry/history/export behavior and keeping every generated road runtime-only."
     }
   ],
   "warnings": [
-    "Fast-track E0-E2D implementation is automated-green: 13/13 focused road tests and 116/116 Environment tests pass, Environment and Editor host typechecks pass, and the exact Next/Turbopack production build compiles with only the known MCP dynamic-filesystem tracing warning. Human visual acceptance of the corrected bend, presentation-root isolation and WebGPU lifecycle fix remains open before E3.",
+    "Fast-track E0-E2D implementation is automated-green: 13/13 focused road tests and 116/116 Environment tests pass, Environment and Editor host typechecks pass, and the exact Next/Turbopack production build compiles with only the known MCP dynamic-filesystem tracing warning. The corrected bend and R3F-owned WebGPU resource lifecycle are human-accepted for the E2D tracer; the newly approved road-first E2E topology now precedes E3 shells.",
+    "Agent-authored E2E-A is automated-green: 15/15 focused Surroundings tests and 119/119 Environment tests pass, Environment typecheck passes, and touched-file diagnostics report no errors or warnings. The old road-dependent property rectangles are replaced by a road-independent candidate ring with frontage and convex-corner cells rendered in 2D and 3D. Human visual acceptance remains open before E2E-B classifies through-road occupation, residual buildability and signed-side access.",
     "Project-scoped persistence for presentation-only presets, seeds and frontages has no public host sidecar; Site polygon segments also have no stable IDs, so frontage selection must remain runtime-only in the first slice.",
     "The existing viewerSceneSlot is currently omitted from Preview, Studio, capture and first-person paths.",
-    "The local road-presentation compatibility snapshot is pinned to Streetscape commit 1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef and can drift when Streetscape changes. Do not extend it beyond the copied presets, cross-section bands, material rhythm and pure ribbons; delete it when a public pure presentation seam exists.",
+    "The local road-presentation compatibility implementation is pinned to Streetscape commit 1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef and can drift when Streetscape changes. Pure junction/profile/marking changes must remain traceable to that source snapshot; editor/store/selection/registry/history/export behavior remains excluded.",
     "Secondary road maps to local-street. Collector is only a provisional primary-road candidate and still requires human visual acceptance.",
-    "Adjacent same-style frontages now merge into one degree-two bend alignment before ribbon generation. Mixed primary/secondary corners still use a separate provisional primary connector; exact transitions, degree-three-plus junctions and markings remain deferred to a public Streetscape presentation seam.",
-    "Transient road geometry and materials now use R3F's deferred disposal lifecycle after an immediate manual cleanup produced an uncaptured WebGPU missing-vertex-buffer error during remount. Confirm visually after a full refresh that the error no longer recurs.",
+    "The E2D degree-two bend remains valid for an explicit turn, but adjacent frontage roads are no longer assumed to be one turning alignment. The approved E2E model derives independent through-axes, extends primary roads to the bounded surroundings extent, classifies road-traversed neighbor cells as transport or residual space, and gives cells on both signed sides frontage/access relationships to the road.",
+    "The graph-based Streetscape-parity expansion is agent-authored and not yet human-accepted. Shared degree-three/four nodes, geometry-derived approach cuts, junction carriageway, side bands, markings, acute-corner feeders and preserved three-frontage secondary curves are automated-green without affecting candidate cells or author state. After the first visual pass exposed black fans and WebGPU depth conflict, Environment intentionally trims every approach carriageway at its approach cut so the junction footprint solely owns intersection carriageway coverage; indexed normals follow triangle winding. An all-secondary visual pass then exposed a diagonal closure wedge from different one-sided tangents at the duplicate loop endpoint; closed ribbons now reuse one canonical endpoint and cyclic seam tangent. A close mixed-T pass confirmed the maximum-width junction annulus carried the collector bike lane to the secondary cut at 5.35 m instead of the local carriageway edge at 3.75 m; local class-aware side paths now match each incident road at its cut and taper absent components to zero around the curb return while preserving the collector bike lane's 6.10 m outer offset. These host-specific adapter deviations do not modify the seven byte-identical files copied from Streetscape commit 1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef. Recheck the corrected two-T and all-secondary views before acceptance.",
+    "Transient road geometry and materials use R3F's deferred disposal lifecycle after an immediate manual cleanup produced an uncaptured WebGPU missing-vertex-buffer error during remount. The corrected lifecycle is human-accepted for E2D and must remain R3F-owned.",
     "Pascal's viewer owns a custom WebGPU/TSL RenderPipeline but exposes no generic DOF or Site-protection mask. Standard depth DOF cannot guarantee sharpness across the full active Site; use a viewer-owned selective seam or retain distance haze as the evening fallback."
   ],
   "artifacts": {
     "planningDocument": "docs/mission/SIX-DAY-PLAN.md",
     "spec": {
       "path": ".procedural/procedural-surroundings/SPEC.md",
-      "sha256": "bcbc3f8e475300ba3cc57ebd2f2f8705efa68cd079b3b7acd9dc27aef840ffc3"
+      "sha256": "12a3923a8cf37a24975577c5cf9b2af714d18c61bac50f5e5530c5f725623fc0"
     },
     "learningPath": {
       "path": ".procedural/procedural-surroundings/LEARNING-PATH.md",
-      "sha256": "10a338b38c27c7e2515efbd6104d54d137c5e093c745d54538f9cbe97443f948"
+      "sha256": "52dc288f21c50b47d17abf0c8a7dcb181d52f18482788e37f4e0da78be20f665"
     },
     "lesson01": {
       "path": ".procedural/procedural-surroundings/LESSON-01-FRONTAGES.md",
@@ -117,8 +139,11 @@
       "path": "src/surroundings/streetscape-road-presentation.ts",
       "sourceCommit": "1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef"
     },
+    "neighborCellTests": "src/surroundings/corridor.test.ts",
     "roadPresentationTests": "src/surroundings/streetscape-road-presentation.test.ts",
+    "runtimeRoadGraphTests": "src/surroundings/runtime-road-graph.test.ts",
+    "meshGeometryTests": "src/surroundings/mesh-geometry.test.ts",
     "vaultySubject": "Vaulty/subjects/procedural-surroundings/_index.md"
   },
-  "recommendedNextSkill": "procedural-validate"
+  "recommendedNextSkill": "procedural-vfx"
 }
