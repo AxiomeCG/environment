@@ -167,26 +167,42 @@ Acceptance checks:
 
 | Field | Value |
 |---|---|
-| Status | **Host change required — local direct mount only; release blocker for Surroundings** |
+| Status | **Host change required — local direct mounts only; release blocker for Surroundings and Atmosphere** |
 | Observed | 2026-09-02 |
 | Host repository | `pascalorg/editor` |
 | Local implementation | Not implemented; the direct app mount is an uncommitted validation harness |
 | Host issue / PR | TBD |
 | Required Pascal version | TBD after release |
-| Plugin evidence | `src/surroundings/layer.tsx`, `src/index.ts` |
+| Plugin evidence | `src/surroundings/layer.tsx`, `src/atmosphere/layer.tsx`, `src/index.ts` |
 | Host evidence | `packages/editor/src/components/editor/index.tsx` (`viewerSceneSlot`), `apps/editor/app/page.tsx`, `apps/editor/components/scene-loader.tsx` |
 
 `Editor` already accepts a host-owned `viewerSceneSlot`, which proves that a presentation subtree can be mounted inside the React Three Fiber scene but outside the semantic `scene-renderer`. The plugin discovery contract cannot contribute to that slot. The local tracer bullet therefore imports `SurroundingsLayer` directly from Environment in both Editor application entry points. That validates isolation, but it is not a publishable plugin integration: the host application now knows one plugin package and must remember every route that mounts an Editor.
 
+The local Sky tool follows the same boundary: both application routes mount
+`AtmosphereLayer` and pass the viewer's `SceneAtmosphere` adapter. The viewer owns
+environment/fog installation, lighting, exposure, and restoration; Environment owns
+the radiance provider and controls. Sky creates no semantic node and its settings
+remain runtime-only. This adapter does not add registry-driven plugin presentation
+or project-scoped persistence.
+
+Surroundings also receives the viewer's scene-scoped `SceneGroundReplacement`
+adapter from both application routes. It suppresses the Site's fallback horizon
+disc while exterior ground is present and extends only the perspective camera's
+far plane for coastal water. Multiple owners are reference-counted per scene;
+removing the last one restores the fallback and normal camera range. This local
+viewer/Nodes cooperation is necessary because the higher fallback disc otherwise
+occludes water. It remains part of this unreleased presentation boundary.
+
 The minimum host evolution is a registry-driven presentation contribution mounted once by every Editor entry point after plugin discovery. Its lifecycle must follow plugin load/unload, and it must remain outside the semantic node registry, authoring root, selection, queries and geometry export. A later persisted Environment preset also needs an explicit project-scoped presentation-state contract; until that contract is designed, the tracer bullet remains runtime-only and must not hide state in node metadata.
 
-Until resolved, Surroundings stays disabled in shipped plugin selectors. Direct application imports are permitted only in the local validation harness and must not be presented as the production integration.
+Until resolved, Surroundings and Atmosphere must not be offered by a shipped plugin without a supported presentation contribution. The enabled local selectors and direct application imports are validation harnesses, not production integration or evidence that this release blocker is resolved.
 
 Acceptance checks:
 
 - Loading Environment registers its presentation contribution without importing the plugin from an Editor application route.
 - Blank-scene and saved-scene Editor entry points mount the contribution exactly once.
 - Unloading or omitting the plugin removes the layer and releases its Three.js resources.
+- Scene-scoped ground replacements suppress the fallback only while owned, restore it after the final unmount, and do not affect other viewers or orthographic depth precision.
 - The contribution creates no semantic node, `pascalId`, selection target, query result, history entry or serialized scene data.
 - Geometry/GLB export is byte-for-byte unchanged with the presentation layer enabled or disabled.
 - Viewer snapshots may include the layer only through an explicit presentation policy.

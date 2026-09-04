@@ -36,3 +36,10 @@ export { grassFieldDefinition } from './ground-cover/definition'
 export { GrassFieldNode, GrassFieldNode as GroundCoverNode } from './ground-cover/schema'
 export { SurfaceMaterialNode } from './surface-material/schema'
 export { default as SurroundingsLayer } from './surroundings/layer'
+export { default as AtmosphereLayer } from './atmosphere/layer'
+export {
+  createSkyProvider,
+  createCubemapSkyProvider,
+  type SkyProvider,
+} from './atmosphere/sky-provider'
+export { DEFAULT_SKY_SETTINGS, SKY_PRESETS, type SkySettings } from './atmosphere/settings'

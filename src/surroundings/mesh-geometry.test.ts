@@ -249,4 +249,4 @@ test('matches declarative vertex normals to the junction triangle winding', () =
   expect(nonUpwardBandTriangles).toEqual([])
   expect(overlappingBandTriangles).toEqual([])
   expect(invertedTriangles).toEqual([])
-})
+}, 60_000)

@@ -183,8 +183,8 @@ function extendSecondaryToPrimary(secondary: LogicalRoad, primary: LogicalRoad):
   else secondary.points.push(nearest.point)
 }
 
-function logicalRoadsFromLayout(layout: SurroundingsLayoutDescriptor): LogicalRoad[] {
-  const roads = deriveRoadPresentationAlignments(layout).map((alignment): LogicalRoad => ({
+function logicalRoadsFromLayout(layout: SurroundingsLayoutDescriptor, additional: readonly RoadPresentationAlignmentDescriptor[]): LogicalRoad[] {
+  const roads = [...deriveRoadPresentationAlignments(layout), ...additional].map((alignment): LogicalRoad => ({
     id: alignment.id,
     separator: alignment.separator,
     corridorIds: alignment.corridorIds,
@@ -290,10 +290,38 @@ function primaryEdges(incident: readonly RoadGraphEdge[]): string[] {
   return selected.slice(0, 2).map(({ id }) => id)
 }
 
+function edgeDirectionFromNode(
+  edge: RoadGraphEdge,
+  nodeId: string,
+  graphNodes: RoadNetworkNode['graphNodes'],
+): Point2 | undefined {
+  const origin = graphNodes[nodeId]?.position
+  const target = edge.startNodeId === nodeId
+    ? edge.alignment[0] ?? graphNodes[edge.endNodeId]?.position
+    : edge.alignment.at(-1) ?? graphNodes[edge.startNodeId]?.position
+  if (!origin || !target) return undefined
+  const delta: Point2 = [target[0] - origin[0], target[2] - origin[2]]
+  const length = Math.hypot(delta[0], delta[1])
+  return length > EPSILON ? [delta[0] / length, delta[1] / length] : undefined
+}
+
+function needsDegreeTwoJunction(
+  incident: readonly RoadGraphEdge[],
+  nodeId: string,
+  graphNodes: RoadNetworkNode['graphNodes'],
+): boolean {
+  if (incident.length !== 2 || incident[0]!.styleId === incident[1]!.styleId) return false
+  const first = edgeDirectionFromNode(incident[0]!, nodeId, graphNodes)
+  const second = edgeDirectionFromNode(incident[1]!, nodeId, graphNodes)
+  return Boolean(first && second && Math.abs(cross(first, second)) > EPSILON)
+}
+
+
 export function deriveRuntimeRoadNetwork(
   layout: SurroundingsLayoutDescriptor,
+  additional: readonly RoadPresentationAlignmentDescriptor[] = [],
 ): RoadNetworkNode {
-  const roads = logicalRoadsFromLayout(layout)
+  const roads = logicalRoadsFromLayout(layout, additional)
   const intersections = collectIntersections(roads)
   const graphNodes: RoadNetworkNode['graphNodes'] = {}
   const edges: RoadNetworkNode['edges'] = {}
@@ -324,7 +352,16 @@ export function deriveRuntimeRoadNetwork(
       })
     })
 
-    const mergedMarkers = mergeMarkers(markers)
+    let mergedMarkers = mergeMarkers(markers)
+    if (layout.outerRoad && road.corridorIds.length > 0) {
+      // Keep the active frontage, but remove presentation-only tails beyond its
+      // first/last junction. Residential streets end in the connected network,
+      // not in a cut-off ribbon beyond the last property.
+      const first = mergedMarkers.findIndex(({ nodeId }) => nodeId.startsWith('surroundings-road-junction-'))
+      let last = mergedMarkers.length - 1
+      while (last > first && !mergedMarkers[last]!.nodeId.startsWith('surroundings-road-junction-')) last -= 1
+      if (first >= 0 && last > first) mergedMarkers = mergedMarkers.slice(first, last + 1)
+    }
     for (const marker of mergedMarkers) {
       graphNodes[marker.nodeId] ??= {
         id: marker.nodeId,
@@ -361,7 +398,7 @@ export function deriveRuntimeRoadNetwork(
     const incident = Object.values(edges).filter(
       (edge) => edge.startNodeId === graphNode.id || edge.endNodeId === graphNode.id,
     )
-    if (incident.length < 3) continue
+    if (incident.length < 3 && !needsDegreeTwoJunction(incident, graphNode.id, graphNodes)) continue
     junctions[graphNode.id] = {
       nodeId: graphNode.id,
       kind: junctionKind(incident.length),

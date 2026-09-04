@@ -1,5 +1,5 @@
 import type { NeighborCellDescriptor, SurroundingsLayoutDescriptor } from './corridor'
-import type { BoundarySegment, Point2 } from './frontages'
+import type { Point2 } from './frontages'
 import { buildRoadCrossSection } from './streetscape/road-cross-section'
 import type { RoadNetworkNode } from './streetscape/schema'
 import { hashString, seededRange, seededUnit } from './seeded-random'
@@ -9,7 +9,7 @@ const ROAD_ACCESS_REACH = 18
 // Suburban front yards: room for a driveway, a car, and a lawn strip between
 // the sidewalk and the porch.
 const ROAD_FRONT_SETBACK = 5.5
-const IMPLIED_FRONT_SETBACK = 4.5
+
 const ROAD_CLEARANCE = 1.2
 const CELL_MARGIN = 0.45
 const TRANSPORT_COVERAGE = 0.35
@@ -126,9 +126,9 @@ export type RoadReservation = Readonly<{
 }>
 
 export type NeighborAccess = Readonly<{
-  kind: 'road' | 'implied-outer-road'
+  kind: 'road'
   point: Point2
-  roadId?: string
+  roadId: string
 }>
 
 export type HouseBuildArea = Readonly<{
@@ -378,7 +378,7 @@ function clipLineIntersection(
   return add(start, scale(direction, mix))
 }
 
-function clipConvexPolygon(
+export function clipConvexPolygon(
   subject: readonly Point2[],
   clip: readonly Point2[],
 ): Point2[] {
@@ -670,54 +670,6 @@ function roadBuildArea(
   return null
 }
 
-function impliedBuildArea(
-  cell: NeighborCellDescriptor,
-  segments: ReadonlyMap<number, BoundarySegment>,
-  reservations: readonly RoadReservation[],
-  seed: string,
-): HouseBuildArea | null {
-  const variation = placementVariation(cell, seed)
-  for (const frontageIndex of cell.frontageIndices) {
-    const segment = segments.get(frontageIndex)
-    if (!segment || segment.context.separator !== 'none') continue
-    const nominalFront = segment.outwardNormal
-    const right = rightOf(nominalFront)
-    const [, outer] = projectPolygon(cell.polygon, nominalFront)
-    const [alongMinimum, alongMaximum] = projectPolygon(cell.polygon, right)
-    const alongCenter = (alongMinimum + alongMaximum) / 2
-
-    for (const size of orderedHouseVariants(cell, seed)) {
-      for (const fallbackAlong of [0, -1.2, 1.2, -2.4, 2.4]) {
-        for (const variationScale of [1, 0.5, 0]) {
-          const along = alongCenter + fallbackAlong + variation.along * variationScale
-          const setback = IMPLIED_FRONT_SETBACK + variation.setback * variationScale
-          const front = rotate(nominalFront, variation.angle * variationScale)
-          const accessPoint = add(scale(right, along), scale(nominalFront, outer))
-          const candidateCenter = add(accessPoint, scale(nominalFront, -setback - size.depth / 2))
-          const fit = fitsCell(
-            cell,
-            candidateCenter,
-            front,
-            envelopeWidth(size),
-            size.depth,
-            reservations,
-          )
-          if (!fit) continue
-          return {
-            variant: size.variant,
-            ...fit,
-            access: {
-              kind: 'implied-outer-road',
-              point: accessPoint,
-            },
-          }
-        }
-      }
-    }
-  }
-
-  return null
-}
 
 function assignLotOccupancies(
   cells: readonly ClassifiedNeighborCell[],
@@ -754,17 +706,14 @@ function assignLotOccupancies(
 }
 
 export function deriveNeighborCellClassifications(
-  segments: readonly BoundarySegment[],
   layout: SurroundingsLayoutDescriptor,
   network: RoadNetworkNode,
   seed = 'pascal-neighborhood-v1',
 ): ClassifiedNeighborCell[] {
   const reservations = deriveRoadReservations(network)
-  const segmentByIndex = new Map(segments.map((segment) => [segment.index, segment]))
   const cells = subdivideNeighborCells(layout.neighborCells).map((cell): ClassifiedNeighborCell => {
     const coverage = roadCoverage(cell, reservations)
     const buildArea = roadBuildArea(cell, reservations, seed)
-      ?? impliedBuildArea(cell, segmentByIndex, reservations, seed)
     return {
       ...cell,
       use: buildArea
@@ -882,7 +831,7 @@ export function deriveHousePlans(
     const storeys: 1 | 2 = style === 'farmhouse' ? 2 : 1
     const prototypeSeed = `${seed}:${style}:v${area.variant}`
     const palette = HOUSE_PALETTES[
-      hashString(`${prototypeSeed}:palette`) % HOUSE_PALETTES.length
+      hashString(`${seed}:${cell.id}:palette`) % HOUSE_PALETTES.length
     ]!
     const doorSign: -1 | 1 = seededUnit(prototypeSeed, 'door-side') < 0.5 ? -1 : 1
     // Garage on the side away from the entry so the driveway and the front

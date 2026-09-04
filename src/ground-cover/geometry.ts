@@ -23,7 +23,7 @@ import * as TSL from "three/tsl";
 import { MeshStandardNodeMaterial, type Node } from "three/webgpu";
 import {
 	GLOBAL_WIND_STRENGTH,
-	PLANT_WIND_FREQUENCY,
+	grassWindPosition,
 	PLANT_WIND_STRENGTH,
 	setGlobalWindStrength,
 } from "../wind-node";
@@ -74,13 +74,9 @@ const {
 	clamp,
 	cos,
 	dot,
-	Fn,
 	max,
 	mix,
-	modelWorldMatrix,
-	modelWorldMatrixInverse,
 	mul,
-	mx_noise_float,
 	negate,
 	normalize,
 	normalWorldGeometry,
@@ -93,7 +89,6 @@ const {
 	step,
 	sub,
 	texture,
-	time,
 	transformDirection,
 	uniform,
 	varying,
@@ -101,9 +96,6 @@ const {
 	vec3,
 } = TSL;
 
-const WIND_SPATIAL_FREQUENCY = 0.8;
-const NOISE_SPATIAL_FREQUENCY = 0.35;
-const NOISE_TIME_FREQUENCY = 0.18;
 const MAX_WIND_WAVE = 1.8;
 const MAX_TINT_ROTATION = Math.PI / 6;
 const MAX_CONFIGURED_WIND_STRENGTH = 2;
@@ -115,58 +107,15 @@ const SURFACE_GROUND_TEXTURE_MIX = 0.25;
 const SURFACE_BLADE_SAMPLE_FILTER = 3;
 const GRASS_COVERAGE_START = 0.05;
 const SURFACE_EDGE_TEXTURE_MIX = 0.6;
-const WIND_DIRECTION_WORLD = normalize(vec2(0.8, 0.6));
 const NORMALIZED_BLADE_HEIGHT = clamp(positionGeometry.y, 0, 1);
 export const GRASS_FIELD_WIND_INFLUENCE = uniform(1);
 
-// Wave composition adapted to TSL from Cortiz Dev's MIT grass-field reference:
-// https://github.com/cortiz2894/stylized-components
-const grassFieldWind = Fn(() => {
-	const displacedPosition = positionLocal.toVar();
-	const windTime = time.mul(PLANT_WIND_FREQUENCY);
-	const worldPosition = modelWorldMatrix.mul(displacedPosition).xyz;
-	const alongWind = dot(worldPosition.xz, WIND_DIRECTION_WORLD);
-
-	const primaryWave = sin(alongWind.mul(WIND_SPATIAL_FREQUENCY).add(windTime));
-	const secondaryWave = sin(
-		alongWind
-			.mul(WIND_SPATIAL_FREQUENCY * 2.6)
-			.add(windTime.mul(1.8))
-			.add(1.3),
-	).mul(0.35);
-	const organicNoise = mx_noise_float(
-		vec3(
-			worldPosition.x.mul(NOISE_SPATIAL_FREQUENCY),
-			worldPosition.z.mul(NOISE_SPATIAL_FREQUENCY),
-			windTime.mul(NOISE_TIME_FREQUENCY),
-		),
-	);
-	const gustEnvelope = organicNoise.mul(0.35).add(0.9);
-	const turbulence = organicNoise.mul(0.2);
-
-	const heightMask = NORMALIZED_BLADE_HEIGHT.mul(NORMALIZED_BLADE_HEIGHT);
-	const displacement = displacedPosition.y
-		.mul(PLANT_WIND_STRENGTH)
-		.mul(GLOBAL_WIND_STRENGTH)
-		.mul(GRASS_FIELD_WIND_INFLUENCE)
-		.mul(heightMask)
-		.mul(primaryWave.mul(gustEnvelope).add(secondaryWave).add(turbulence));
-
-	// Position nodes run after instancing in Three r185, so converting the shared
-	// world direction only through the mesh transform avoids per-blade yaw fan-out.
-	const windDirectionWorld = vec3(
-		WIND_DIRECTION_WORLD.x,
-		0,
-		WIND_DIRECTION_WORLD.y,
-	);
-	const windDirectionLocal = normalize(
-		transformDirection(windDirectionWorld, modelWorldMatrixInverse),
-	);
-	displacedPosition.addAssign(windDirectionLocal.mul(displacement));
-
-	return displacedPosition;
-});
-const GRASS_FIELD_WIND = grassFieldWind();
+const GRASS_FIELD_WIND = grassWindPosition(
+	positionLocal,
+	positionLocal.y,
+	NORMALIZED_BLADE_HEIGHT.mul(NORMALIZED_BLADE_HEIGHT),
+	GRASS_FIELD_WIND_INFLUENCE,
+);
 const varyingFloat = varying as unknown as (
 	node: Node<"float">,
 	name: string,

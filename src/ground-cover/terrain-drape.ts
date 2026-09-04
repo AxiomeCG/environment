@@ -20,6 +20,8 @@ export function buildDrapedGroundGeometry(
 
 	const contour = boundary.map(([x, z]) => new Vector2(x, z));
 	const siteTriangles = ShapeUtils.triangulateShape(contour, []);
+	// CCW triangles in XY face downward after mapping their Y coordinate to Z.
+	for (const triangle of siteTriangles) triangle.reverse();
 	const positions: number[] = [];
 	const normals: number[] = [];
 

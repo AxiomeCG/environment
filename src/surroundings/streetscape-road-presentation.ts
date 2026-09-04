@@ -9,6 +9,7 @@ import {
 import {
   buildJunctionBoundaryGeometry,
   buildJunctionBoundarySidePaths,
+  junctionBoundarySidePathPoint,
   sampleRoadEdgePoints,
   type JunctionBoundaryGeometryData,
   type RoadSurfaceGeometryData,
@@ -223,12 +224,34 @@ function mixedTSiteSideCornerKey(
   )
   const localEdges = incident.filter(({ roadClass }) => roadClass === 'local')
   const collectorEdges = incident.filter(({ roadClass }) => roadClass === 'collector')
-  if (localEdges.length !== 1 || collectorEdges.length !== 2) return undefined
+  if ((localEdges.length !== 1 && localEdges.length !== 2) || collectorEdges.length !== 2) {
+    return undefined
+  }
 
-  const siteSideCollector = [...collectorEdges].sort((left, right) =>
+  const longestFirst = (left: RoadGraphEdge, right: RoadGraphEdge) =>
     graphEdgeLength(right, network.graphNodes) - graphEdgeLength(left, network.graphNodes)
-    || left.id.localeCompare(right.id))[0]!
-  return junctionCornerKey(localEdges[0]!.id, siteSideCollector.id)
+    || left.id.localeCompare(right.id)
+  const siteSideLocal = [...localEdges].sort(longestFirst)[0]!
+  const siteSideCollector = [...collectorEdges].sort(longestFirst)[0]!
+  if (localEdges.length === 2) {
+    const awayFromJunction = (edge: RoadGraphEdge): JunctionPlanPoint => {
+      const terminalId = edge.startNodeId === junctionId ? edge.endNodeId : edge.startNodeId
+      const terminal = network.graphNodes[terminalId]!.position
+      const center = network.graphNodes[junctionId]!.position
+      const deltaX = terminal[0] - center[0]
+      const deltaZ = terminal[2] - center[2]
+      const length = Math.hypot(deltaX, deltaZ)
+      return [deltaX / length, deltaZ / length]
+    }
+    const localDirection = awayFromJunction(siteSideLocal)
+    const collectorDirection = awayFromJunction(siteSideCollector)
+    const absoluteCosine = Math.abs(
+      localDirection[0] * collectorDirection[0]
+      + localDirection[1] * collectorDirection[1],
+    )
+    if (absoluteCosine < 1e-5) return undefined
+  }
+  return junctionCornerKey(siteSideLocal.id, siteSideCollector.id)
 }
 
 type JunctionPlanPoint = readonly [number, number]
@@ -729,8 +752,7 @@ function classAwareJunctionBandGeometries(
         componentWidths[componentIndex]!.push(width)
         offset += width
         boundaries[componentIndex + 1]!.push(
-          buildJunctionBoundarySidePaths(solution, offset)[pathIndex]?.points[pointIndex]
-          ?? inner,
+          junctionBoundarySidePathPoint(solution, pathIndex, pointIndex, offset) ?? inner,
         )
       }
     }
@@ -892,7 +914,7 @@ function junctionCandidateGeometryIsTopologySafe(
 function junctionCarriagewayGeometry(
   network: RoadNetworkNode,
   solution: JunctionBoundaryGeometryData,
-  centerThickness: number,
+  defaultThickness: number,
 ): RoadSurfaceGeometryData {
   const samples: Array<{ point: JunctionPlanPoint; surfaceThickness: number }> = []
   for (const path of buildJunctionBoundarySidePaths(solution)) {
@@ -926,12 +948,11 @@ function junctionCarriagewayGeometry(
   }
 
   const positions = [...solution.positions]
-  positions[1] = centerThickness
   for (let index = 0; index < solution.boundary.length; index += 1) {
     const point = solution.boundary[index]!
     const surfaceThickness = samples.find((sample) => pointsCoincide(sample.point, point))
-      ?.surfaceThickness ?? centerThickness
-    positions[(index + 1) * 3 + 1] = surfaceThickness
+      ?.surfaceThickness ?? defaultThickness
+    positions[index * 3 + 1] = surfaceThickness
   }
   return { indices: [...solution.indices], positions }
 }
@@ -973,7 +994,10 @@ function solveJunctions(network: RoadNetworkNode): SolvedJunction[] {
     const incident = Object.values(network.edges).filter(
       (edge) => edge.startNodeId === graphNode.id || edge.endNodeId === graphNode.id,
     )
-    if (incident.length < 3) return []
+    if (
+      incident.length < 2
+      || (incident.length === 2 && !network.junctions[graphNode.id])
+    ) return []
     const styles = incident.flatMap((edge) => {
       const style = resolveStyle(network, edge)
       return style ? [style] : []
@@ -1098,21 +1122,40 @@ function presentationNetworkWithTerminalExtensions(
   }
 
   let graphNodes = network.graphNodes
+  let edges = network.edges
   for (const [edgeId, cuts] of cutsByEdge) {
-    const edge = network.edges[edgeId]
+    let edge = edges[edgeId]
     if (!edge) continue
     const targetLength = cuts.start + cuts.end + PRESENTATION_TERMINAL_REMAINDER
     if (sampledRoadEdgeLength(edge, graphNodes) >= targetLength) continue
 
-    const terminalNodeId = cuts.start > JUNCTION_GEOMETRY_EPSILON
+    let terminalNodeId = cuts.start > JUNCTION_GEOMETRY_EPSILON
       && cuts.end <= JUNCTION_GEOMETRY_EPSILON
       ? edge.endNodeId
       : cuts.end > JUNCTION_GEOMETRY_EPSILON
         && cuts.start <= JUNCTION_GEOMETRY_EPSILON
         ? edge.startNodeId
         : undefined
-    if (!terminalNodeId || incidentCounts.get(terminalNodeId) !== 1) {
-      throw new Error(`Unable to extend non-terminal road edge ${edge.id}`)
+    if (!terminalNodeId) {
+      throw new Error(`Unable to extend road edge cut at both ends ${edge.id}`)
+    }
+    if (incidentCounts.get(terminalNodeId) !== 1) {
+      const terminal = graphNodes[terminalNodeId]
+      if (!terminal) {
+        throw new Error(`Unable to resolve terminal node for road edge ${edge.id}`)
+      }
+      const detachedTerminalId = `${terminalNodeId}:presentation-terminal:${edge.id}`
+      if (graphNodes === network.graphNodes) graphNodes = { ...network.graphNodes }
+      graphNodes[detachedTerminalId] = { ...terminal, id: detachedTerminalId }
+      if (edges === network.edges) edges = { ...network.edges }
+      edge = {
+        ...edge,
+        ...(edge.startNodeId === terminalNodeId
+          ? { startNodeId: detachedTerminalId }
+          : { endNodeId: detachedTerminalId }),
+      }
+      edges[edgeId] = edge
+      terminalNodeId = detachedTerminalId
     }
 
     if (graphNodes === network.graphNodes) graphNodes = { ...network.graphNodes }
@@ -1148,7 +1191,9 @@ function presentationNetworkWithTerminalExtensions(
     }
   }
 
-  return graphNodes === network.graphNodes ? network : { ...network, graphNodes }
+  return graphNodes === network.graphNodes && edges === network.edges
+    ? network
+    : { ...network, edges, graphNodes }
 }
 
 function edgeSurfaces(

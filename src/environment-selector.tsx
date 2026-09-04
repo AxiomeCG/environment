@@ -27,7 +27,7 @@ export const ENVIRONMENT_TOOL_LABELS: Record<EnvironmentTool, string> = {
 const ENVIRONMENT_TOOL_DESCRIPTIONS: Record<EnvironmentTool, string> = {
   'ground-cover': 'Paint grass, flowers, and low vegetation.',
   atmosphere: 'Adjust the sky, lighting, and atmosphere.',
-  surroundings: 'Configure forests and distant scenery.',
+  surroundings: 'Configure roads and the neighborhood beyond the site.',
   build: 'Open Pascal building tools.',
   terrain: 'Raise, lower, flatten, and smooth the terrain.',
   path: 'Paint terrain-conforming surface materials.',
@@ -145,11 +145,10 @@ export default function EnvironmentSelector({
   return (
     <div aria-busy={!markup && !loadError} className={className}>
       {loadError ? (
-        <EnvironmentSelectorFallback
-          disabledTools={disabledTools}
-          error={loadError}
-          onSelect={onSelect}
-        />
+        <div className="flex flex-col gap-3 p-3">
+          <p className="text-sidebar-foreground/60 text-xs" role="alert">{loadError}</p>
+          <EnvironmentCatalogue disabledTools={disabledTools} onSelect={onSelect} />
+        </div>
       ) : markup ? (
         <div
           className="flex min-h-0 flex-1 items-center"
@@ -168,34 +167,36 @@ export default function EnvironmentSelector({
   )
 }
 
-function EnvironmentSelectorFallback({
-  disabledTools,
-  error,
+export function EnvironmentCatalogue({
+  className,
+  disabledTools = [],
   onSelect,
-}: {
-  disabledTools: readonly EnvironmentTool[]
-  error: string
-  onSelect: (tool: EnvironmentTool) => void
-}) {
+}: EnvironmentSelectorProps) {
   return (
-    <div className="flex flex-col gap-3 p-3">
-      <p className="text-sidebar-foreground/60 text-xs" role="alert">
-        {error}
-      </p>
-      <div aria-label="Environment tools" className="grid grid-cols-2 gap-2" role="group">
-        {ENVIRONMENT_TOOLS.map((tool) => (
-          <button
-            className="min-h-10 rounded-md border border-sidebar-border px-2 text-xs transition-colors enabled:hover:bg-sidebar-accent disabled:cursor-not-allowed disabled:text-sidebar-foreground/50"
-            disabled={disabledTools.includes(tool)}
-            key={tool}
-            title={disabledTools.includes(tool) ? 'Coming soon' : undefined}
-            onClick={() => onSelect(tool)}
-            type="button"
-          >
-            {ENVIRONMENT_TOOL_LABELS[tool]}
-          </button>
-        ))}
-      </div>
+    <div className={className}>
+      <ul aria-label="Environment tools" className="flex flex-col gap-2">
+        {ENVIRONMENT_TOOLS.map((tool) => {
+          const disabled = disabledTools.includes(tool)
+          return (
+            <li key={tool}>
+              <button
+                className="flex w-full flex-col gap-1 rounded-md border border-sidebar-border px-3 py-2 text-left text-xs transition-colors enabled:hover:bg-sidebar-accent disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                disabled={disabled}
+                onClick={() => onSelect(tool)}
+                type="button"
+              >
+                <span className="flex w-full items-center justify-between gap-2">
+                  <span className={disabled ? 'text-sidebar-foreground/50' : 'font-medium'}>
+                    {ENVIRONMENT_TOOL_LABELS[tool]}
+                  </span>
+                  {disabled && <span className="text-sidebar-foreground/60">Coming soon</span>}
+                </span>
+                <span className="text-sidebar-foreground/60">{ENVIRONMENT_TOOL_DESCRIPTIONS[tool]}</span>
+              </button>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }

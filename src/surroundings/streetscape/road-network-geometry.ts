@@ -1,4 +1,4 @@
-import { CatmullRomCurve3, Vector3 } from "three";
+import { CatmullRomCurve3, ShapeUtils, Vector2, Vector3 } from "three";
 import { applyRoadVerticalProfile } from "./road-network-vertical-profile";
 import type { RoadGraphEdge, RoadNetworkNode } from "./schema";
 
@@ -53,27 +53,35 @@ export type RoadRibbonGeometryOptions = {
 };
 
 /** Follow the same outward offset used by generated junction side bands. */
+export function offsetJunctionBoundaryCornerPoint(
+	corner: JunctionBoundaryCorner,
+	point: readonly [number, number],
+	offset: number,
+): readonly [number, number] {
+	const safeOffset = Math.max(0, offset);
+	if (corner.center && corner.effectiveRadius > 0) {
+		const radius = Math.max(0.05, corner.effectiveRadius - safeOffset);
+		const dx = point[0] - corner.center[0];
+		const dz = point[1] - corner.center[1];
+		const length = Math.max(Math.hypot(dx, dz), 1e-6);
+		return [
+			corner.center[0] + (dx / length) * radius,
+			corner.center[1] + (dz / length) * radius,
+		];
+	}
+	return [
+		point[0] + corner.outerDirection[0] * safeOffset,
+		point[1] + corner.outerDirection[1] * safeOffset,
+	];
+}
+
 export function offsetJunctionBoundaryCornerPoints(
 	corner: JunctionBoundaryCorner,
 	offset: number,
 ): Array<readonly [number, number]> {
-	const safeOffset = Math.max(0, offset);
-	if (corner.center && corner.effectiveRadius > 0) {
-		const radius = Math.max(0.05, corner.effectiveRadius - safeOffset);
-		return corner.innerPoints.map(([x, z]) => {
-			const dx = x - corner.center![0];
-			const dz = z - corner.center![1];
-			const length = Math.max(Math.hypot(dx, dz), 1e-6);
-			return [
-				corner.center![0] + (dx / length) * radius,
-				corner.center![1] + (dz / length) * radius,
-			] as const;
-		});
-	}
-	return corner.innerPoints.map(([x, z]) => [
-		x + corner.outerDirection[0] * safeOffset,
-		z + corner.outerDirection[1] * safeOffset,
-	] as const);
+	return corner.innerPoints.map((point) =>
+		offsetJunctionBoundaryCornerPoint(corner, point, offset)
+	);
 }
 
 export type JunctionBoundarySidePath = {
@@ -81,6 +89,49 @@ export type JunctionBoundarySidePath = {
 	points: Array<readonly [number, number]>;
 	toEdgeId: string;
 };
+
+export function junctionBoundarySidePathPoint(
+	solution: Pick<
+		JunctionBoundaryGeometryData,
+		"approachCuts" | "approaches" | "corners"
+	>,
+	pathIndex: number,
+	pointIndex: number,
+	offset = 0,
+): readonly [number, number] | undefined {
+	if (
+		solution.approaches.length < 2 ||
+		solution.corners.length !== solution.approaches.length
+	) return undefined;
+	const corner = solution.corners[pathIndex];
+	const from = solution.approaches[pathIndex];
+	const to = solution.approaches[(pathIndex + 1) % solution.approaches.length];
+	if (!corner || !from || !to) return undefined;
+	const fromCut = solution.approachCuts[from.edgeId];
+	const toCut = solution.approachCuts[to.edgeId];
+	if (fromCut === undefined || toCut === undefined) return undefined;
+	const safeOffset = Math.max(0, offset);
+	if (pointIndex === 0) {
+		const fromDirection = [Math.cos(from.angle), Math.sin(from.angle)] as const;
+		const fromLeft = [-fromDirection[1], fromDirection[0]] as const;
+		return [
+			fromDirection[0] * fromCut + fromLeft[0] * (from.halfWidth + safeOffset),
+			fromDirection[1] * fromCut + fromLeft[1] * (from.halfWidth + safeOffset),
+		];
+	}
+	if (pointIndex === corner.innerPoints.length + 1) {
+		const toDirection = [Math.cos(to.angle), Math.sin(to.angle)] as const;
+		const toLeft = [-toDirection[1], toDirection[0]] as const;
+		return [
+			toDirection[0] * toCut - toLeft[0] * (to.halfWidth + safeOffset),
+			toDirection[1] * toCut - toLeft[1] * (to.halfWidth + safeOffset),
+		];
+	}
+	const point = corner.innerPoints[pointIndex - 1];
+	return point
+		? offsetJunctionBoundaryCornerPoint(corner, point, safeOffset)
+		: undefined;
+}
 
 /**
  * Trace each continuous roadside between adjacent approach openings, including
@@ -94,7 +145,7 @@ export function buildJunctionBoundarySidePaths(
 	offset = 0,
 ): JunctionBoundarySidePath[] {
 	if (
-		solution.approaches.length < 3 ||
+		solution.approaches.length < 2 ||
 		solution.corners.length !== solution.approaches.length
 	) return [];
 	const safeOffset = Math.max(0, offset);
@@ -768,9 +819,9 @@ function solveJunctionCorner(
 }
 
 /**
- * Solve a closed, star-shaped junction patch from adjacent approach offsets.
- * The result alternates approach caps with per-corner tangent fillets, so
- * unequal widths meet without the oversized circular disk used previously.
+ * Solve a closed, star-shaped junction or two-road bend patch from adjacent
+ * approach offsets. The result alternates approach caps with per-corner tangent
+ * fillets, so unequal widths meet without overlapping square-ended ribbons.
  */
 export function buildJunctionBoundaryGeometry(
 	approaches: JunctionBoundaryApproach[],
@@ -786,7 +837,7 @@ export function buildJunctionBoundaryGeometry(
 		maxExtent: 0,
 		positions: [],
 	};
-	if (approaches.length < 3) return empty;
+	if (approaches.length < 2) return empty;
 	const sorted = [...approaches].sort(
 		(left, right) => left.angle - right.angle,
 	);
@@ -842,11 +893,14 @@ export function buildJunctionBoundaryGeometry(
 	) {
 		boundary.pop();
 	}
-	const positions = [0, 0, 0];
+	const positions: number[] = [];
 	for (const [x, z] of boundary) positions.push(x, 0, z);
 	const indices: number[] = [];
-	for (let index = 0; index < boundary.length; index++) {
-		indices.push(0, index + 1, ((index + 1) % boundary.length) + 1);
+	// Mixed-width bends can be concave: a fan from the graph node overlaps
+	// itself when that node is outside the carriageway polygon's kernel.
+	const contour = boundary.map(([x, z]) => new Vector2(x, z));
+	for (const [first, second, third] of ShapeUtils.triangulateShape(contour, [])) {
+		indices.push(first!, third!, second!);
 	}
 	return {
 		approachCuts,

@@ -2,11 +2,13 @@ export type MeshGeometryBuffers = Readonly<{
   indices: Uint32Array
   normals: Float32Array
   positions: Float32Array
+  colors?: Float32Array
 }>
 
 export function buildMeshGeometryBuffers(
   positions: readonly number[],
   indices: readonly number[],
+  colors?: readonly number[],
 ): MeshGeometryBuffers {
   const positionBuffer = new Float32Array(positions)
   const indexBuffer = new Uint32Array(indices)
@@ -52,5 +54,6 @@ export function buildMeshGeometryBuffers(
     indices: indexBuffer,
     normals,
     positions: positionBuffer,
+    colors: colors ? new Float32Array(colors) : undefined,
   }
 }

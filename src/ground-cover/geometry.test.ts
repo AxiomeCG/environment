@@ -7,11 +7,13 @@ import {
 } from "@pascal-app/core";
 import { expect, test } from "bun:test";
 import {
+	FrontSide,
 	InstancedBufferAttribute,
 	InstancedMesh,
 	Matrix4,
 	Mesh,
 	Quaternion,
+	Raycaster,
 	Vector3,
 } from "three";
 import { MeshStandardNodeMaterial } from "three/webgpu";
@@ -26,6 +28,7 @@ import { createGrassPaintField, encodeGrassPaintField } from "./paint-field";
 import { getGrassPaintRuntime } from "./paint-texture";
 import { getMissingGrassFieldDefaults, GrassFieldNode } from "./schema";
 import { grassFieldGeometryInputsEqual, grassFieldSiteChanges } from "./system";
+import { buildDrapedGroundGeometry } from "./terrain-drape";
 
 const context: GeometryContext = {
 	resolve: () => undefined,
@@ -508,4 +511,30 @@ test("site boundary and terrain edits invalidate their ground cover", () => {
 			originalNodes,
 		),
 	).toEqual([{ id: field.id, boundaryChanged: false, terrainChanged: true }]);
+});
+
+test("painted ground faces overhead light on flat and sculpted sites", () => {
+	const boundary = [[0, 0], [0.2, 0], [0.2, 0.2], [0, 0.2]] as const;
+	const terrain = createTerrainField({
+		origin: [0, 0], spacing: 0.1, cols: 3, rows: 3, step: 0.01,
+	});
+	terrain.heights.set([0, 10, 20, 5, 15, 25, 10, 20, 30]);
+	const material = new MeshStandardNodeMaterial({ side: FrontSide });
+	const ray = new Raycaster(new Vector3(0.077, 1, 0.137), new Vector3(0, -1, 0));
+	try {
+		for (const field of [null, terrain]) {
+			const geometry = buildDrapedGroundGeometry(boundary, field);
+			try {
+				const hit = ray.intersectObject(new Mesh(geometry, material))[0];
+				expect(hit?.point.y).toBeCloseTo(
+					(field ? surfaceHeightAt(field, 0.077, 0.137) : 0) + 0.005, 6,
+				);
+				expect(hit?.normal?.y).toBeGreaterThan(0);
+			} finally {
+				geometry.dispose();
+			}
+		}
+	} finally {
+		material.dispose();
+	}
 });

@@ -32,7 +32,7 @@ const ZERO_CELL_VARIATION = {
 
 
 describe('deriveSurroundingsCorridor', () => {
-  test('places a primary road immediately outside the selected frontage', () => {
+  test('places a primary road immediately outside the selected frontage and continues it outward', () => {
     const segment = deriveBoundarySegments({
       points: DEFAULT_SITE,
       contexts: { 2: PRIMARY_ROAD },
@@ -43,7 +43,7 @@ describe('deriveSurroundingsCorridor', () => {
     expect(corridor?.road).toEqual({
       id: 'surroundings-frontage-2-road',
       center: [0, 19.5],
-      length: 92,
+      length: 154,
       width: 9,
     })
     expect(corridor?.frame).toEqual({
@@ -53,7 +53,7 @@ describe('deriveSurroundingsCorridor', () => {
     })
   })
 
-  test('extends a primary road through the complete Streetscape cell ring', () => {
+  test('extends a primary road through the near neighborhood street', () => {
     const segment = deriveBoundarySegments({
       points: DEFAULT_SITE,
       contexts: { 2: PRIMARY_ROAD },
@@ -64,13 +64,13 @@ describe('deriveSurroundingsCorridor', () => {
       STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
     )!
 
-    expect(corridor.road.length).toBeCloseTo(105.4)
+    expect(corridor.road.length).toBeCloseTo(180.8)
     const roadCorners = orientedRectangleCorners(corridor.road, corridor.frame)
     const expectedRoadCorners = [
-      [52.7, 15],
-      [-52.7, 15],
-      [-52.7, 30.7],
-      [52.7, 30.7],
+      [90.4, 15],
+      [-90.4, 15],
+      [-90.4, 30.7],
+      [90.4, 30.7],
     ] as const
     for (const [index, corner] of roadCorners.entries()) {
       expect(corner[0]).toBeCloseTo(expectedRoadCorners[index]![0])
@@ -86,10 +86,10 @@ describe('deriveSurroundingsCorridor', () => {
     const corridor = deriveSurroundingsCorridor(segment)!
 
     expect(orientedRectangleCorners(corridor.road, corridor.frame)).toEqual([
-      [46, 15],
-      [-46, 15],
-      [-46, 24],
-      [46, 24],
+      [77, 15],
+      [-77, 15],
+      [-77, 24],
+      [77, 24],
     ])
   })
 
@@ -209,6 +209,8 @@ describe('deriveSurroundingsCorridor', () => {
     expect(layout.corridors).toEqual([])
     expect(layout.roadJunctions).toEqual([])
     expect(layout.neighborCells).toHaveLength(8)
+    expect(layout.outerRoad).toBeUndefined()
+    expect(deriveRoadPresentationAlignments(layout)).toEqual([])
   })
 
   test('joins adjacent road frontages at their shared convex corner', () => {
@@ -263,7 +265,51 @@ describe('deriveSurroundingsCorridor', () => {
     expect(Math.abs(lastDelta[1])).toBeLessThan(Math.abs(lastDelta[0]))
   })
 
-  test('merges adjacent secondary roads into one gap-free render alignment', () => {
+  test('omits the near street when an acute Site cannot support a safe offset', () => {
+    const acuteSite = [
+      [-100, 0],
+      [0, 0],
+      [-81.91520442889918, 57.35764363510461],
+    ] as const satisfies readonly Point2[]
+    const layout = deriveSurroundingsLayout(
+      deriveBoundarySegments({
+        points: acuteSite,
+        contexts: {
+          0: { separator: 'secondary-road', access: 'none' },
+          1: PRIMARY_ROAD,
+        },
+      }),
+      STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+    )
+
+    expect(layout.outerRoad).toBeUndefined()
+    expect(deriveRoadPresentationAlignments(layout).map(({ id }) => id)).toEqual([
+      'surroundings-frontage-0-road',
+      'surroundings-frontage-1-road',
+    ])
+  })
+
+  test('omits the near street below the safe 60-degree offset limit', () => {
+    const fortyFiveDegreeSite = [
+      [-100, 0],
+      [0, 0],
+      [-70.71067811865476, 70.71067811865474],
+    ] as const satisfies readonly Point2[]
+    const layout = deriveSurroundingsLayout(
+      deriveBoundarySegments({
+        points: fortyFiveDegreeSite,
+        contexts: {
+          0: { separator: 'secondary-road', access: 'none' },
+          1: PRIMARY_ROAD,
+        },
+      }),
+      STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+    )
+
+    expect(layout.outerRoad).toBeUndefined()
+  })
+
+  test('keeps adjacent secondary roads independent from the open near street', () => {
     const secondaryRoad = { separator: 'secondary-road', access: 'none' } as const
     const layout = deriveSurroundingsLayout(
       deriveBoundarySegments({
@@ -274,24 +320,46 @@ describe('deriveSurroundingsCorridor', () => {
     )
 
     const alignments = deriveRoadPresentationAlignments(layout)
+    const nearRoad = alignments.find(
+      ({ id }) => id === 'surroundings-near-neighborhood-road',
+    )!
 
-    expect(alignments).toHaveLength(1)
-    expect(alignments[0]?.corridorIds).toEqual([
-      'surroundings-frontage-1',
-      'surroundings-frontage-2',
+    expect(alignments.slice(0, 2).map(({ corridorIds }) => corridorIds)).toEqual([
+      ['surroundings-frontage-1'],
+      ['surroundings-frontage-2'],
     ])
-    expect(alignments[0]?.junctionIds).toEqual(['surroundings-junction-1-2'])
-    expect(alignments[0]?.centerline[0]).toEqual([20.2, -15])
-    expect(alignments[0]?.centerline.at(-1)).toEqual([-15, 20.2])
-    expect(
-      alignments[0]?.centerline.filter(([x, z]) => x === 20.2 && z === 15),
-    ).toHaveLength(1)
-    expect(
-      alignments[0]?.centerline.filter(([x, z]) => x === 15 && z === 20.2),
-    ).toHaveLength(1)
+    expect(alignments.slice(0, 2).every(({ junctionIds }) => junctionIds.length === 0)).toBe(true)
+    expect(nearRoad.centerline.length).toBeGreaterThanOrEqual(5)
+    expect(nearRoad.centerline[0]).not.toEqual(nearRoad.centerline.at(-1))
+    expect(nearRoad.centerline.flat().every(Number.isFinite)).toBe(true)
   })
 
-  test('keeps three adjacent secondary frontages as one curved alignment', () => {
+  test('uses the cell variation seed for deterministic near-street variation', () => {
+    const segments = deriveBoundarySegments({
+      points: DEFAULT_SITE,
+      contexts: { 2: PRIMARY_ROAD },
+    })
+    const first = deriveSurroundingsLayout(
+      segments,
+      STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+      { seed: 'near-street-a', depthVariation: 0.2 },
+    )
+    const repeated = deriveSurroundingsLayout(
+      segments,
+      STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+      { seed: 'near-street-a', depthVariation: 0.2 },
+    )
+    const different = deriveSurroundingsLayout(
+      segments,
+      STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+      { seed: 'near-street-b', depthVariation: 0.2 },
+    )
+
+    expect(repeated.outerRoad).toEqual(first.outerRoad)
+    expect(different.outerRoad?.centerline).not.toEqual(first.outerRoad?.centerline)
+  })
+
+  test('keeps every selected frontage as a separate outward continuation', () => {
     const secondaryRoad = { separator: 'secondary-road', access: 'none' } as const
     const layout = deriveSurroundingsLayout(
       deriveBoundarySegments({
@@ -306,19 +374,18 @@ describe('deriveSurroundingsCorridor', () => {
       STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
     )
 
-    const secondaryAlignment = deriveRoadPresentationAlignments(layout)[0]
+    const alignments = deriveRoadPresentationAlignments(layout)
+    const frontageAlignments = alignments.filter(({ corridorIds }) => corridorIds.length > 0)
+    const nearRoad = alignments.find(
+      ({ id }) => id === 'surroundings-near-neighborhood-road',
+    )!
 
-    expect(secondaryAlignment?.corridorIds).toEqual([
-      'surroundings-frontage-0',
-      'surroundings-frontage-1',
-      'surroundings-frontage-2',
-    ])
-    expect(secondaryAlignment?.junctionIds).toEqual([
-      'surroundings-junction-0-1',
-      'surroundings-junction-1-2',
-    ])
-    expect(secondaryAlignment?.centerline[0]).toEqual([-15, -20.2])
-    expect(secondaryAlignment?.centerline.at(-1)).toEqual([-15, 20.2])
+    expect(frontageAlignments).toHaveLength(4)
+    expect(frontageAlignments.every(({ corridorIds, junctionIds }) =>
+      corridorIds.length === 1 && junctionIds.length === 0)).toBe(true)
+    expect(frontageAlignments.every(({ centerline }) =>
+      centerline.flat().every(Number.isFinite))).toBe(true)
+    expect(nearRoad.centerline[0]).not.toEqual(nearRoad.centerline.at(-1))
   })
 
   test('keeps extended primary roads as independent through alignments', () => {
@@ -333,13 +400,13 @@ describe('deriveSurroundingsCorridor', () => {
     const alignments = deriveRoadPresentationAlignments(layout)
 
     expect(layout.roadJunctions).toHaveLength(1)
-    expect(alignments).toEqual([
+    expect(alignments.slice(0, 2)).toEqual([
       {
         id: 'surroundings-frontage-1-road',
         separator: 'primary-road',
         centerline: [
-          [22.85, -52.7],
-          [22.85, 52.7],
+          [22.85, -90.4],
+          [22.85, 90.4],
         ],
         corridorIds: ['surroundings-frontage-1'],
         junctionIds: [],
@@ -348,16 +415,18 @@ describe('deriveSurroundingsCorridor', () => {
         id: 'surroundings-frontage-2-road',
         separator: 'primary-road',
         centerline: [
-          [52.7, 22.85],
-          [-52.7, 22.85],
+          [90.4, 22.85],
+          [-90.4, 22.85],
         ],
         corridorIds: ['surroundings-frontage-2'],
         junctionIds: [],
       },
     ])
+    expect(alignments[2]?.id).toBe('surroundings-near-neighborhood-road')
+    expect(alignments[2]?.centerline[0]).not.toEqual(alignments[2]?.centerline.at(-1))
   })
 
-  test('extends a secondary feeder from the primary edge to the outer ring', () => {
+  test('continues a secondary road across the near street regardless of primary ordering', () => {
     const secondaryRoad = { separator: 'secondary-road', access: 'none' } as const
     const withPrimaryAtEnd = deriveRoadPresentationAlignments(
       deriveSurroundingsLayout(
@@ -378,23 +447,26 @@ describe('deriveSurroundingsCorridor', () => {
       ),
     )
 
-    expect(withPrimaryAtEnd[0]).toMatchObject({
-      separator: 'secondary-road',
-      junctionIds: [],
-    })
-    expect(withPrimaryAtEnd[0]?.centerline[0]?.[0]).toBeCloseTo(20.2)
-    expect(withPrimaryAtEnd[0]?.centerline[0]?.[1]).toBeCloseTo(-52.7)
-    expect(withPrimaryAtEnd[0]?.centerline[1]?.[0]).toBeCloseTo(20.2)
-    expect(withPrimaryAtEnd[0]?.centerline[1]?.[1]).toBeCloseTo(15)
+    const secondaryAtEnd = withPrimaryAtEnd.find(
+      ({ id }) => id === 'surroundings-frontage-1-road',
+    )!
+    const secondaryAtStart = withPrimaryAtStart.find(
+      ({ id }) => id === 'surroundings-frontage-2-road',
+    )!
 
-    expect(withPrimaryAtStart[1]).toMatchObject({
+    expect(secondaryAtEnd).toMatchObject({
       separator: 'secondary-road',
       junctionIds: [],
     })
-    expect(withPrimaryAtStart[1]?.centerline[0]?.[0]).toBeCloseTo(15)
-    expect(withPrimaryAtStart[1]?.centerline[0]?.[1]).toBeCloseTo(20.2)
-    expect(withPrimaryAtStart[1]?.centerline[1]?.[0]).toBeCloseTo(-52.7)
-    expect(withPrimaryAtStart[1]?.centerline[1]?.[1]).toBeCloseTo(20.2)
+    expect(secondaryAtEnd.centerline[0]).toEqual([20.2, -90.4])
+    expect(secondaryAtEnd.centerline[1]).toEqual([20.2, 90.4])
+
+    expect(secondaryAtStart).toMatchObject({
+      separator: 'secondary-road',
+      junctionIds: [],
+    })
+    expect(secondaryAtStart.centerline[0]).toEqual([90.4, 20.2])
+    expect(secondaryAtStart.centerline[1]).toEqual([-90.4, 20.2])
   })
 
   test('keeps each frontage corridor independent', () => {

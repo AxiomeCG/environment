@@ -1,17 +1,44 @@
 'use client'
 
-import { type SiteNode, useScene } from '@pascal-app/core'
-import { useMemo } from 'react'
+import { terrainFieldOf, useScene } from '@pascal-app/core'
+import type { AnyNodeId, SiteNode } from '@pascal-app/core'
+import { useThree } from '@react-three/fiber'
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import type { ComponentType } from 'react'
 import { Color, DoubleSide, FrontSide } from 'three'
 import { useEnvironmentStore } from '../store'
+import { loadPresentationAlbedos } from '../surface-material/materials'
+import type { PresentationAlbedos } from '../surface-material/materials'
+import { decodeSurfaceMaterialField } from '../surface-material/field'
+import { SURFACE_MATERIAL_KIND } from '../surface-material/schema'
+import type { SurfaceMaterialNode } from '../surface-material/schema'
 import {
   deriveSurroundingsLayout,
+  deriveRoadPresentationAlignments,
+  deriveSurroundingsLevelTerrainDistance,
   type NeighborCellDescriptor,
   STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+  type SurroundingsCorridorDescriptor,
+  type RoadPresentationAlignmentDescriptor,
+  type SurroundingsLayoutDescriptor,
 } from './corridor'
+import {
+  buildExteriorTerrainSection,
+  EXTERIOR_TERRAIN_GROUND_OFFSET,
+  createExteriorTerrainSampler,
+  createRenderedTerrainSampler,
+  deriveExteriorTerrainSectionAddresses,
+  type ExteriorTerrainSectionAddress,
+  type ExteriorTerrainSampler,
+  mergeExteriorTerrainSections,
+} from './exterior-terrain'
 import { deriveBoundarySegments } from './frontages'
-import { buildMeshGeometryBuffers } from './mesh-geometry'
+import type { BoundarySegment } from './frontages'
+import { deriveHorizonFoliagePlan } from './horizon-foliage'
+import { buildTerrainRoadGeometry } from './terrain-road-geometry'
+import { useSurfaceMesh } from './surface-mesh'
 import { HouseNeighborhood } from './house-neighborhood'
+import { NeighborhoodShadows } from './neighborhood-shadows'
 import {
   type ClassifiedNeighborCell,
   deriveHousePlans,
@@ -24,24 +51,61 @@ import {
 } from './neighborhood-decoration'
 import { NeighborhoodDecorations } from './neighborhood-decoration-renderer'
 import { deriveRuntimeRoadNetwork } from './runtime-road-graph'
-import { seededUnit } from './seeded-random'
 import {
   buildRoadPresentationPlan,
   type RoadPresentationPlan,
   type RoadPresentationSurface,
 } from './streetscape-road-presentation'
 
-// Suburban lawn tones: mown grass with seeded per-lot drift so the ring of
-// properties never reads as one carpet. Muted to sit with the road verge.
-const LAWN_BASE = new Color('#7f9268')
-const LAWN_VARIANCE = 0.055
+import { DistantTrees } from './distant-trees'
+// EZ-Tree loads browser textures at module scope; preserve the SSR boundary.
+const NeighborhoodTrees = lazy(() => import('./neighborhood-trees').then((module) => ({ default: module.NeighborhoodTrees })))
+import { deriveThirdRingPlan, type FieldPatch } from './third-ring'
+import { ThirdRing } from './third-ring-renderer'
+import { applyRoadSurfaceDetail, createLandscapeGroundMaterial, PresentationBasicMaterial, PresentationMaterial } from './presentation-material'
+import { deriveOuterRoads } from './outer-roads'
+import { CoastalSea } from './coastal-sea'
+import { createRoadGradedTerrain } from './road-elevation'
+import type { RoadNetworkNode } from './streetscape/schema'
+import type { LandscapeRegion } from './landscape-region'
+import { Boulders } from './boulders'
+import { buildFieldCoverageTexture, FieldVegetation } from './field-vegetation'
+import { createPropertySurfaceTransition } from './property-surface'
+import type { PropertySurfaceTransition } from './property-surface'
 
 type PresentedLayout = Readonly<{
   neighborCells: readonly ClassifiedNeighborCell[]
   houses: readonly HousePlan[]
   road: RoadPresentationPlan
   decorations: NeighborhoodDecorationPlan
+  corridors: readonly SurroundingsCorridorDescriptor[]
+  outerRoads: readonly RoadPresentationAlignmentDescriptor[]
+  nearRoads: readonly RoadPresentationAlignmentDescriptor[]
+  levelTerrainDistance: number
+  network: RoadNetworkNode | null
 }>
+
+export type RoadSurfaceBatch = Readonly<{
+  id: string
+  name: string
+  triangleColors: readonly number[]
+  roughness: number
+  metalness: number
+  doubleSided: boolean
+  castShadow: boolean
+  receiveShadow: boolean
+  material: 'basic' | 'standard'
+  depthWrite: boolean
+  polygonOffsetFactor: number
+  sourceSurfaceCount: number
+  geometry: RoadPresentationSurface['geometry']
+}>
+
+type MutableRoadSurfaceBatch = {
+  -readonly [Key in keyof RoadSurfaceBatch]: Key extends 'geometry'
+    ? { positions: number[]; indices: number[] }
+    : Key extends 'triangleColors' ? number[] : RoadSurfaceBatch[Key]
+}
 
 const EMPTY_ROAD_PLAN: RoadPresentationPlan = {
   id: 'environment-streetscape-road-network',
@@ -61,142 +125,302 @@ const EMPTY_DECORATION_PLAN: NeighborhoodDecorationPlan = {
 const EMPTY_PRESENTED_LAYOUT: PresentedLayout = {
   houses: [],
   decorations: EMPTY_DECORATION_PLAN,
+  corridors: [],
+  outerRoads: [],
+  nearRoads: [],
   neighborCells: [],
   road: EMPTY_ROAD_PLAN,
+  levelTerrainDistance: 0,
+  network: null,
 }
 
 function disableRaycast(): void {}
 
-/**
- * Every visible lot lawn in a single mesh: one draw call, one material,
- * per-lot tint baked into vertex colours.
- */
-function LotLawnMesh({ cells }: { cells: readonly ClassifiedNeighborCell[] }) {
-  const geometry = useMemo(() => {
-    const positions: number[] = []
-    const colors: number[] = []
-    const indices: number[] = []
-    const tint = new Color()
-    for (const cell of cells) {
-      const base = positions.length / 3
-      const drift = (seededUnit('pascal-lawn', cell.id) - 0.5) * 2 * LAWN_VARIANCE
-      tint.copy(LAWN_BASE).offsetHSL(drift * 0.25, drift * 0.6, drift)
-      // Roadside transport slivers get the same lawn: a verge, not a void.
-      if (cell.use === 'transport') tint.offsetHSL(0, -0.08, -0.03)
-      else if (cell.occupancy === 'garden') tint.offsetHSL(0.025, 0.06, 0.025)
-      else if (cell.occupancy === 'grove') tint.offsetHSL(-0.015, 0.05, -0.035)
-      // Lots share exact edges in one mesh, so no inset: adjacent tints meet
-      // on a hard property line instead of a lighter ground seam.
-      for (const [x, z] of cell.polygon) {
-        positions.push(x, 0.03, z)
-        colors.push(tint.r, tint.g, tint.b)
+function roadSurfaceBatchKey(surface: RoadPresentationSurface | RoadSurfaceBatch): string {
+  return JSON.stringify([
+    surface.material,
+    surface.roughness,
+    surface.metalness,
+    surface.doubleSided,
+    surface.castShadow,
+    surface.receiveShadow,
+    surface.depthWrite,
+    surface.polygonOffsetFactor,
+  ])
+}
+const roadMaterials = new Map<string, PresentationBasicMaterial | PresentationMaterial>()
+
+function roadMaterial(surface: RoadSurfaceBatch) {
+  const key = roadSurfaceBatchKey(surface)
+  const cached = roadMaterials.get(key)
+  if (cached) return cached
+  const material = surface.material === 'basic'
+    ? new PresentationBasicMaterial()
+    : new PresentationMaterial({ roughness: surface.roughness, metalness: surface.metalness })
+  material.vertexColors = true
+  material.depthWrite = surface.depthWrite
+  material.polygonOffset = true
+  material.polygonOffsetFactor = surface.polygonOffsetFactor
+  material.side = surface.doubleSided ? DoubleSide : FrontSide
+  if (material instanceof PresentationMaterial) applyRoadSurfaceDetail(material)
+  roadMaterials.set(key, material)
+  return material
+}
+
+export function buildRoadSurfaceBatches(
+  surfaces: readonly RoadPresentationSurface[],
+): RoadSurfaceBatch[] {
+  const batches: MutableRoadSurfaceBatch[] = []
+  const batchesByKey = new Map<string, MutableRoadSurfaceBatch>()
+  const color = new Color()
+
+  for (const surface of surfaces) {
+    const key = roadSurfaceBatchKey(surface)
+    let batch = batchesByKey.get(key)
+    if (!batch) {
+      batch = {
+        id: `environment-road-surface-batch-${batches.length}`,
+        name: `environment-road-surface-batch-${batches.length}`,
+        triangleColors: [],
+        roughness: surface.roughness,
+        metalness: surface.metalness,
+        doubleSided: surface.doubleSided,
+        castShadow: surface.castShadow,
+        receiveShadow: surface.receiveShadow,
+        material: surface.material,
+        depthWrite: surface.depthWrite,
+        polygonOffsetFactor: surface.polygonOffsetFactor,
+        sourceSurfaceCount: 0,
+        geometry: { positions: [], indices: [] },
       }
-      for (let index = 1; index < cell.polygon.length - 1; index += 1) {
-        indices.push(base, base + index, base + index + 1)
-      }
+      batches.push(batch)
+      batchesByKey.set(key, batch)
     }
-    return { ...buildMeshGeometryBuffers(positions, indices), colors: new Float32Array(colors) }
-  }, [cells])
+
+    const vertexOffset = batch.geometry.positions.length / 3
+    for (const position of surface.geometry.positions) {
+      batch.geometry.positions.push(position)
+    }
+    for (const index of surface.geometry.indices) {
+      batch.geometry.indices.push(index + vertexOffset)
+    }
+    color.set(surface.color)
+    for (let index = 0; index < surface.geometry.indices.length; index += 3) {
+      batch.triangleColors.push(color.r, color.g, color.b)
+    }
+    batch.sourceSurfaceCount += 1
+  }
+
+  return batches
+}
+
+function ExteriorGroundMesh({
+  sampler,
+  sections,
+  site,
+  region,
+  seed,
+  fields,
+  propertyTransition,
+}: {
+  sampler: ExteriorTerrainSampler
+  sections: readonly ExteriorTerrainSectionAddress[]
+  site: SiteNode
+  region: LandscapeRegion
+  seed: string
+  fields: readonly FieldPatch[]
+  propertyTransition: PropertySurfaceTransition
+}) {
+  const geometry = useMemo(() => mergeExteriorTerrainSections(
+    sections.map((address) => buildExteriorTerrainSection(address, sampler, site.polygon.points)),
+  ), [sections, sampler, site.polygon.points])
+  const [albedos, setAlbedos] = useState<PresentationAlbedos | null>(null)
+  useEffect(() => {
+    let mounted = true
+    loadPresentationAlbedos().then((textures) => {
+      if (mounted) setAlbedos(textures)
+    }).catch((error) => console.error('[Environment] Surroundings albedo loading failed', error))
+    return () => { mounted = false }
+  }, [])
+  const coverage = useMemo(() => buildFieldCoverageTexture(fields), [fields])
+  const material = useMemo(
+    () => createLandscapeGroundMaterial(
+      region,
+      coverage,
+      albedos,
+      site.polygon.points,
+      seed,
+      propertyTransition,
+    ),
+    [region, coverage, albedos, site.polygon.points, seed, propertyTransition],
+  )
+  useEffect(() => () => { coverage.texture.dispose() }, [coverage])
+  useEffect(() => () => { material.dispose() }, [material])
+  const mesh = useSurfaceMesh(geometry, material)
 
   return (
-    <mesh
-      name="environment-lot-lawns"
+    <primitive object={mesh} dispose={null}
+      name="environment-exterior-ground"
+      position={[0, EXTERIOR_TERRAIN_GROUND_OFFSET, 0]}
       raycast={disableRaycast}
       receiveShadow
-    >
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[geometry.positions, 3]} />
-        <bufferAttribute attach="attributes-normal" args={[geometry.normals, 3]} />
-        <bufferAttribute attach="attributes-color" args={[geometry.colors, 3]} />
-        <bufferAttribute attach="index" args={[geometry.indices, 1]} />
-      </bufferGeometry>
-      <meshStandardMaterial roughness={1} side={DoubleSide} vertexColors />
-    </mesh>
+      userData={{
+        drawCallCount: geometry.sectionCount > 0 ? 1 : 0,
+        ownedBufferBytes: geometry.ownedBufferBytes,
+        sectionCount: geometry.sectionCount,
+        triangleCount: geometry.triangleCount,
+      }}
+    />
   )
 }
 
-function RoadSurfaceMesh({ surface }: { surface: RoadPresentationSurface }) {
+
+function RoadSurfaceMesh({ surface, heightAt }: { surface: RoadSurfaceBatch; heightAt: (x: number, z: number) => number }) {
   const geometry = useMemo(
-    () => buildMeshGeometryBuffers(surface.geometry.positions, surface.geometry.indices),
-    [surface.geometry],
+    () => buildTerrainRoadGeometry(surface.geometry.positions, surface.geometry.indices, heightAt, surface.triangleColors),
+    [surface.geometry, surface.triangleColors, heightAt],
   )
-  const side = surface.doubleSided ? DoubleSide : FrontSide
+  const material = roadMaterial(surface)
+  const mesh = useSurfaceMesh(geometry, material)
 
   return (
-    <mesh
-      castShadow={surface.castShadow}
+    <primitive object={mesh} dispose={null}
       name={surface.name}
       raycast={disableRaycast}
       receiveShadow={surface.receiveShadow}
-    >
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[geometry.positions, 3]} />
-        <bufferAttribute attach="attributes-normal" args={[geometry.normals, 3]} />
-        <bufferAttribute attach="index" args={[geometry.indices, 1]} />
-      </bufferGeometry>
-      {surface.material === 'basic'
-        ? (
-            <meshBasicMaterial
-              color={surface.color}
-              depthWrite={surface.depthWrite}
-              polygonOffset
-              polygonOffsetFactor={surface.polygonOffsetFactor}
-              side={side}
-            />
-          )
-        : (
-            <meshStandardMaterial
-              color={surface.color}
-              depthWrite={surface.depthWrite}
-              metalness={surface.metalness}
-              polygonOffset
-              polygonOffsetFactor={surface.polygonOffsetFactor}
-              roughness={surface.roughness}
-              side={side}
-            />
-          )}
-    </mesh>
+      userData={{ sourceSurfaceCount: surface.sourceSurfaceCount }}
+    />
   )
 }
 
-export default function SurroundingsLayer() {
+export default function SurroundingsLayer({ groundReplacementComponent: GroundReplacement }: {
+  /** Host-owned, scene-scoped replacement of the fallback horizon ground. */
+  groundReplacementComponent: ComponentType
+}) {
   const active = useEnvironmentStore((state) => state.surroundingsEnabled)
   const frontageContexts = useEnvironmentStore((state) => state.frontageContexts)
+  const seed = useEnvironmentStore((state) => state.surroundingsSeed)
   const site = useScene((state) => {
     const siteId = state.rootNodeIds.find((id) => state.nodes[id]?.type === 'site')
     return siteId ? (state.nodes[siteId] as SiteNode) : undefined
   })
+  const boundary = site?.polygon.points
+  const surfaceMaterial = useScene((state) => {
+    if (!site) return undefined
+    for (const childId of site.children) {
+      const child = state.nodes[childId as AnyNodeId]
+      if ((child?.type as string | undefined) === SURFACE_MATERIAL_KIND) {
+        return child as unknown as SurfaceMaterialNode
+      }
+    }
+    return undefined
+  })
+  const surfaceField = useMemo(
+    () => decodeSurfaceMaterialField(surfaceMaterial?.paintMap),
+    [surfaceMaterial?.paintMap],
+  )
+  const invalidate = useThree((state) => state.invalidate)
+  const activeSiteId = active ? site?.id : undefined
+  const [propertySurface, setPropertySurface] = useState<{
+    siteId: string
+    transition: PropertySurfaceTransition
+  } | null>(null)
+  useLayoutEffect(() => {
+    if (!activeSiteId) {
+      setPropertySurface(null)
+      return
+    }
+    const transition = createPropertySurfaceTransition()
+    setPropertySurface({ siteId: activeSiteId, transition })
+    return () => { transition.dispose() }
+  }, [activeSiteId])
+  const propertyTransition = propertySurface && propertySurface.siteId === activeSiteId
+    ? propertySurface.transition
+    : null
+  useLayoutEffect(() => {
+    if (!propertyTransition || !boundary) return
+    propertyTransition.update(
+      boundary,
+      surfaceField,
+      surfaceMaterial?.textureSize ?? 100,
+    )
+    invalidate()
+  }, [
+    propertyTransition,
+    boundary,
+    surfaceField,
+    surfaceMaterial?.textureSize,
+    invalidate,
+  ])
+  const exteriorTerrainSections = useMemo(
+    () => active && site
+      ? deriveExteriorTerrainSectionAddresses(site.polygon.points)
+      : [],
+    [active, site],
+  )
   const presentedLayout = useMemo(() => {
-    if (!active || !site) return EMPTY_PRESENTED_LAYOUT
+    if (!active || !boundary) return EMPTY_PRESENTED_LAYOUT
 
-    let segments: ReturnType<typeof deriveBoundarySegments>
-    let layout: ReturnType<typeof deriveSurroundingsLayout>
+    let segments: BoundarySegment[]
+    let layout: SurroundingsLayoutDescriptor
+    let levelTerrainDistance: number
     try {
       segments = deriveBoundarySegments({
-        points: site.polygon.points,
+        points: boundary,
         contexts: frontageContexts,
       })
       layout = deriveSurroundingsLayout(
         segments,
+        STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+        { seed, depthVariation: 0.2 },
+      )
+      levelTerrainDistance = deriveSurroundingsLevelTerrainDistance(
+        segments,
+        layout,
         STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
       )
     } catch {
       return EMPTY_PRESENTED_LAYOUT
     }
 
+
     try {
-      const network = deriveRuntimeRoadNetwork(layout)
-      const neighborCells = deriveNeighborCellClassifications(segments, layout, network)
-      const houses = deriveHousePlans(neighborCells)
-      return {
-        decorations: deriveNeighborhoodDecorations(
+      const terrain = createExteriorTerrainSampler({
+        boundary, levelTerrainDistance, terrain: site ? terrainFieldOf(site) : null, seed,
+      })
+      const outerRoads = deriveOuterRoads(layout, { seed, heightAt: terrain.heightAt })
+      const network = deriveRuntimeRoadNetwork(layout, outerRoads)
+      const neighborCells = deriveNeighborCellClassifications(layout, network, seed)
+      const houses = deriveHousePlans(neighborCells, seed)
+      let road = EMPTY_ROAD_PLAN
+      try {
+        road = buildRoadPresentationPlan(network)
+      } catch {
+        // A presentation failure must not remove independently valid houses.
+      }
+      let decorations = EMPTY_DECORATION_PLAN
+      try {
+        decorations = deriveNeighborhoodDecorations(
           neighborCells,
           houses,
           layout.corridors,
-        ),
+          network,
+          road,
+          seed,
+        )
+      } catch {
+        // Decorative props must not own the house lifecycle.
+      }
+      return {
+        decorations,
+        outerRoads,
+        nearRoads: deriveRoadPresentationAlignments(layout),
+        corridors: layout.corridors,
         neighborCells,
         houses,
-        road: buildRoadPresentationPlan(network),
+        road,
+        levelTerrainDistance,
+        network,
       }
     } catch {
       return {
@@ -208,29 +432,92 @@ export default function SurroundingsLayer() {
           occupancy: 'none',
         })),
         decorations: EMPTY_DECORATION_PLAN,
+        outerRoads: [],
+        nearRoads: [],
+        corridors: layout.corridors,
         houses: [],
         road: EMPTY_ROAD_PLAN,
+        levelTerrainDistance,
+        network: null,
       }
     }
-  }, [active, frontageContexts, site])
+  }, [active, frontageContexts, boundary, seed, site])
+  const distantLandscape = useMemo(() => {
+    if (!active || !site) return null
+    const terrain = createExteriorTerrainSampler({
+      boundary: site.polygon.points,
+      levelTerrainDistance: presentedLayout.levelTerrainDistance,
+      terrain: terrainFieldOf(site),
+      seed,
+    })
+    const sampler = createRenderedTerrainSampler(presentedLayout.network
+      ? createRoadGradedTerrain(presentedLayout.network, terrain, site.polygon.points)
+      : terrain, exteriorTerrainSections)
+    const context = {
+      boundary: site.polygon.points,
+      corridors: presentedLayout.corridors,
+      roads: presentedLayout.outerRoads,
+      nearRoads: presentedLayout.nearRoads,
+      exclusions: presentedLayout.houses.map((house) => house.footprint),
+      heightAt: sampler.heightAt,
+      levelTerrainDistance: presentedLayout.levelTerrainDistance,
+      seed,
+    }
+    const thirdRing = deriveThirdRingPlan(context)
+    return { thirdRing, sampler, foliage: deriveHorizonFoliagePlan(context) }
+  }, [active, site, presentedLayout, seed, exteriorTerrainSections])
+  const roadSurfaceBatches = useMemo(
+    () => buildRoadSurfaceBatches(presentedLayout.road.surfaces),
+    [presentedLayout.road.surfaces],
+  )
   const hasPresentation = active && (
-    presentedLayout.neighborCells.length > 0
-    || presentedLayout.road.surfaces.length > 0
+    exteriorTerrainSections.length > 0
+    || presentedLayout.neighborCells.length > 0
+    || roadSurfaceBatches.length > 0
   )
 
-  if (!hasPresentation) return null
+  if (!hasPresentation || !site || !distantLandscape || !propertyTransition) return null
 
   return (
     <group name="environment-surroundings-root">
-      <LotLawnMesh cells={presentedLayout.neighborCells} />
+      <GroundReplacement />
+      <group name="exterior-terrain-chunks">
+        <ExteriorGroundMesh
+          sampler={distantLandscape.sampler}
+          sections={exteriorTerrainSections}
+          site={site}
+          region={distantLandscape.thirdRing.region}
+          seed={seed}
+          fields={distantLandscape.thirdRing.fields}
+          propertyTransition={propertyTransition}
+        />
+      </group>
 
-      <HouseNeighborhood plans={presentedLayout.houses} />
-      <NeighborhoodDecorations plan={presentedLayout.decorations} />
+      <HouseNeighborhood plans={presentedLayout.houses} heightAt={distantLandscape.sampler.heightAt} />
+      <NeighborhoodShadows houses={presentedLayout.houses} trees={presentedLayout.decorations.trees} heightAt={distantLandscape.sampler.heightAt} />
+      <NeighborhoodDecorations plan={presentedLayout.decorations} heightAt={distantLandscape.sampler.heightAt} />
+      {distantLandscape && (
+        <>
+          <Suspense fallback={null}>
+            <NeighborhoodTrees plans={presentedLayout.decorations.trees} horizonPlans={distantLandscape.foliage} heightAt={distantLandscape.sampler.heightAt} />
+          </Suspense>
+          <DistantTrees plans={distantLandscape.thirdRing.trees} />
+          <CoastalSea sections={exteriorTerrainSections} sampler={distantLandscape.sampler} boundary={site.polygon.points} region={distantLandscape.thirdRing.region} />
+          <ThirdRing plan={distantLandscape.thirdRing} />
+          <Boulders plans={distantLandscape.thirdRing.boulders} />
+          <FieldVegetation plans={distantLandscape.thirdRing.fields} heightAt={distantLandscape.sampler.heightAt} />
+        </>
+      )}
 
-
-      <group name="environment-streetscape-roads">
-        {presentedLayout.road.surfaces.map((surface) => (
-          <RoadSurfaceMesh key={surface.id} surface={surface} />
+      <group
+        name="environment-streetscape-roads"
+        userData={{
+          drawCallCount: roadSurfaceBatches.length,
+          sourceSurfaceCount: presentedLayout.road.surfaces.length,
+        }}
+      >
+        {roadSurfaceBatches.map((surface) => (
+          <RoadSurfaceMesh key={surface.id} surface={surface} heightAt={distantLandscape.sampler.heightAt} />
         ))}
       </group>
     </group>

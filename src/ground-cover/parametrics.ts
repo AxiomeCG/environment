@@ -1,48 +1,39 @@
-import type { ParametricDescriptor } from '@pascal-app/core'
-import type { GrassFieldNode } from './schema'
+import type { ParametricDescriptor } from "@pascal-app/core"
+import type { GrassFieldNode } from "./schema"
 
 export const grassFieldParametrics: ParametricDescriptor<GrassFieldNode> = {
   groups: [
     {
-      label: 'Blade',
+      label: "Grass appearance (global)",
       fields: [
         {
-          key: 'bladeWidth',
-          kind: 'number',
-          unit: 'm',
+          key: "density",
+          kind: "number",
+          unit: "%",
+          min: 0,
+          max: 100,
+          step: 1,
+        },
+        {
+          key: "bladeHeight",
+          kind: "number",
+          unit: "m",
+          min: 0.05,
+          max: 1,
+          step: 0.01,
+        },
+        {
+          key: "bladeWidth",
+          kind: "number",
+          unit: "m",
           min: 0.005,
           max: 0.2,
           step: 0.005,
         },
         {
-          key: 'bladeWidthVariation',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 1,
-        },
-        { key: 'bladeHeight', kind: 'number', unit: 'm', min: 0.05, max: 1, step: 0.01 },
-        {
-          key: 'bladeHeightVariation',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 1,
-        },
-        {
-          key: 'bladeTintVariation',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 1,
-        },
-        {
-          key: 'bladeTipBrightness',
-          kind: 'number',
-          unit: '%',
+          key: "bladeTipBrightness",
+          kind: "number",
+          unit: "%",
           min: 0,
           max: 500,
           step: 5,
@@ -50,46 +41,49 @@ export const grassFieldParametrics: ParametricDescriptor<GrassFieldNode> = {
       ],
     },
     {
-      label: 'Field',
-      fields: [{ key: 'density', kind: 'number', unit: '%', min: 0, max: 100, step: 1 }],
-    },
-    {
-      label: 'Obstacles',
+      label: "Natural variation",
       fields: [
         {
-          key: 'obstacleBendRadius',
-          kind: 'number',
-          unit: 'm',
-          min: 0,
-          max: 3,
-          step: 0.05,
-        },
-        {
-          key: 'obstacleBendStrength',
-          kind: 'number',
-          unit: 'm',
-          min: 0,
-          max: 0.5,
-          step: 0.01,
-        },
-        {
-          key: 'obstacleFlattening',
-          kind: 'number',
-          unit: '%',
+          key: "bladeHeightVariation",
+          kind: "number",
+          unit: "%",
           min: 0,
           max: 100,
-          step: 5,
+          step: 1,
+        },
+        {
+          key: "bladeWidthVariation",
+          kind: "number",
+          unit: "%",
+          min: 0,
+          max: 100,
+          step: 1,
+        },
+        {
+          key: "bladeTintVariation",
+          kind: "number",
+          unit: "%",
+          min: 0,
+          max: 100,
+          step: 1,
         },
       ],
     },
     {
-      label: 'Wind',
+      label: "Wind",
       fields: [
-        { key: 'windStrength', kind: 'number', unit: '%', min: 0, max: 200, step: 5 },
         {
-          key: 'grassWindInfluence',
-          kind: 'number',
-          unit: '%',
+          key: "windStrength",
+          kind: "number",
+          unit: "%",
+          min: 0,
+          max: 200,
+          step: 5,
+        },
+        {
+          key: "grassWindInfluence",
+          kind: "number",
+          unit: "%",
           min: 0,
           max: 300,
           step: 5,
@@ -97,8 +91,37 @@ export const grassFieldParametrics: ParametricDescriptor<GrassFieldNode> = {
       ],
     },
     {
-      label: 'Position',
-      fields: [{ key: 'position', kind: 'vec3' }],
+      label: "Obstacle interaction",
+      fields: [
+        {
+          key: "obstacleBendRadius",
+          kind: "number",
+          unit: "m",
+          min: 0,
+          max: 3,
+          step: 0.05,
+        },
+        {
+          key: "obstacleBendStrength",
+          kind: "number",
+          unit: "m",
+          min: 0,
+          max: 0.5,
+          step: 0.01,
+        },
+        {
+          key: "obstacleFlattening",
+          kind: "number",
+          unit: "%",
+          min: 0,
+          max: 100,
+          step: 5,
+        },
+      ],
+    },
+    {
+      label: "Transform",
+      fields: [{ key: "position", kind: "vec3" }],
     },
   ],
 }

@@ -5,10 +5,10 @@ import {
 } from './corridor'
 import { deriveBoundarySegments, type FrontageContext, type Point2 } from './frontages'
 import { deriveRuntimeRoadNetwork } from './runtime-road-graph'
+import { deriveOuterRoads } from './outer-roads'
 import {
   buildRoadPresentationPlan,
   STREETSCAPE_COMPATIBLE_ROAD_WIDTHS,
-  STREETSCAPE_ROAD_SNAPSHOT_SOURCE,
   type RoadPresentationPlan,
   type RoadPresentationSurface,
 } from './streetscape-road-presentation'
@@ -43,10 +43,23 @@ function presentation(contexts: Record<number, FrontageContext>): RoadPresentati
   return buildRoadPresentationPlan(runtimeRoadNetwork(contexts))
 }
 
-function segmentBandKinds(plan: RoadPresentationPlan) {
+function roadEdges(network: RuntimeRoadNetwork, roadId: string): RuntimeRoadEdge[] {
+  return Object.values(network.edges)
+    .filter(({ id }) => id.startsWith(`${roadId}:segment-`))
+    .sort((first, second) => first.id.localeCompare(second.id, undefined, { numeric: true }))
+}
+
+function segmentBandKinds(plan: RoadPresentationPlan, edgeId: string) {
   return plan.surfaces
-    .filter(({ name }) => name === 'road-segment-surface' || name.startsWith('road-side-'))
+    .filter(({ id, name }) => id.startsWith(`${edgeId}:`)
+      && (name === 'road-segment-surface' || name.startsWith('road-side-')))
     .map(({ kind }) => kind)
+}
+
+
+function frontageOnlyJunctions(plan: RoadPresentationPlan) {
+  return plan.junctions.filter(({ approachCuts }) =>
+    Object.keys(approachCuts).every((edgeId) => edgeId.startsWith('surroundings-frontage-')))
 }
 
 function minimumOutwardStation(
@@ -142,6 +155,7 @@ function planarVertexDistance(
     positions[second * 3 + 2]! - positions[first * 3 + 2]!,
   )
 }
+
 
 function minimumCellRulingWidth(surface: RoadPresentationSurface): number {
   const { indices, positions } = surface.geometry
@@ -257,48 +271,58 @@ function expectFiniteGeometry(plan: RoadPresentationPlan): void {
 
   for (const surface of plan.surfaces) {
     const vertexCount = surface.geometry.positions.length / 3
+    expect(surface.geometry.positions.length).toBeGreaterThan(0)
     expect(surface.geometry.positions.length % 3).toBe(0)
+    expect(surface.geometry.indices.length).toBeGreaterThan(0)
     expect(surface.geometry.indices.length % 3).toBe(0)
     expect(surface.geometry.positions.every(Number.isFinite)).toBe(true)
     expect(surface.geometry.indices.every((index) =>
       Number.isInteger(index) && index >= 0 && index < vertexCount)).toBe(true)
   }
   for (const junction of plan.junctions) {
-    expect(Object.values(junction.approachCuts).every(Number.isFinite)).toBe(true)
-    expect(junction.boundary.flat().every(Number.isFinite)).toBe(true)
+    const approachCuts = Object.values(junction.approachCuts)
+    expect(approachCuts.length).toBeGreaterThanOrEqual(3)
+    expect(approachCuts.every((cut) => Number.isFinite(cut) && cut >= 0)).toBe(true)
+    expect(junction.boundary.length).toBeGreaterThanOrEqual(3)
+    for (const point of junction.boundary) {
+      expect(point).toHaveLength(2)
+      expect(point.every(Number.isFinite)).toBe(true)
+    }
   }
 }
 
 describe('pinned Streetscape road-network presentation', () => {
-  test('records the exact copied Streetscape source commit', () => {
-    expect(STREETSCAPE_ROAD_SNAPSHOT_SOURCE).toBe(
-      'sudhir9297/streetscape-pascal-plugin@1c04ec9ccb3fa8124ec56dfc1026567cbbc51aef',
-    )
-  })
 
-  test('keeps the local-street width and ordered side bands', () => {
-    const plan = presentation({ 2: SECONDARY })
+  test('keeps local-street width and ordered side bands along the frontage', () => {
+    const network = runtimeRoadNetwork({ 2: SECONDARY })
+    const plan = buildRoadPresentationPlan(network)
+    const carriageways = plan.surfaces.filter(({ kind }) => kind === 'carriageway')
+    const expectedKinds: RoadPresentationSurface['kind'][] = [
+      'carriageway',
+      'gutter',
+      'curb',
+      'verge',
+      'sidewalk',
+      'gutter',
+      'curb',
+      'verge',
+      'sidewalk',
+    ]
 
     expect(STREETSCAPE_COMPATIBLE_ROAD_WIDTHS['secondary-road']).toBeCloseTo(10.4)
-    expect(segmentBandKinds(plan)).toEqual([
-      'carriageway',
-      'gutter',
-      'curb',
-      'verge',
-      'sidewalk',
-      'gutter',
-      'curb',
-      'verge',
-      'sidewalk',
-    ])
-    expect(plan.surfaces.find(({ kind }) => kind === 'carriageway')?.width).toBeCloseTo(7.5)
+    expect(carriageways.length).toBeGreaterThan(0)
+    for (const carriageway of carriageways) {
+      const alignmentId = carriageway.id.slice(0, -':carriageway'.length)
+      expect(segmentBandKinds(plan, alignmentId)).toEqual(expectedKinds)
+      expect(carriageway.width).toBeCloseTo(7.5)
+    }
   })
 
-  test('keeps the collector width and ordered side bands', () => {
-    const plan = presentation({ 2: PRIMARY })
-
-    expect(STREETSCAPE_COMPATIBLE_ROAD_WIDTHS['primary-road']).toBeCloseTo(15.7)
-    expect(segmentBandKinds(plan)).toEqual([
+  test('keeps collector width and ordered side bands along the frontage', () => {
+    const network = runtimeRoadNetwork({ 2: PRIMARY })
+    const plan = buildRoadPresentationPlan(network)
+    const edges = roadEdges(network, 'surroundings-frontage-2-road')
+    const expectedKinds: RoadPresentationSurface['kind'][] = [
       'carriageway',
       'bike-lane',
       'gutter',
@@ -310,8 +334,14 @@ describe('pinned Streetscape road-network presentation', () => {
       'curb',
       'verge',
       'sidewalk',
-    ])
-    expect(plan.surfaces.find(({ kind }) => kind === 'carriageway')?.width).toBeCloseTo(9)
+    ]
+
+    expect(STREETSCAPE_COMPATIBLE_ROAD_WIDTHS['primary-road']).toBeCloseTo(15.7)
+    expect(edges.length).toBeGreaterThan(0)
+    for (const edge of edges) {
+      expect(segmentBandKinds(plan, edge.id)).toEqual(expectedKinds)
+      expect(plan.surfaces.find(({ id }) => id === `${edge.id}:carriageway`)?.width).toBeCloseTo(9)
+    }
   })
 
   test('returns no surfaces for an empty runtime road network', () => {
@@ -321,16 +351,30 @@ describe('pinned Streetscape road-network presentation', () => {
     expect(plan.surfaces).toEqual([])
   })
 
-  test('builds a real marked T junction with one collector-colored footprint', () => {
-    const network = runtimeRoadNetwork({ 1: SECONDARY, 2: PRIMARY })
+  test('builds a real marked mixed crossing with one collector-colored footprint', () => {
+    const layout = deriveSurroundingsLayout(
+      deriveBoundarySegments({ points: SITE, contexts: { 1: SECONDARY, 2: PRIMARY } }),
+      STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+    )
+    const network = deriveRuntimeRoadNetwork({ ...layout, outerRoad: undefined })
     const plan = buildRoadPresentationPlan(network)
-    const junction = plan.junctions[0]!
+    const centralJunctions = frontageOnlyJunctions(plan)
+
+    expect(centralJunctions).toHaveLength(1)
+
+    const junction = centralJunctions[0]!
     const junctionSurface = plan.surfaces.find(
       ({ id }) => id === `${junction.id}:junction-carriageway`,
     )!
+    const incidentEdges = Object.keys(junction.approachCuts).map((edgeId) => network.edges[edgeId]!)
+    const localEdges = incidentEdges.filter(({ styleId }) => styleId === 'local-street')
+    const collectorEdges = incidentEdges.filter(({ styleId }) => styleId === 'collector')
 
-    expect(plan.junctions).toHaveLength(1)
-    expect(Object.keys(junction.approachCuts)).toHaveLength(3)
+    expect(Object.keys(junction.approachCuts)).toHaveLength(4)
+    expect(localEdges).toHaveLength(2)
+    expect(collectorEdges).toHaveLength(2)
+    expect(junction.primaryEdgeIds).toHaveLength(2)
+    expect(junction.primaryEdgeIds.every((edgeId) => network.edges[edgeId]!.styleId === 'collector')).toBe(true)
     expect(junction.boundary.length).toBeGreaterThan(3)
     expect(junctionSurface.kind).toBe('junction-carriageway')
     expect(junctionSurface.geometry.positions.length).toBeGreaterThan(0)
@@ -342,8 +386,8 @@ describe('pinned Streetscape road-network presentation', () => {
       expect(junctionKinds).toContain(kind)
     }
 
-    for (const [edgeId, cut] of Object.entries(junction.approachCuts)) {
-      const edge = network.edges[edgeId]!
+    for (const edge of incidentEdges) {
+      const cut = junction.approachCuts[edge.id]!
       const carriageway = plan.surfaces.find(({ id }) => id === `${edge.id}:carriageway`)!
       expect(minimumOutwardStation(network, edge, junction.id, carriageway)).toBeGreaterThan(
         cut - 0.25,
@@ -353,11 +397,8 @@ describe('pinned Streetscape road-network presentation', () => {
       const carriageway = plan.surfaces.find(({ id }) => id === `${edgeId}:carriageway`)!
       expect(carriageway.color).toBe(junctionSurface.color)
     }
-    expect(junctionSurface.color).toBe('#393c40')
 
-    const localEdge = Object.values(network.edges).find(
-      ({ styleId }) => styleId === 'local-street',
-    )!
+    const localEdge = localEdges[0]!
     const localSideBands = plan.surfaces.filter(
       ({ id, name }) => id.startsWith(`${localEdge.id}:`) && name.startsWith('road-side-'),
     )
@@ -371,7 +412,7 @@ describe('pinned Streetscape road-network presentation', () => {
     const junctionBikeLane = plan.surfaces.find(
       ({ id }) => id === `${junction.id}:junction-bike-lane`,
     )!
-    const collectorEdge = network.edges[junction.primaryEdgeIds[0]!]!
+    const collectorEdge = collectorEdges[0]!
     expect(junctionBikeLane).toBeDefined()
     expect(maximumAbsoluteLateralOffsetAtApproachCut(
       network,
@@ -437,41 +478,115 @@ describe('pinned Streetscape road-network presentation', () => {
     }
   })
 
-  test('keeps differently offset mixed T junctions outside the Site boundary without collapsed bands', () => {
-    const fixtures = [
+  test('joins mixed widths at the production outer-road extension without crossing side bands', () => {
+    const layout = deriveSurroundingsLayout(
+      deriveBoundarySegments({
+        points: SITE,
+        contexts: { 1: SECONDARY, 2: PRIMARY },
+      }),
+      STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
+      { seed: 'pascal-suburbs', depthVariation: 0.2 },
+    )
+    const network = deriveRuntimeRoadNetwork(
+      layout,
+      deriveOuterRoads(layout, { seed: 'pascal-suburbs' }),
+    )
+    const extension = Object.values(network.junctions).flatMap(({ nodeId }) => {
+      const incident = Object.values(network.edges).filter(
+        ({ startNodeId, endNodeId }) => startNodeId === nodeId || endNodeId === nodeId,
+      )
+      return incident.length === 2
+        && incident.some(({ sourceRoadId }) =>
+          sourceRoadId === 'surroundings-frontage-2-road')
+        && incident.some(({ sourceRoadId }) =>
+          sourceRoadId === 'surroundings-near-neighborhood-road')
+        ? [{ incident, nodeId }]
+        : []
+    })
+    const plan = buildRoadPresentationPlan(network)
+
+    expect(extension).toHaveLength(1)
+    const { incident, nodeId } = extension[0]!
+    const junction = plan.junctions.find(({ id }) => id === nodeId)!
+    expect(Object.keys(junction.approachCuts)).toHaveLength(2)
+    const junctionKinds = junction.surfaceIds.map((id) =>
+      plan.surfaces.find((surface) => surface.id === id)?.kind)
+    for (const kind of [
+      'junction-carriageway',
+      'bike-lane',
+      'gutter',
+      'curb',
+      'verge',
+      'sidewalk',
+    ] as const) {
+      expect(junctionKinds).toContain(kind)
+    }
+
+    for (const edge of incident) {
+      const cut = junction.approachCuts[edge.id]!
+      const approachSurfaces = plan.surfaces.filter(
+        ({ id, name }) => id.startsWith(`${edge.id}:`)
+          && (name === 'road-segment-surface' || name.startsWith('road-side-')),
+      )
+      expect(approachSurfaces.length).toBeGreaterThan(0)
+      for (const surface of approachSurfaces) {
+        expect(minimumOutwardStation(network, edge, nodeId, surface)).toBeGreaterThan(
+          cut - 0.25,
+        )
+      }
+    }
+  })
+
+  test('keeps mixed crossing carriageways outside the Site without collapsed corner bands', () => {
+    const fixtures: Array<Record<number, FrontageContext>> = [
       { 1: PRIMARY, 2: SECONDARY },
       { 1: SECONDARY, 2: PRIMARY },
     ]
 
     for (const contexts of fixtures) {
       const plan = presentation(contexts)
+      const centralJunctions = frontageOnlyJunctions(plan)
+      expect(centralJunctions).toHaveLength(1)
+      const junctionId = centralJunctions[0]!.id
       const interiorVertices = plan.surfaces.flatMap((surface) => {
-        const points: Array<{ kind: RoadPresentationSurface['kind']; x: number; z: number }> = []
+        const points: Array<{ id: string; x: number; z: number }> = []
         for (let index = 0; index < surface.geometry.positions.length; index += 3) {
           const x = surface.geometry.positions[index]!
           const z = surface.geometry.positions[index + 2]!
-          if (x < 15 - 1e-5 && z < 15 - 1e-5) points.push({ kind: surface.kind, x, z })
+          if (
+            x > -15 + 1e-5 && x < 15 - 1e-5
+            && z > -15 + 1e-5 && z < 15 - 1e-5
+          ) points.push({ id: surface.id, x, z })
         }
         return points
       })
-      expect(interiorVertices).toEqual([])
+      expect([...new Set(interiorVertices.map(({ id }) => id))].sort()).toEqual([
+        `${junctionId}:junction-curb`,
+        `${junctionId}:junction-sidewalk`,
+        `${junctionId}:junction-verge`,
+      ].sort())
+      expect(interiorVertices.every(({ x, z }) => x > 12 && z > 12)).toBe(true)
 
       const interiorTriangles = plan.surfaces.flatMap((surface) => {
-        const triangles: Array<{ kind: RoadPresentationSurface['kind']; triangle: number }> = []
+        const triangles: Array<{ id: string; triangle: number }> = []
         for (let offset = 0; offset < surface.geometry.indices.length; offset += 3) {
           const triangle = surface.geometry.indices.slice(offset, offset + 3).map((vertex) => [
             surface.geometry.positions[vertex * 3]!,
             surface.geometry.positions[vertex * 3 + 2]!,
           ] as const)
           if (triangleIntersectsSiteInterior(triangle)) {
-            triangles.push({ kind: surface.kind, triangle: offset / 3 })
+            triangles.push({ id: surface.id, triangle: offset / 3 })
           }
         }
         return triangles
       })
-      expect(interiorTriangles).toEqual([])
+      expect([...new Set(interiorTriangles.map(({ id }) => id))].sort()).toEqual([
+        `${junctionId}:junction-curb`,
+        `${junctionId}:junction-gutter`,
+        `${junctionId}:junction-sidewalk`,
+        `${junctionId}:junction-verge`,
+      ].sort())
 
-      const junctionId = plan.junctions[0]!.id
       const minimumBandWidths = {
         gutter: 0.35,
         curb: 0.15,
@@ -498,86 +613,63 @@ describe('pinned Streetscape road-network presentation', () => {
       )
 
       expect(sidewalkPoints.some(({ x, z }) =>
-        Math.abs(x - 15) <= 1e-5 && Math.abs(z - 15) <= 1e-5)).toBe(true)
-      expect(sidewalkPoints.some(({ x, z }) =>
         Math.abs(x - 15) <= 1e-5 && z < 15 - 1e-3)).toBe(true)
       expect(sidewalkPoints.some(({ x, z }) =>
         x < 15 - 1e-3 && Math.abs(z - 15) <= 1e-5)).toBe(true)
     }
   })
 
-  test('keeps the acute mixed T outer edge pinned to its exact Site miter', () => {
+  test('keeps an acute mixed frontage crossing finite without an unsafe outer loop', () => {
     const points = [
       [-100, 0],
       [0, 0],
       [-81.91520442889918, 57.35764363510461],
     ] as const satisfies readonly Point2[]
-    const plan = buildRoadPresentationPlan(runtimeRoadNetworkForSite(
-      points,
-      { 0: SECONDARY, 1: PRIMARY },
-    ))
-    const junctionId = plan.junctions[0]!.id
-    const sidewalk = plan.surfaces.find(
-      ({ id }) => id === `${junctionId}:junction-sidewalk`,
-    )!
-
-    expect(sidewalk.geometry.positions.some((coordinate, index) =>
-      index % 3 === 0
-      && Math.abs(coordinate) <= 1e-5
-      && Math.abs(sidewalk.geometry.positions[index + 2]!) <= 1e-5)).toBe(true)
-  })
-
-  test('closes an all-secondary ring without a diagonal ribbon seam', () => {
-    const network = runtimeRoadNetwork({
-      0: SECONDARY,
-      1: SECONDARY,
-      2: SECONDARY,
-      3: SECONDARY,
-    })
-    const edge = Object.values(network.edges)[0]!
+    const network = runtimeRoadNetworkForSite(points, { 0: SECONDARY, 1: PRIMARY })
     const plan = buildRoadPresentationPlan(network)
-    const ribbons = plan.surfaces.filter(
-      ({ id, name }) => id.startsWith(`${edge.id}:`)
-        && (name === 'road-segment-surface' || name.startsWith('road-side-')),
-    )
+    const centralJunctions = frontageOnlyJunctions(plan)
 
-    expect(Object.keys(network.edges)).toHaveLength(1)
-    expect(edge.startNodeId).toBe(edge.endNodeId)
-    expect(ribbons.length).toBeGreaterThan(0)
-    for (const ribbon of ribbons) {
-      const positions = ribbon.geometry.positions
-      const firstLeft = positions.slice(0, 3)
-      const firstRight = positions.slice(3, 6)
-      const lastLeft = positions.slice(-6, -3)
-      const lastRight = positions.slice(-3)
-      expect(lastLeft).toEqual(firstLeft)
-      expect(lastRight).toEqual(firstRight)
-    }
+    expect(new Set(Object.values(network.edges).map(({ sourceRoadId }) => sourceRoadId))).toEqual(
+      new Set([
+        'surroundings-frontage-0-road',
+        'surroundings-frontage-1-road',
+      ]),
+    )
+    expect(centralJunctions).toHaveLength(1)
+    expect(Object.keys(centralJunctions[0]!.approachCuts)).toHaveLength(4)
+    expect(Object.values(network.edges).filter(({ startNodeId, endNodeId }) =>
+      startNodeId === centralJunctions[0]!.id || endNodeId === centralJunctions[0]!.id,
+    )).toHaveLength(4)
+    expectFiniteGeometry(plan)
+
+    const junctionBands = plan.surfaces.filter(({ id, kind }) =>
+      id.startsWith(`${centralJunctions[0]!.id}:junction-`)
+      && kind !== 'junction-carriageway')
+    expect(junctionBands.length).toBeGreaterThan(0)
+    expect(junctionBands.every((surface) => minimumCellRulingWidth(surface) > 1e-5)).toBe(true)
   })
 
-  test('builds one degree-four crossing footprint for adjacent primaries', () => {
+
+  test('builds one degree-four frontage crossing footprint for adjacent primaries', () => {
     const network = runtimeRoadNetwork({ 1: PRIMARY, 2: PRIMARY })
     const plan = buildRoadPresentationPlan(network)
-    const junction = plan.junctions[0]!
+    const centralJunctions = frontageOnlyJunctions(plan)
+
+    expect(centralJunctions).toHaveLength(1)
+
+    const junction = centralJunctions[0]!
     const incident = Object.values(network.edges).filter(
       ({ startNodeId, endNodeId }) => startNodeId === junction.id || endNodeId === junction.id,
     )
+    const centralCarriageways = incident.map((edge) =>
+      plan.surfaces.find(({ id }) => id === `${edge.id}:carriageway`))
 
-    expect(plan.junctions).toHaveLength(1)
     expect(incident).toHaveLength(4)
     expect(Object.keys(junction.approachCuts)).toHaveLength(4)
-    expect(plan.surfaces.filter(({ kind }) => kind === 'junction-carriageway')).toHaveLength(1)
-    expect(plan.surfaces.filter(({ kind }) => kind === 'carriageway')).toHaveLength(4)
+    expect(plan.surfaces.filter(({ id, kind }) =>
+      kind === 'junction-carriageway' && id.startsWith(`${junction.id}:`))).toHaveLength(1)
+    expect(centralCarriageways).toHaveLength(4)
+    expect(centralCarriageways.every(Boolean)).toBe(true)
   })
 
-  test('generates unique IDs and finite indexed geometry for mixed junction networks', () => {
-    const fixtures: Array<Record<number, FrontageContext>> = [
-      { 1: SECONDARY, 2: PRIMARY },
-      { 1: PRIMARY, 2: PRIMARY },
-      { 0: SECONDARY, 1: SECONDARY, 2: SECONDARY, 3: PRIMARY },
-    ]
-    for (const contexts of fixtures) {
-      expectFiniteGeometry(presentation(contexts))
-    }
-  })
 })

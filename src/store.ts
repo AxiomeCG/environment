@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { DEFAULT_SKY_SETTINGS, patchSkySettings, type SkySettings } from './atmosphere/settings'
 import { rgbToHex } from './ground-cover/paint-field'
 import {
   DEFAULT_PAINT_STROKE_SETTINGS,
@@ -16,7 +17,6 @@ import {
   type SurfaceMaterialId,
 } from './surface-material/material-types'
 
-
 export type GroundCoverBrushTool =
   | 'paint-density'
   | 'erase-density'
@@ -28,6 +28,7 @@ type SurfaceBrushPatch = Partial<Omit<PaintStrokeSettings, 'color' | 'targetDens
 
 type EnvironmentStore = {
   activeSection?: EnvironmentTool
+  catalogueView: 'catalogue' | 'site'
   frontageContexts: FrontageContexts
   groundCoverBrush: PaintStrokeSettings
   groundCoverTool: GroundCoverBrushTool
@@ -35,7 +36,17 @@ type EnvironmentStore = {
   surfaceBrush: PaintStrokeSettings
   surfaceMaterial: SurfaceMaterialId
   surroundingsEnabled: boolean
+  surroundingsSeed: string
+  skyEnabled: boolean
+  skySettings: SkySettings
+  skyPlaying: boolean
+  skyMotion: boolean
+  setSkyEnabled: (enabled: boolean) => void
+  setSkySettings: (patch: Partial<SkySettings>) => void
+  setSkyPlaying: (playing: boolean) => void
+  setSkyMotion: (motion: boolean) => void
   setActiveSection: (section?: EnvironmentTool) => void
+  setCatalogueView: (view: EnvironmentStore['catalogueView']) => void
   setFrontageSeparator: (index: number, separator: FrontageSeparator) => void
   setGroundCoverBrush: (patch: Partial<PaintStrokeSettings>) => void
   setGroundCoverTool: (tool: GroundCoverBrushTool) => void
@@ -43,10 +54,12 @@ type EnvironmentStore = {
   setSurfaceBrush: (patch: SurfaceBrushPatch) => void
   setSurfaceMaterial: (material: SurfaceMaterialId) => void
   setSurroundingsEnabled: (enabled: boolean) => void
+  setSurroundingsSeed: (seed: string) => void
 }
 
 export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
   activeSection: undefined,
+  catalogueView: 'site',
   frontageContexts: {},
   groundCoverBrush: {
     ...DEFAULT_PAINT_STROKE_SETTINGS,
@@ -63,7 +76,25 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
   },
   surfaceMaterial: DEFAULT_SURFACE_MATERIAL,
   surroundingsEnabled: true,
+  surroundingsSeed: 'pascal-suburbs',
+  skyEnabled: false,
+  skySettings: { ...DEFAULT_SKY_SETTINGS },
+  skyPlaying: false,
+  skyMotion: false,
+  setSkyEnabled: (skyEnabled) =>
+    set((state) => ({ skyEnabled, skyPlaying: skyEnabled && state.skyPlaying })),
+  setSkySettings: (patch) =>
+    set((state) => ({
+      skySettings: patchSkySettings(state.skySettings, patch),
+      skyPlaying: false,
+    })),
+  setSkyPlaying: (skyPlaying) =>
+    set((state) => ({
+      skyPlaying: skyPlaying && state.skyEnabled && state.skySettings.sunMode === 'time',
+    })),
+  setSkyMotion: (skyMotion) => set({ skyMotion }),
   setActiveSection: (activeSection) => set({ activeSection }),
+  setCatalogueView: (catalogueView) => set({ catalogueView }),
   setFrontageSeparator: (index, separator) =>
     set((state) => ({
       frontageContexts: withFrontageSeparator(state.frontageContexts, index, separator),
@@ -71,8 +102,7 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
   setGroundCoverBrush: (patch) =>
     set((state) => ({ groundCoverBrush: { ...state.groundCoverBrush, ...patch } })),
   setGroundCoverTool: (groundCoverTool) => set({ groundCoverTool }),
-  setGroundCoverHeightAmount: (groundCoverHeightAmount) =>
-    set({ groundCoverHeightAmount }),
+  setGroundCoverHeightAmount: (groundCoverHeightAmount) => set({ groundCoverHeightAmount }),
   setSurfaceBrush: (patch) =>
     set((state) => ({ surfaceBrush: { ...state.surfaceBrush, ...patch } })),
   setSurfaceMaterial: (surfaceMaterial) =>
@@ -85,4 +115,5 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
       },
     })),
   setSurroundingsEnabled: (surroundingsEnabled) => set({ surroundingsEnabled }),
+  setSurroundingsSeed: (surroundingsSeed) => set({ surroundingsSeed }),
 }))

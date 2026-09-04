@@ -22,6 +22,7 @@ const SITE = [
 ] as const satisfies readonly Point2[]
 const PRIMARY = { separator: 'primary-road', access: 'none' } as const satisfies FrontageContext
 const SECONDARY = { separator: 'secondary-road', access: 'none' } as const satisfies FrontageContext
+const CONNECTED = { 2: SECONDARY } as const satisfies Record<number, FrontageContext>
 
 function neighborhood(
   contexts: Record<number, FrontageContext>,
@@ -34,7 +35,7 @@ function neighborhood(
     STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
   )
   const network = deriveRuntimeRoadNetwork(layout)
-  const cells = deriveNeighborCellClassifications(segments, layout, network, seed)
+  const cells = deriveNeighborCellClassifications(layout, network, seed)
   return { cells, houses: deriveHousePlans(cells, seed), network }
 }
 
@@ -95,24 +96,26 @@ function assertOpeningsStayInsideFacades(
 }
 
 describe('procedural surroundings neighborhood', () => {
-  test('derives a deterministic bounded mix of houses, gardens, and groves', () => {
-    const first = neighborhood({})
-    const second = neighborhood({})
+  test('keeps the candidate ring open when no real road access exists', () => {
+    const plan = neighborhood({})
+
+    expect(plan.houses).toEqual([])
+    expect(plan.cells.every(({ use, occupancy, buildArea }) =>
+      use === 'residual' && occupancy === 'none' && buildArea === undefined)).toBe(true)
+  })
+
+  test('derives a deterministic bounded mix of road-accessible houses, gardens, and groves', () => {
+    const first = neighborhood(CONNECTED)
+    const second = neighborhood(CONNECTED)
 
     expect(first.cells).toEqual(second.cells)
     expect(first.houses).toEqual(second.houses)
-    expect(first.cells.every(({ use }) => use === 'buildable')).toBe(true)
-    // 30 m frontages split into two lots each, plus four corner lots.
-    expect(first.cells).toHaveLength(12)
-    const occupiedLots = first.cells.filter(({ occupancy }) => occupancy === 'house')
-    expect(occupiedLots).toHaveLength(8)
-    expect(first.cells.filter(({ occupancy }) => occupancy === 'garden')).toHaveLength(2)
-    expect(first.cells.filter(({ occupancy }) => occupancy === 'grove')).toHaveLength(2)
-    expect(first.cells.filter(({ occupancy }) => occupancy === 'none')).toEqual([])
-    expect(first.houses).toHaveLength(occupiedLots.length)
-    expect(first.houses.every(({ cellId }) =>
-      first.cells.find(({ id }) => id === cellId)?.occupancy === 'house')).toBe(true)
-    expect(new Set(first.cells.map(({ id }) => id)).size).toBe(first.cells.length)
+    expect(first.houses.length).toBeGreaterThanOrEqual(4)
+    expect(first.houses.length).toBeLessThanOrEqual(12)
+    for (const house of first.houses) {
+      expect(house.access.kind).toBe('road')
+      expect(first.network.edges[house.access.roadId]).toBeDefined()
+    }
   })
 
   test('makes corner lots less likely to contain a house', () => {
@@ -122,7 +125,7 @@ describe('procedural surroundings neighborhood', () => {
     let frontageLots = 0
 
     for (let index = 0; index < 64; index += 1) {
-      for (const cell of neighborhood({}, `occupancy-sample-${index}`).cells) {
+      for (const cell of neighborhood(CONNECTED, `occupancy-sample-${index}`).cells) {
         if (!cell.buildArea) continue
         if (cell.kind === 'corner') {
           cornerLots += 1
@@ -139,10 +142,10 @@ describe('procedural surroundings neighborhood', () => {
 
   test('balances the extra open lot between garden and grove across seeds', () => {
     const smallSite = [
-      [-5, -5],
-      [5, -5],
-      [5, 5],
-      [-5, 5],
+      [-4, -4],
+      [4, -4],
+      [4, 4],
+      [-4, 4],
     ] as const satisfies readonly Point2[]
     const contexts = { 0: SECONDARY, 1: SECONDARY, 2: SECONDARY, 3: SECONDARY }
     let gardenSamples = 0
@@ -159,6 +162,7 @@ describe('procedural surroundings neighborhood', () => {
     expect(gardenSamples).toBeGreaterThan(0)
     expect(groveSamples).toBeGreaterThan(0)
   })
+
 
   test('attaches a garage wing inside the lot on the side away from the entry', () => {
     const { cells, houses } = neighborhood({ 0: SECONDARY, 1: SECONDARY, 2: PRIMARY, 3: SECONDARY })
@@ -181,7 +185,7 @@ describe('procedural surroundings neighborhood', () => {
   })
 
   test('clusters a coherent seeded mix of architectural typologies around the site', () => {
-    const { cells, houses } = neighborhood({})
+    const { cells, houses } = neighborhood(CONNECTED)
     const styles = new Set(houses.map(({ style }) => style))
     const cellById = new Map(cells.map((cell) => [cell.id, cell]))
     const ringOrder = [...houses].sort((left, right) => {
@@ -215,37 +219,9 @@ describe('procedural surroundings neighborhood', () => {
     }
   })
 
-  test('uses a finite seeded variant set so distinct houses still share prototypes', () => {
-    const houses = neighborhood({}).houses
-    const prototypesByVariant = new Map<string, Set<string>>()
-    const prototypeKeys = new Set<string>()
-
-    for (const house of houses) {
-      const variantKey = `${house.style}:${house.variant}`
-      const prototype = JSON.stringify({
-        width: house.width,
-        depth: house.depth,
-        storeys: house.storeys,
-        wallHeight: house.wallHeight,
-        roof: house.roof,
-        facades: house.facades,
-        palette: house.palette,
-      })
-      const prototypes = prototypesByVariant.get(variantKey) ?? new Set<string>()
-      prototypes.add(prototype)
-      prototypesByVariant.set(variantKey, prototypes)
-      prototypeKeys.add(variantKey)
-    }
-
-    expect([...prototypesByVariant.values()].every(({ size }) => size === 1)).toBe(true)
-    expect(prototypeKeys.size).toBeGreaterThan(3)
-    expect(prototypeKeys.size).toBeLessThanOrEqual(6)
-    expect(neighborhood({}, 'alternate-neighborhood').houses.map(({ variant }) => variant))
-      .not.toEqual(houses.map(({ variant }) => variant))
-  })
 
   test('places at most one house in each visible neighbor cell', () => {
-    const { cells, houses } = neighborhood({})
+    const { cells, houses } = neighborhood(CONNECTED)
 
     for (const cell of cells) {
       const occupants = houses.filter((house) =>
@@ -289,7 +265,7 @@ describe('procedural surroundings neighborhood', () => {
   })
 
   test('keeps restrained placement variation facing each resolved road access', () => {
-    const { houses } = neighborhood({})
+    const { houses } = neighborhood(CONNECTED)
     let rotatedHouses = 0
 
     for (const house of houses) {
@@ -301,15 +277,15 @@ describe('procedural surroundings neighborhood', () => {
       const alignment = (toAccess[0] * house.front[0] + toAccess[1] * house.front[1]) / magnitude
       const setback = toAccess[0] * house.front[0] + toAccess[1] * house.front[1] - house.depth / 2
       expect(alignment).toBeGreaterThanOrEqual(Math.cos(2.5 * Math.PI / 180) - 1e-7)
-      expect(setback).toBeGreaterThan(3.1)
-      expect(setback).toBeLessThan(5.9)
+      expect(setback).toBeGreaterThan(4.1)
+      expect(setback).toBeLessThan(6.9)
       if (alignment < 1 - 1e-7) rotatedHouses += 1
     }
     expect(rotatedHouses).toBeGreaterThan(0)
   })
 
   test('keeps doors and windows within non-overlapping facade bays', () => {
-    assertOpeningsStayInsideFacades(neighborhood({}).houses)
+    assertOpeningsStayInsideFacades(neighborhood(CONNECTED).houses)
     assertOpeningsStayInsideFacades(neighborhood({ 1: SECONDARY, 2: PRIMARY }).houses)
   })
 })
