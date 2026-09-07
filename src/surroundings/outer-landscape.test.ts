@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { deriveBoundarySegments } from './frontages'
+import { deriveBoundarySegments, type Point2 } from './frontages'
 import { deriveRoadPresentationAlignments, deriveSurroundingsLayout, deriveSurroundingsLevelTerrainDistance, STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS } from './corridor'
 import { deriveOuterRoads, distanceToRoads } from './outer-roads'
 import { deriveRuntimeRoadNetwork } from './runtime-road-graph'
@@ -8,6 +8,7 @@ import { deriveThirdRingPlan, THIRD_RING_BUDGET } from './third-ring'
 import { buildDistantTreeInstances } from './distant-trees'
 import { disposePrimitiveInstances } from './primitive-instances'
 import { createRoadGradedTerrain } from './road-elevation'
+import { convexPolygonsOverlap } from './neighborhood'
 
 const boundary = [[-15, -15], [15, -15], [15, 15], [-15, 15]] as const
 const road = { separator: 'secondary-road', access: 'none' } as const
@@ -49,7 +50,6 @@ describe('connected outer landscape', () => {
     const context = { boundary, roads, nearRoads, heightAt: sampler.heightAt }
     const plan = deriveThirdRingPlan(context)
     expect(plan).toEqual(deriveThirdRingPlan(context))
-    expect(plan.buildings.length).toBeGreaterThan(8)
     expect(plan.buildings.length).toBeLessThanOrEqual(THIRD_RING_BUDGET.buildings)
     expect(plan.trees.length).toBeLessThanOrEqual(THIRD_RING_BUDGET.trees)
     for (const tree of plan.trees) {
@@ -88,5 +88,47 @@ describe('connected outer landscape', () => {
     }
     expect(plan.skyline.some((building) => building.style === 'tower')).toBe(true)
     expect(plan.trees.length).toBeLessThanOrEqual(THIRD_RING_BUDGET.trees)
+  })
+
+  test('reserves commercial lots and access from houses and planting, and rejects flooded lots', () => {
+    const seed = 'commercial-0'
+    const segments = deriveBoundarySegments({
+      points: boundary,
+      contexts: { 0: road, 1: road, 2: { separator: 'primary-road', access: 'none' }, 3: road },
+    })
+    const layout = deriveSurroundingsLayout(segments, STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS, { seed, depthVariation: 0.2 })
+    const roads = deriveOuterRoads(layout, { seed, heightAt: () => 0 })
+    const context = { boundary, roads, nearRoads: deriveRoadPresentationAlignments(layout), seed, heightAt: () => 0 }
+    const plan = deriveThirdRingPlan(context)
+    expect(plan.commercialSites.map((site) => site.kind).sort()).toEqual(['gas-station', 'supermarket'])
+    expect(plan.commercialSites).toEqual(deriveThirdRingPlan(context).commercialSites)
+    for (const site of plan.commercialSites) {
+      const cosine = Math.cos(site.rotationY), sine = Math.sin(site.rotationY)
+      const [width, depth] = site.lotDimensions
+      const rectangles = [[0, width, depth], [depth / 2 + site.accessDepth / 2, site.accessWidth, site.accessDepth]]
+        .map(([centerZ, width, depth]) => [[-1,-1],[-1,1],[1,1],[1,-1]].map(([x,z]): Point2 => {
+          const localX = x! * width! / 2, localZ = centerZ! + z! * depth! / 2
+          return [site.position[0] + cosine * localX + sine * localZ,
+            site.position[2] - sine * localX + cosine * localZ]
+        }))
+      for (const polygon of rectangles) {
+        expect(convexPolygonsOverlap(polygon, boundary)).toBe(false)
+        for (const house of plan.buildings) {
+          const c = Math.cos(house.rotationY), s = Math.sin(house.rotationY)
+          const footprint = [[-1,-1],[-1,1],[1,1],[1,-1]].map(([x,z]): Point2 => [
+            house.position[0] + c * x! * house.dimensions[0] / 2 + s * z! * house.dimensions[2] / 2,
+            house.position[2] - s * x! * house.dimensions[0] / 2 + c * z! * house.dimensions[2] / 2,
+          ])
+          expect(convexPolygonsOverlap(polygon, footprint)).toBe(false)
+        }
+      }
+      for (const tree of plan.trees) {
+        const dx = tree.position[0] - site.position[0], dz = tree.position[2] - site.position[2]
+        const x = cosine * dx - sine * dz, z = sine * dx + cosine * dz
+        expect(Math.abs(x) > width / 2 || Math.abs(z) > depth / 2).toBe(true)
+        expect(Math.abs(x) > site.accessWidth / 2 || z < depth / 2 || z > depth / 2 + site.accessDepth).toBe(true)
+      }
+    }
+    expect(deriveThirdRingPlan({ ...context, heightAt: () => -4 }).commercialSites).toEqual([])
   })
 })

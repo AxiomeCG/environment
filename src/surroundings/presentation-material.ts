@@ -1,6 +1,6 @@
 import { Color, DataTexture, LinearFilter, LinearMipmapLinearFilter, RepeatWrapping, RGBAFormat, SRGBColorSpace, type Texture } from 'three'
 import { ImprovedNoise } from 'three/examples/jsm/math/ImprovedNoise.js'
-import { abs, attribute, cameraPosition, dFdx, dFdy, Fn, fract, If, materialColor, max, mix, normalGeometry, normalWorldGeometry, positionGeometry, positionWorld, smoothstep, step, texture, vec2, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, cameraPosition, dFdx, dFdy, float as tslFloat, floor, Fn, fract, hash, If, instanceIndex, materialColor, max, mix, normalGeometry, normalWorldGeometry, positionGeometry, positionWorld, smoothstep, step, texture, vec2, vec3, vec4 } from 'three/tsl'
 import { MeshBasicNodeMaterial, MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import type { Node, NodeBuilder } from 'three/webgpu'
 import {
@@ -21,20 +21,29 @@ import {
   buildPropertySurfaceTransitionNodes,
   type PropertySurfaceTransition,
 } from './property-surface'
+import { SURROUNDINGS_NIGHT_FACTOR } from './night-lighting'
 
-export type PresentationSurface = 'paint' | 'roof' | 'ground' | 'facade'
+export type PresentationSurface = 'paint' | 'roof' | 'ground' | 'facade' | 'window-lit'
 
 // A fixed, tiny texture set; neither a house palette nor a seed allocates a material.
 const materials = new Map<PresentationSurface, MeshStandardNodeMaterial>()
 const textures = new Map<PresentationSurface, DataTexture>()
 const HAZE_COLOR = new Color('#b6c6ca')
+const NIGHT_HAZE_COLOR = new Color('#091425')
+const WINDOW_LIGHT_COLOR = new Color('#ffd99a')
+const WINDOW_LIGHT_ALT_COLOR = new Color('#ffc274')
 
 // Shaded output only: no extra pass and no changes to authored scene materials.
 function withHaze(outputNode: Node): Node<'vec4'> {
   const distance = positionWorld.sub(cameraPosition).length()
-  const haze = smoothstep(160, 720, distance).mul(0.55)
+  const haze = smoothstep(160, 720, distance).mul(mix(0.55, 0.36, SURROUNDINGS_NIGHT_FACTOR))
+  const hazeColor = mix(
+    vec3(HAZE_COLOR.r, HAZE_COLOR.g, HAZE_COLOR.b),
+    vec3(NIGHT_HAZE_COLOR.r, NIGHT_HAZE_COLOR.g, NIGHT_HAZE_COLOR.b),
+    SURROUNDINGS_NIGHT_FACTOR,
+  )
   const shaded = outputNode as Node<'vec4'>
-  return vec4(mix(shaded.rgb, vec3(HAZE_COLOR.r, HAZE_COLOR.g, HAZE_COLOR.b), haze), shaded.a)
+  return vec4(mix(shaded.rgb, hazeColor, haze), shaded.a)
 }
 
 export class PresentationMaterial extends MeshStandardNodeMaterial {
@@ -98,10 +107,11 @@ export function getPresentationMaterial(surface: PresentationSurface): MeshStand
   if (cached) return cached
   const material = new PresentationMaterial({ color: surface === 'ground' ? '#7f9268' : '#ffffff', roughness: 0.94, metalness: 0 })
   material.name = `surroundings-${surface}`
-  const coordinates = surface === 'paint' || surface === 'facade'
+  const coordinates = surface === 'paint' || surface === 'facade' || surface === 'window-lit'
     ? vec2(positionWorld.x.add(positionWorld.z), positionWorld.y).mul(0.65)
     : positionWorld.xz.mul(surface === 'roof' ? 0.42 : 0.12)
-  const detail = texture(surfaceTexture(surface === 'facade' ? 'paint' : surface), coordinates).r
+  const detailSurface = surface === 'facade' || surface === 'window-lit' ? 'paint' : surface
+  const detail = texture(surfaceTexture(detailSurface), coordinates).r
   if (surface === 'ground') {
     const world = positionWorld.xz
     const rotated = vec2(world.x.mul(0.8).sub(world.y.mul(0.6)), world.x.mul(0.6).add(world.y.mul(0.8)))
@@ -109,17 +119,40 @@ export function getPresentationMaterial(surface: PresentationSurface): MeshStand
     const broadTint = mix(vec3(0.86, 0.9, 0.76), vec3(1.07, 1.02, 0.88), macro)
     material.colorNode = (materialColor as unknown as Node<'vec3'>).mul(broadTint).mul(detail.mul(0.16).add(0.88))
   } else if (surface === 'facade') {
-    // Windows and mullions share one opaque surface, not nearly coplanar boxes.
+    // Window bays remain part of the opaque facade batch. Stable instance/cell
+    // hashes light only a subset without adding geometry or material variants.
     const size = attribute<'vec3'>('facadeSize', 'vec3')
     const point = positionGeometry.add(0.5).mul(size)
     const horizontal = mix(point.x, point.z, step(0.5, abs(normalGeometry.x)))
+    const column = floor(horizontal.div(3.6))
+    const storey = floor(point.y.div(3.4))
     const u = fract(horizontal.div(3.6)), v = fract(point.y.div(3.4))
     const glazing = step(0.14, u).mul(step(u, 0.86)).mul(step(0.22, v)).mul(step(v, 0.8))
       .mul(step(abs(normalGeometry.y), 0.5))
       .mul(step(0.3, point.y)).mul(step(point.y, size.y.sub(0.3)))
+    const sectionSeed = tslFloat(instanceIndex).mul(191.37)
+    const occupied = step(0.18, hash(sectionSeed.add(17.1)))
+    const windowSeed = hash(sectionSeed.add(column.mul(37.7)).add(storey.mul(91.3)))
+    const lit = glazing.mul(occupied).mul(step(0.47, windowSeed)).mul(SURROUNDINGS_NIGHT_FACTOR)
     const wall = (materialColor as unknown as Node<'vec3'>).mul(detail.mul(0.2).add(0.82))
+    const warm = mix(
+      vec3(WINDOW_LIGHT_COLOR.r, WINDOW_LIGHT_COLOR.g, WINDOW_LIGHT_COLOR.b),
+      vec3(WINDOW_LIGHT_ALT_COLOR.r, WINDOW_LIGHT_ALT_COLOR.g, WINDOW_LIGHT_ALT_COLOR.b),
+      step(0.5, hash(sectionSeed.add(column.mul(59.9)).add(storey.mul(13.7)).add(991.3))),
+    )
     material.colorNode = mix(wall, vec3(0.15, 0.23, 0.26), glazing)
     material.roughnessNode = mix(0.94, 0.38, glazing)
+    material.emissiveNode = warm.mul(lit).mul(2.6)
+  } else if (surface === 'window-lit') {
+    // At day this is the same dark, painted glazing as before; only the shared
+    // night uniform changes roughness and emissive output.
+    material.colorNode = (materialColor as unknown as Node<'vec3'>).mul(detail.mul(0.3).add(0.77))
+    material.roughnessNode = mix(0.94, 0.42, SURROUNDINGS_NIGHT_FACTOR)
+    material.emissiveNode = vec3(
+      WINDOW_LIGHT_COLOR.r,
+      WINDOW_LIGHT_COLOR.g,
+      WINDOW_LIGHT_COLOR.b,
+    ).mul(SURROUNDINGS_NIGHT_FACTOR).mul(2.8)
   } else {
     material.colorNode = (materialColor as unknown as Node<'vec3'>).mul(detail.mul(0.3).add(0.77))
   }
@@ -199,7 +232,7 @@ export function createLandscapeGroundMaterial(
   const rock = max(smoothstep(0.12, 0.42, abs(normalWorldGeometry.y).oneMinus()), smoothstep(45, 120, positionWorld.y).mul(0.65))
   const field = texture(coverage.texture, world.sub(vec2(...coverage.origin)).div(vec2(coverage.width, coverage.depth)))
   const wheat = tint('#bba152').mul(grass.dot(vec3(0.2126, 0.7152, 0.0722)).mul(0.8).add(0.55))
-  const planting = mix(mix(ground, wheat, field.r), ground.mul(0.66), field.g)
+  const planting = mix(mix(mix(ground, wheat, field.r), ground.mul(0.88), field.g), ground.mul(0.94), field.b)
   const biome = mix(mix(planting, mix(soil, tint(palette.stone), 0.55), rock), mix(sand, tint(palette.sand), 0.5), shore)
   const regionalColor = biome.mul(macro)
   if (propertyTransition) {

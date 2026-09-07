@@ -36,4 +36,31 @@ describe('presentation road earthworks', () => {
     }
     expect(graded.heightAt(70, 12)).toBe(terrain.heightAt(70, 12))
   })
+
+  test('leaves wet channel terrain open instead of turning the road grade into an embankment', () => {
+    const channelTerrain: ExteriorTerrainSampler = {
+      heightAt: (x) => Math.abs(x - 45) <= 4 ? -2 : 0.4,
+      normalAt: () => [0, 1, 0],
+    }
+    const waterLevelAt = (x: number) => Math.abs(x - 45) <= 4 ? 0 : null
+    const graded = createRoadGradedTerrain(network, channelTerrain, boundary, waterLevelAt)
+
+    expect(graded.heightAt(45, 40)).toBe(-2)
+    expect(graded.heightAt(45, -40)).toBe(-2)
+    expect(graded.heightAt(45, 0)).toBe(-2)
+  })
+
+  test('keeps dry grading identical and preserves optional sampler metadata', () => {
+    const sectionSegments = () => 18
+    const source = { ...terrain, sectionSegments }
+    const ordinary = createRoadGradedTerrain(network, source, boundary)
+    const dryCallback = createRoadGradedTerrain(network, source, boundary, () => null)
+
+    for (const [x, z] of [[45, -70], [42, 12], [53, 28], [100, 50]] as const) {
+      expect(dryCallback.heightAt(x, z)).toBe(ordinary.heightAt(x, z))
+    }
+    expect((dryCallback as ExteriorTerrainSampler & {
+      sectionSegments: typeof sectionSegments
+    }).sectionSegments).toBe(sectionSegments)
+  })
 })

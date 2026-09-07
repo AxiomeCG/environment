@@ -30,6 +30,7 @@ export type ExteriorTerrainContext = Readonly<{
 export type ExteriorTerrainSampler = Readonly<{
   heightAt: (x: number, z: number) => number
   normalAt: (x: number, z: number) => readonly [number, number, number]
+  sectionSegments?: (address: ExteriorTerrainSectionAddress) => number
 }>
 
 export type ExteriorTerrainSection = Readonly<{
@@ -105,30 +106,30 @@ export function createExteriorTerrainSampler({
     : MINIMUM_RELIEF_START_DISTANCE
   const reliefFullDistance = reliefStartDistance + RELIEF_TRANSITION_DISTANCE
   const reference = polygonCentroid(boundary)
-  const landscapeHeight = createLandscapeHeight(reference,
-    Math.max(...boundary.map((point) => Math.hypot(point[0] - reference[0], point[1] - reference[1]))), seed)
+  const landscapeHeight = createLandscapeHeight(
+    reference,
+    Math.max(
+      ...boundary.map((point) => Math.hypot(point[0] - reference[0], point[1] - reference[1])),
+    ),
+    seed,
+  )
   const heightAt = (x: number, z: number): number => {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return 0
 
     const exteriorDistance = exteriorDistanceToBoundary(boundary, x, z)
-    const transfer = smoothstep(
-      reliefStartDistance,
-      reliefFullDistance,
-      exteriorDistance,
-    )
+    const transfer = smoothstep(reliefStartDistance, reliefFullDistance, exteriorDistance)
     const siteHeight = terrain && transfer < 1 ? surfaceHeightAt(terrain, x, z) : 0
-    const height = transfer === 0 ? siteHeight : siteHeight * (1 - transfer) + landscapeHeight(x, z) * transfer
+    const height =
+      transfer === 0 ? siteHeight : siteHeight * (1 - transfer) + landscapeHeight(x, z) * transfer
     return Number.isFinite(height) ? height : 0
   }
   const normalAt = (x: number, z: number): readonly [number, number, number] => {
-    const dhdx = (
-      heightAt(x + NORMAL_SAMPLE_DISTANCE, z)
-      - heightAt(x - NORMAL_SAMPLE_DISTANCE, z)
-    ) / (NORMAL_SAMPLE_DISTANCE * 2)
-    const dhdz = (
-      heightAt(x, z + NORMAL_SAMPLE_DISTANCE)
-      - heightAt(x, z - NORMAL_SAMPLE_DISTANCE)
-    ) / (NORMAL_SAMPLE_DISTANCE * 2)
+    const dhdx =
+      (heightAt(x + NORMAL_SAMPLE_DISTANCE, z) - heightAt(x - NORMAL_SAMPLE_DISTANCE, z)) /
+      (NORMAL_SAMPLE_DISTANCE * 2)
+    const dhdz =
+      (heightAt(x, z + NORMAL_SAMPLE_DISTANCE) - heightAt(x, z - NORMAL_SAMPLE_DISTANCE)) /
+      (NORMAL_SAMPLE_DISTANCE * 2)
     const length = Math.hypot(dhdx, 1, dhdz)
     if (!Number.isFinite(length) || length <= GEOMETRY_EPSILON) return [0, 1, 0]
     return [-dhdx / length, 1 / length, -dhdz / length]
@@ -145,41 +146,62 @@ export function createRenderedTerrainSampler(
   addresses: readonly ExteriorTerrainSectionAddress[],
 ): ExteriorTerrainSampler {
   if (!addresses.length) return source
-  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity
-  for (const address of addresses) {
-    minX = Math.min(minX, address.x); minZ = Math.min(minZ, address.z)
-    maxX = Math.max(maxX, address.x); maxZ = Math.max(maxZ, address.z)
-  }
-  const segments = EXTERIOR_TERRAIN_SECTION_SEGMENTS
-  const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / segments
-  const originX = minX * segments - 1, originZ = minZ * segments - 1
-  const columns = (maxX - minX + 1) * segments + 3
-  const rows = (maxZ - minZ + 1) * segments + 3
-  const heights = new Float32Array(columns * rows).fill(NaN)
-  const vertexHeight = (x: number, z: number): number => {
-    const column = x - originX, row = z - originZ
-    if (column < 0 || row < 0 || column >= columns || row >= rows) return source.heightAt(x * spacing, z * spacing)
-    const index = row * columns + column
-    if (Number.isNaN(heights[index])) heights[index] = source.heightAt(x * spacing, z * spacing)
+  const addressKeys = new Set(addresses.map(({ x, z }) => exteriorTerrainSectionKey(x, z)))
+  const sections = new Map<string, Float32Array>()
+  const vertexHeight = (
+    address: ExteriorTerrainSectionAddress,
+    segments: number,
+    column: number,
+    row: number,
+  ): number => {
+    let heights = sections.get(address.key)
+    if (!heights || heights.length !== (segments + 1) ** 2) {
+      heights = new Float32Array((segments + 1) ** 2).fill(NaN)
+      sections.set(address.key, heights)
+    }
+    const index = row * (segments + 1) + column
+    if (Number.isNaN(heights[index]!)) {
+      heights[index] = stitchedTerrainVertexHeight(source, address, segments, column, row)
+    }
     return heights[index]!
   }
   const heightAt = (x: number, z: number): number => {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return source.heightAt(x, z)
-    const gridX = x / spacing, gridZ = z / spacing
-    const column = Math.floor(gridX), row = Math.floor(gridZ)
-    const u = gridX - column, v = gridZ - row
-    const east = vertexHeight(column + 1, row), north = vertexHeight(column, row + 1)
-    if (u + v <= 1) return vertexHeight(column, row) * (1 - u - v) + east * u + north * v
-    return vertexHeight(column + 1, row + 1) * (u + v - 1) + east * (1 - v) + north * (1 - u)
+    const address = exteriorTerrainSectionAddressAt(x, z)
+    if (!addressKeys.has(address.key)) return source.heightAt(x, z)
+    const segments = terrainSectionSegments(source, address)
+    const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / segments
+    const originX = address.x * EXTERIOR_TERRAIN_SECTION_SIZE
+    const originZ = address.z * EXTERIOR_TERRAIN_SECTION_SIZE
+    const localX = Math.max(0, Math.min(segments, (x - originX) / spacing))
+    const localZ = Math.max(0, Math.min(segments, (z - originZ) / spacing))
+    const column = Math.min(segments - 1, Math.floor(localX))
+    const row = Math.min(segments - 1, Math.floor(localZ))
+    const u = localX - column
+    const v = localZ - row
+    const east = vertexHeight(address, segments, column + 1, row)
+    const north = vertexHeight(address, segments, column, row + 1)
+    if (u + v <= 1) {
+      return vertexHeight(address, segments, column, row) * (1 - u - v) + east * u + north * v
+    }
+    return (
+      vertexHeight(address, segments, column + 1, row + 1) * (u + v - 1) +
+      east * (1 - v) +
+      north * (1 - u)
+    )
   }
   const normalAt = (x: number, z: number): readonly [number, number, number] => {
+    const address = exteriorTerrainSectionAddressAt(x, z)
+    const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / terrainSectionSegments(source, address)
     const dx = heightAt(x - spacing, z) - heightAt(x + spacing, z)
     const dz = heightAt(x, z - spacing) - heightAt(x, z + spacing)
     const dy = spacing * 2
     const length = Math.hypot(dx, dy, dz)
-    return [dx / length, dy / length, dz / length]
+    return length > GEOMETRY_EPSILON && Number.isFinite(length)
+      ? [dx / length, dy / length, dz / length]
+      : [0, 1, 0]
   }
-  return { heightAt, normalAt }
+  return { ...source, heightAt, normalAt }
 }
 
 export function buildExteriorTerrainSection(
@@ -187,7 +209,7 @@ export function buildExteriorTerrainSection(
   sampler: ExteriorTerrainSampler,
   boundary: readonly Point2[],
 ): ExteriorTerrainSection {
-  const segments = EXTERIOR_TERRAIN_SECTION_SEGMENTS
+  const segments = terrainSectionSegments(sampler, address)
   const verticesPerSide = segments + 1
   const vertexCount = verticesPerSide * verticesPerSide
   const positions = new Float32Array(vertexCount * 3)
@@ -197,35 +219,62 @@ export function buildExteriorTerrainSection(
   const originX = address.x * EXTERIOR_TERRAIN_SECTION_SIZE
   const originZ = address.z * EXTERIOR_TERRAIN_SECTION_SIZE
   const bounds = boundaryBounds(boundary)
-  const needsBoundaryClip = originX <= bounds.maxX && originX + EXTERIOR_TERRAIN_SECTION_SIZE >= bounds.minX
-    && originZ <= bounds.maxZ && originZ + EXTERIOR_TERRAIN_SECTION_SIZE >= bounds.minZ
+  const needsBoundaryClip =
+    originX <= bounds.maxX &&
+    originX + EXTERIOR_TERRAIN_SECTION_SIZE >= bounds.minX &&
+    originZ <= bounds.maxZ &&
+    originZ + EXTERIOR_TERRAIN_SECTION_SIZE >= bounds.minZ
   const clippedPositions: number[] = []
   const clippedNormals: number[] = []
   let exteriorTriangles: Point2[][] | undefined
   const appendBoundarySkirt = (polygon: readonly Point2[]) => {
     for (let index = 0; index < polygon.length; index += 1) {
-      const start = polygon[index]!, end = polygon[(index + 1) % polygon.length]!
-      const dx = end[0] - start[0], dz = end[1] - start[1]
+      const start = polygon[index]!,
+        end = polygon[(index + 1) % polygon.length]!
+      const dx = end[0] - start[0],
+        dz = end[1] - start[1]
       const length = Math.hypot(dx, dz)
-      if (length <= GEOMETRY_EPSILON || !boundary.some((edge, edgeIndex) => {
-        const next = boundary[(edgeIndex + 1) % boundary.length]!
-        return distanceToSegment(edge, next, ...start) <= GEOMETRY_EPSILON
-          && distanceToSegment(edge, next, ...end) <= GEOMETRY_EPSILON
-      })) continue
+      if (
+        length <= GEOMETRY_EPSILON ||
+        !boundary.some((edge, edgeIndex) => {
+          const next = boundary[(edgeIndex + 1) % boundary.length]!
+          return (
+            distanceToSegment(edge, next, ...start) <= GEOMETRY_EPSILON &&
+            distanceToSegment(edge, next, ...end) <= GEOMETRY_EPSILON
+          )
+        })
+      )
+        continue
       const base = vertexCount + clippedPositions.length / 3
-      const startHeight = sampler.heightAt(...start), endHeight = sampler.heightAt(...end)
+      const startHeight = sampler.heightAt(...start),
+        endHeight = sampler.heightAt(...end)
       // Close the deliberate road-clearance offset without covering the Site
       // or raising the terrain beneath any road.
       clippedPositions.push(
-        start[0], startHeight, start[1], end[0], endHeight, end[1],
-        start[0], startHeight - EXTERIOR_TERRAIN_GROUND_OFFSET, start[1],
-        end[0], endHeight - EXTERIOR_TERRAIN_GROUND_OFFSET, end[1],
+        start[0],
+        startHeight,
+        start[1],
+        end[0],
+        endHeight,
+        end[1],
+        start[0],
+        startHeight - EXTERIOR_TERRAIN_GROUND_OFFSET,
+        start[1],
+        end[0],
+        endHeight - EXTERIOR_TERRAIN_GROUND_OFFSET,
+        end[1],
       )
-      for (let vertex = 0; vertex < 4; vertex += 1) clippedNormals.push(-dz / length, 0, dx / length)
+      for (let vertex = 0; vertex < 4; vertex += 1)
+        clippedNormals.push(-dz / length, 0, dx / length)
       indexValues.push(base, base + 1, base + 2, base + 1, base + 3, base + 2)
     }
   }
-  const appendTriangle = (triangle: readonly [Point2, Point2, Point2], a: number, b: number, c: number) => {
+  const appendTriangle = (
+    triangle: readonly [Point2, Point2, Point2],
+    a: number,
+    b: number,
+    c: number,
+  ) => {
     if (!triangleOverlapsPolygonInterior(triangle, boundary)) {
       indexValues.push(a, b, c)
       appendBoundarySkirt(triangle)
@@ -244,10 +293,12 @@ export function buildExteriorTerrainSection(
       const hole = boundary.map(([x, z]) => new Vector2(x, z))
       const faces = ShapeUtils.triangulateShape(contour, [hole])
       const points = [...contour, ...hole]
-      exteriorTriangles = faces.map((face) => face.map((index): Point2 => {
-        const point = points[index]!
-        return [point.x, point.y]
-      }))
+      exteriorTriangles = faces.map((face) =>
+        face.map((index): Point2 => {
+          const point = points[index]!
+          return [point.x, point.y]
+        }),
+      )
     }
     for (const exterior of exteriorTriangles) {
       const polygon = clipConvexPolygon(triangle, exterior)
@@ -258,7 +309,8 @@ export function buildExteriorTerrainSection(
         clippedNormals.push(...sampler.normalAt(x, z))
       }
       for (let index = 1; index < polygon.length - 1; index += 1) {
-        if (Math.abs(cross2(polygon[0]!, polygon[index]!, polygon[index + 1]!)) <= GEOMETRY_EPSILON) continue
+        if (Math.abs(cross2(polygon[0]!, polygon[index]!, polygon[index + 1]!)) <= GEOMETRY_EPSILON)
+          continue
         indexValues.push(base, base + index, base + index + 1)
       }
       appendBoundarySkirt(polygon)
@@ -270,8 +322,8 @@ export function buildExteriorTerrainSection(
     for (let column = 0; column < verticesPerSide; column += 1) {
       const x = originX + column * spacing
       const offset = (row * verticesPerSide + column) * 3
-      const height = sampler.heightAt(x, z)
-      const normal = sampler.normalAt(x, z)
+      const height = stitchedTerrainVertexHeight(sampler, address, segments, column, row)
+      const normal = stitchedTerrainVertexNormal(sampler, address, segments, column, row)
       positions.set([x, height, z], offset)
       normals.set(normal, offset)
     }
@@ -289,7 +341,11 @@ export function buildExteriorTerrainSection(
         indexValues.push(first, nextRow, nextColumn, nextColumn, nextRow, diagonal)
         continue
       }
-      const firstTriangle = [[x, z], [x, z + spacing], [x + spacing, z]] as const
+      const firstTriangle = [
+        [x, z],
+        [x, z + spacing],
+        [x + spacing, z],
+      ] as const
       const secondTriangle = [
         [x + spacing, z],
         [x, z + spacing],
@@ -307,7 +363,12 @@ export function buildExteriorTerrainSection(
     mergedPositions.set(clippedPositions, positions.length)
     mergedNormals.set(normals)
     mergedNormals.set(clippedNormals, normals.length)
-    return { address, indices: new Uint32Array(indexValues), normals: mergedNormals, positions: mergedPositions }
+    return {
+      address,
+      indices: new Uint32Array(indexValues),
+      normals: mergedNormals,
+      positions: mergedPositions,
+    }
   }
   return { address, indices: new Uint32Array(indexValues), normals, positions }
 }
@@ -326,7 +387,8 @@ export function buildExteriorTerrainSections(
   )
   const sampler = createExteriorTerrainSampler(context)
   return orderedAddresses.map((address) =>
-    buildExteriorTerrainSection(address, sampler, context.boundary))
+    buildExteriorTerrainSection(address, sampler, context.boundary),
+  )
 }
 
 export function mergeExteriorTerrainSections(
@@ -365,6 +427,139 @@ export function mergeExteriorTerrainSections(
   }
 }
 
+const MAX_EXTERIOR_TERRAIN_SECTION_SEGMENTS = 40
+
+export function terrainSectionSegments(
+  sampler: ExteriorTerrainSampler,
+  address: ExteriorTerrainSectionAddress,
+): number {
+  const requested = sampler.sectionSegments?.(address)
+  if (!Number.isFinite(requested)) return EXTERIOR_TERRAIN_SECTION_SEGMENTS
+  // Nested subdivisions retain every coarse edge vertex; arbitrary counts
+  // interpolate across coarse kinks and leave cracks between section meshes.
+  let segments = EXTERIOR_TERRAIN_SECTION_SEGMENTS
+  while (segments < requested! && segments < MAX_EXTERIOR_TERRAIN_SECTION_SEGMENTS) {
+    segments *= 2
+  }
+  return segments
+}
+
+function stitchedTerrainVertexHeight(
+  sampler: ExteriorTerrainSampler,
+  address: ExteriorTerrainSectionAddress,
+  segments: number,
+  column: number,
+  row: number,
+): number {
+  const interpolation = coarserEdgeInterpolation(sampler, address, segments, column, row)
+  if (interpolation) {
+    return (
+      sampler.heightAt(interpolation.x0, interpolation.z0) * (1 - interpolation.amount) +
+      sampler.heightAt(interpolation.x1, interpolation.z1) * interpolation.amount
+    )
+  }
+  const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / segments
+  return sampler.heightAt(
+    address.x * EXTERIOR_TERRAIN_SECTION_SIZE + column * spacing,
+    address.z * EXTERIOR_TERRAIN_SECTION_SIZE + row * spacing,
+  )
+}
+
+function stitchedTerrainVertexNormal(
+  sampler: ExteriorTerrainSampler,
+  address: ExteriorTerrainSectionAddress,
+  segments: number,
+  column: number,
+  row: number,
+): readonly [number, number, number] {
+  const interpolation = coarserEdgeInterpolation(sampler, address, segments, column, row)
+  if (!interpolation) {
+    const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / segments
+    return sampler.normalAt(
+      address.x * EXTERIOR_TERRAIN_SECTION_SIZE + column * spacing,
+      address.z * EXTERIOR_TERRAIN_SECTION_SIZE + row * spacing,
+    )
+  }
+  const first = sampler.normalAt(interpolation.x0, interpolation.z0)
+  const second = sampler.normalAt(interpolation.x1, interpolation.z1)
+  const x = first[0] * (1 - interpolation.amount) + second[0] * interpolation.amount
+  const y = first[1] * (1 - interpolation.amount) + second[1] * interpolation.amount
+  const z = first[2] * (1 - interpolation.amount) + second[2] * interpolation.amount
+  const length = Math.hypot(x, y, z)
+  return length > GEOMETRY_EPSILON ? [x / length, y / length, z / length] : [0, 1, 0]
+}
+
+function coarserEdgeInterpolation(
+  sampler: ExteriorTerrainSampler,
+  address: ExteriorTerrainSectionAddress,
+  segments: number,
+  column: number,
+  row: number,
+): Readonly<{ x0: number; z0: number; x1: number; z1: number; amount: number }> | null {
+  let neighbor: ExteriorTerrainSectionAddress | null = null
+  let along = 0
+  let horizontal = false
+  if (column === 0) {
+    neighbor = {
+      key: exteriorTerrainSectionKey(address.x - 1, address.z),
+      x: address.x - 1,
+      z: address.z,
+    }
+    along = row / segments
+  } else if (column === segments) {
+    neighbor = {
+      key: exteriorTerrainSectionKey(address.x + 1, address.z),
+      x: address.x + 1,
+      z: address.z,
+    }
+    along = row / segments
+  } else if (row === 0) {
+    neighbor = {
+      key: exteriorTerrainSectionKey(address.x, address.z - 1),
+      x: address.x,
+      z: address.z - 1,
+    }
+    along = column / segments
+    horizontal = true
+  } else if (row === segments) {
+    neighbor = {
+      key: exteriorTerrainSectionKey(address.x, address.z + 1),
+      x: address.x,
+      z: address.z + 1,
+    }
+    along = column / segments
+    horizontal = true
+  }
+  if (!neighbor) return null
+  const neighborSegments = terrainSectionSegments(sampler, neighbor)
+  if (neighborSegments >= segments) return null
+  const coarse = along * neighborSegments
+  const lower = Math.floor(coarse)
+  if (Math.abs(coarse - lower) <= GEOMETRY_EPSILON) return null
+  const amount = coarse - lower
+  const low = lower / neighborSegments
+  const high = (lower + 1) / neighborSegments
+  const baseX = address.x * EXTERIOR_TERRAIN_SECTION_SIZE
+  const baseZ = address.z * EXTERIOR_TERRAIN_SECTION_SIZE
+  if (horizontal) {
+    const z = row === 0 ? baseZ : baseZ + EXTERIOR_TERRAIN_SECTION_SIZE
+    return {
+      x0: baseX + low * EXTERIOR_TERRAIN_SECTION_SIZE,
+      z0: z,
+      x1: baseX + high * EXTERIOR_TERRAIN_SECTION_SIZE,
+      z1: z,
+      amount,
+    }
+  }
+  const x = column === 0 ? baseX : baseX + EXTERIOR_TERRAIN_SECTION_SIZE
+  return {
+    x0: x,
+    z0: baseZ + low * EXTERIOR_TERRAIN_SECTION_SIZE,
+    x1: x,
+    z1: baseZ + high * EXTERIOR_TERRAIN_SECTION_SIZE,
+    amount,
+  }
+}
 
 function exteriorDistanceToBoundary(boundary: readonly Point2[], x: number, z: number): number {
   if (pointInPolygon(boundary, x, z)) return 0
@@ -406,12 +601,15 @@ function triangleOverlapsPolygonInterior(
     const triangleStart = triangle[triangleIndex]!
     const triangleEnd = triangle[(triangleIndex + 1) % triangle.length]!
     for (let boundaryIndex = 0; boundaryIndex < boundary.length; boundaryIndex += 1) {
-      if (segmentsProperlyIntersect(
-        triangleStart,
-        triangleEnd,
-        boundary[boundaryIndex]!,
-        boundary[(boundaryIndex + 1) % boundary.length]!,
-      )) return true
+      if (
+        segmentsProperlyIntersect(
+          triangleStart,
+          triangleEnd,
+          boundary[boundaryIndex]!,
+          boundary[(boundaryIndex + 1) % boundary.length]!,
+        )
+      )
+        return true
     }
   }
   return false
@@ -419,12 +617,11 @@ function triangleOverlapsPolygonInterior(
 
 function pointInPolygonInterior(boundary: readonly Point2[], x: number, z: number): boolean {
   for (let index = 0; index < boundary.length; index += 1) {
-    if (distanceToSegment(
-      boundary[index]!,
-      boundary[(index + 1) % boundary.length]!,
-      x,
-      z,
-    ) <= GEOMETRY_EPSILON) return false
+    if (
+      distanceToSegment(boundary[index]!, boundary[(index + 1) % boundary.length]!, x, z) <=
+      GEOMETRY_EPSILON
+    )
+      return false
   }
   return pointInPolygon(boundary, x, z)
 }
@@ -434,9 +631,12 @@ function pointInTriangleInterior(
   triangle: readonly [Point2, Point2, Point2],
 ): boolean {
   const crosses = triangle.map((start, index) =>
-    cross2(start, triangle[(index + 1) % triangle.length]!, point))
-  return crosses.every((cross) => cross > GEOMETRY_EPSILON)
-    || crosses.every((cross) => cross < -GEOMETRY_EPSILON)
+    cross2(start, triangle[(index + 1) % triangle.length]!, point),
+  )
+  return (
+    crosses.every((cross) => cross > GEOMETRY_EPSILON) ||
+    crosses.every((cross) => cross < -GEOMETRY_EPSILON)
+  )
 }
 
 function segmentsProperlyIntersect(
@@ -450,29 +650,27 @@ function segmentsProperlyIntersect(
   const secondA = cross2(secondStart, secondEnd, firstStart)
   const secondB = cross2(secondStart, secondEnd, firstEnd)
   const opposite = (left: number, right: number) =>
-    (left > GEOMETRY_EPSILON && right < -GEOMETRY_EPSILON)
-    || (left < -GEOMETRY_EPSILON && right > GEOMETRY_EPSILON)
+    (left > GEOMETRY_EPSILON && right < -GEOMETRY_EPSILON) ||
+    (left < -GEOMETRY_EPSILON && right > GEOMETRY_EPSILON)
   return opposite(firstA, firstB) && opposite(secondA, secondB)
 }
 
 function cross2(start: Point2, end: Point2, point: Point2): number {
-  return (end[0] - start[0]) * (point[1] - start[1])
-    - (end[1] - start[1]) * (point[0] - start[0])
+  return (end[0] - start[0]) * (point[1] - start[1]) - (end[1] - start[1]) * (point[0] - start[0])
 }
 
 function pointInPolygon(boundary: readonly Point2[], x: number, z: number): boolean {
   let inside = false
-  for (let currentIndex = 0, previousIndex = boundary.length - 1;
+  for (
+    let currentIndex = 0, previousIndex = boundary.length - 1;
     currentIndex < boundary.length;
-    previousIndex = currentIndex, currentIndex += 1) {
+    previousIndex = currentIndex, currentIndex += 1
+  ) {
     const current = boundary[currentIndex]!
     const previous = boundary[previousIndex]!
-    const crosses = (current[1] > z) !== (previous[1] > z)
-      && x < (
-        (previous[0] - current[0]) * (z - current[1])
-        / (previous[1] - current[1])
-        + current[0]
-      )
+    const crosses =
+      current[1] > z !== previous[1] > z &&
+      x < ((previous[0] - current[0]) * (z - current[1])) / (previous[1] - current[1]) + current[0]
     if (crosses) inside = !inside
   }
   return inside
@@ -504,9 +702,11 @@ export function polygonCentroid(boundary: readonly Point2[]): Point2 {
 }
 
 function hasUsableBoundary(boundary: readonly Point2[]): boolean {
-  return boundary.length >= 3
-    && boundary.every(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
-    && Math.abs(signedDoubleArea(boundary)) > GEOMETRY_EPSILON
+  return (
+    boundary.length >= 3 &&
+    boundary.every(([x, z]) => Number.isFinite(x) && Number.isFinite(z)) &&
+    Math.abs(signedDoubleArea(boundary)) > GEOMETRY_EPSILON
+  )
 }
 
 function signedDoubleArea(boundary: readonly Point2[]): number {

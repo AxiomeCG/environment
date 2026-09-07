@@ -22,12 +22,15 @@ const LONGITUDINAL_VARIATION = 0.75
 const SETBACK_VARIATION = 1.25
 const ORIENTATION_VARIATION = 2.5 * Math.PI / 180
 
-const HOUSE_STYLES = ['cottage', 'farmhouse', 'pavilion'] as const
-const HOUSE_STYLE_CLUSTER_PATTERN = [0, 1, 0, 2, 1, 0] as const
+const HOUSE_STYLES = ['cottage', 'farmhouse', 'pavilion', 'townhouse', 'bungalow'] as const
+// Adjacent frontage positions share one cluster; the sequence still exposes
+// every archetype before repeating instead of reducing variation to palette.
+const HOUSE_STYLE_CLUSTER_PATTERN = [0, 1, 2, 3, 4, 1, 3, 0, 4, 2] as const
 
 export type HouseStyle = (typeof HOUSE_STYLES)[number]
 
 export type HouseVariant = 0 | 1
+export type HouseRoofKind = 'gable' | 'gambrel' | 'hip'
 
 type HouseGarageParameters = Readonly<{
   width: number
@@ -46,21 +49,55 @@ type HouseVariantParameters = Readonly<{
   garage?: HouseGarageParameters
 }>
 
+type HouseArchetypeParameters = Readonly<{
+  storeys: 1 | 2
+  roofKind: HouseRoofKind
+  variants: readonly HouseVariantParameters[]
+}>
+
 const GARAGE: HouseGarageParameters = { width: 3.6, depth: 6.2, wallHeight: 2.5 }
 
-const HOUSE_VARIANTS: Readonly<Record<HouseStyle, readonly HouseVariantParameters[]>> = {
-  cottage: [
-    { variant: 0, width: 7.1, depth: 8.2, wallHeight: 2.65, pitchDegrees: 36, overhang: 0.52 },
-    { variant: 1, width: 7.4, depth: 9, wallHeight: 2.82, pitchDegrees: 40, overhang: 0.62, garage: GARAGE },
-  ],
-  farmhouse: [
-    { variant: 0, width: 6.6, depth: 9, wallHeight: 5.1, pitchDegrees: 40, overhang: 0.48 },
-    { variant: 1, width: 6.8, depth: 9.8, wallHeight: 5.4, pitchDegrees: 44, overhang: 0.56, garage: GARAGE },
-  ],
-  pavilion: [
-    { variant: 0, width: 8.8, depth: 6.5, wallHeight: 2.55, pitchDegrees: 22, overhang: 0.68 },
-    { variant: 1, width: 8.9, depth: 7.2, wallHeight: 2.75, pitchDegrees: 26, overhang: 0.78, garage: GARAGE },
-  ],
+const HOUSE_ARCHETYPES: Readonly<Record<HouseStyle, HouseArchetypeParameters>> = {
+  cottage: {
+    storeys: 1,
+    roofKind: 'gable',
+    variants: [
+      { variant: 0, width: 7.1, depth: 8.2, wallHeight: 2.65, pitchDegrees: 36, overhang: 0.52 },
+      { variant: 1, width: 7.4, depth: 9, wallHeight: 2.82, pitchDegrees: 40, overhang: 0.62, garage: GARAGE },
+    ],
+  },
+  farmhouse: {
+    storeys: 2,
+    roofKind: 'gambrel',
+    variants: [
+      { variant: 0, width: 6.6, depth: 9, wallHeight: 5.1, pitchDegrees: 40, overhang: 0.48 },
+      { variant: 1, width: 6.8, depth: 9.8, wallHeight: 5.4, pitchDegrees: 44, overhang: 0.56, garage: GARAGE },
+    ],
+  },
+  pavilion: {
+    storeys: 1,
+    roofKind: 'hip',
+    variants: [
+      { variant: 0, width: 8.8, depth: 6.5, wallHeight: 2.55, pitchDegrees: 22, overhang: 0.68 },
+      { variant: 1, width: 8.9, depth: 7.2, wallHeight: 2.75, pitchDegrees: 26, overhang: 0.78, garage: GARAGE },
+    ],
+  },
+  townhouse: {
+    storeys: 2,
+    roofKind: 'gable',
+    variants: [
+      { variant: 0, width: 5.6, depth: 9, wallHeight: 5.35, pitchDegrees: 31, overhang: 0.38 },
+      { variant: 1, width: 6.2, depth: 9.7, wallHeight: 5.7, pitchDegrees: 35, overhang: 0.44 },
+    ],
+  },
+  bungalow: {
+    storeys: 1,
+    roofKind: 'hip',
+    variants: [
+      { variant: 0, width: 10.2, depth: 6.4, wallHeight: 2.45, pitchDegrees: 14, overhang: 0.62 },
+      { variant: 1, width: 9.7, depth: 7, wallHeight: 2.58, pitchDegrees: 18, overhang: 0.7, garage: GARAGE },
+    ],
+  },
 }
 
 const HOUSE_PALETTES = [
@@ -202,7 +239,7 @@ export type HousePlan = Readonly<{
   storeys: 1 | 2
   wallHeight: number
   roof: Readonly<{
-    kind: 'gable' | 'gambrel' | 'hip'
+    kind: HouseRoofKind
     pitchDegrees: number
     overhang: number
   }>
@@ -544,7 +581,7 @@ function orderedHouseVariants(
   cell: NeighborCellDescriptor,
   seed: string,
 ): readonly HouseVariantParameters[] {
-  const variants = HOUSE_VARIANTS[houseStyleForCell(cell, seed)]
+  const variants = HOUSE_ARCHETYPES[houseStyleForCell(cell, seed)].variants
   const preferredIndex = Math.min(
     variants.length - 1,
     Math.floor(seededUnit(seed, `house-variant:${cell.id}`) * variants.length),
@@ -762,28 +799,56 @@ function houseFacades(
   doorSign: -1 | 1,
   garageSide: -1 | 1 | 0,
 ): HouseFacadePlan[] {
-  const doorOffsetFactor = style === 'pavilion' ? 0.31 : style === 'farmhouse' ? 0.18 : 0.24
+  // Two restrained rhythms per archetype vary bay spacing without turning
+  // windows into independent noise or allowing them to escape the facade.
+  const alternateRhythm = seededUnit(seed, 'facade-rhythm') >= 0.5
+  const broadSingleStorey = style === 'pavilion' || style === 'bungalow'
+  const doorOffsetFactor = style === 'pavilion'
+    ? 0.31
+    : style === 'bungalow'
+      ? 0.32
+      : style === 'townhouse'
+        ? 0.25
+        : style === 'farmhouse'
+          ? 0.18
+          : 0.24
   const doorOffset = doorSign * Math.min(width * doorOffsetFactor, width / 2 - 1.05)
-  const frontWindowWidth = style === 'pavilion'
-    ? Math.min(1.65, width * 0.19)
-    : Math.min(1.4, width * 0.21)
+  const frontWindowWidth = style === 'bungalow'
+    ? Math.min(2, width * 0.22)
+    : style === 'pavilion'
+      ? Math.min(1.65, width * 0.19)
+      : style === 'townhouse'
+        ? Math.min(1.15, width * 0.2)
+        : Math.min(1.4, width * 0.21)
   const frontWindowOffsets = style === 'pavilion'
-    ? [-doorSign * width * 0.22, 0]
-    : [-doorSign * Math.min(width * 0.22, width / 2 - 0.9)]
+    ? [-doorSign * width * (alternateRhythm ? 0.2 : 0.22), 0]
+    : style === 'bungalow'
+      ? [-doorSign * width * (alternateRhythm ? 0.18 : 0.21)]
+      : [
+          -doorSign * Math.min(
+            width * (alternateRhythm ? 0.2 : 0.23),
+            width / 2 - 0.9,
+          ),
+        ]
   const frontWindows = windowsForStoreys(storeys, frontWindowOffsets, frontWindowWidth)
   if (storeys === 2) {
-    frontWindows.push(...windowsForStoreys(1, [doorOffset], Math.min(1.2, width * 0.19)).map(
+    const upperDoorBayWidth = style === 'townhouse'
+      ? Math.min(1.05, width * 0.18)
+      : Math.min(1.2, width * 0.19)
+    frontWindows.push(...windowsForStoreys(1, [doorOffset], upperDoorBayWidth).map(
       (opening): HouseOpening => ({ ...opening, bottom: 3.25 }),
     ))
   }
 
-  const backOffset = Math.min(width * 0.24, width / 2 - 0.9)
-  const backOffsets = style === 'pavilion'
-    ? [-width * 0.22, 0, width * 0.22]
+  const backFactor = alternateRhythm ? 0.2 : 0.23
+  const backOffset = Math.min(width * backFactor, width / 2 - 0.9)
+  const backOffsets = broadSingleStorey
+    ? [-width * backFactor, 0, width * backFactor]
     : [-backOffset, backOffset]
-  const sideWindowWidth = Math.min(1.4, depth * 0.18)
-  const sideOffsets = style === 'pavilion'
-    ? [-depth * 0.2, depth * 0.2]
+  const sideWindowWidth = Math.min(style === 'bungalow' ? 1.65 : 1.4, depth * 0.2)
+  const sideFactor = alternateRhythm ? 0.18 : 0.21
+  const sideOffsets = broadSingleStorey
+    ? [-depth * sideFactor, depth * sideFactor]
     : [0]
 
   // The wing covers the front two thirds of the body's side wall, so that
@@ -798,8 +863,8 @@ function houseFacades(
         {
           kind: 'door',
           offset: doorOffset,
-          width: style === 'pavilion' ? 1.06 : 0.96,
-          height: style === 'farmhouse' ? 2.25 : 2.14,
+          width: broadSingleStorey ? 1.06 : 0.96,
+          height: storeys === 2 ? 2.25 : 2.14,
           bottom: 0,
         },
         ...frontWindows,
@@ -811,7 +876,13 @@ function houseFacades(
       openings: windowsForStoreys(
         storeys,
         backOffsets,
-        style === 'pavilion' ? 1.45 : Math.min(1.3, width * 0.2),
+        style === 'bungalow'
+          ? 1.65
+          : style === 'pavilion'
+            ? 1.45
+            : style === 'townhouse'
+              ? Math.min(1.15, width * 0.2)
+              : Math.min(1.3, width * 0.2),
       ),
     },
     { side: 'left', openings: sideOpenings(-1) },
@@ -827,13 +898,13 @@ export function deriveHousePlans(
     if (!area || cell.occupancy !== 'house') return []
 
     const style = houseStyleForCell(cell, seed)
-    const size = HOUSE_VARIANTS[style][area.variant]!
-    const storeys: 1 | 2 = style === 'farmhouse' ? 2 : 1
-    const prototypeSeed = `${seed}:${style}:v${area.variant}`
+    const archetype = HOUSE_ARCHETYPES[style]
+    const size = archetype.variants[area.variant]!
+    const facadeSeed = `${seed}:${cell.id}:${style}:v${area.variant}`
     const palette = HOUSE_PALETTES[
       hashString(`${seed}:${cell.id}:palette`) % HOUSE_PALETTES.length
     ]!
-    const doorSign: -1 | 1 = seededUnit(prototypeSeed, 'door-side') < 0.5 ? -1 : 1
+    const doorSign: -1 | 1 = seededUnit(facadeSeed, 'door-side') < 0.5 ? -1 : 1
     // Garage on the side away from the entry so the driveway and the front
     // path never cross.
     const garageSide: -1 | 1 = doorSign === 1 ? -1 : 1
@@ -849,19 +920,19 @@ export function deriveHousePlans(
       right: area.right,
       footprint: area.footprint,
       style,
-      storeys,
+      storeys: archetype.storeys,
       wallHeight: size.wallHeight,
       roof: {
-        kind: style === 'farmhouse' ? 'gambrel' : style === 'pavilion' ? 'hip' : 'gable',
+        kind: archetype.roofKind,
         pitchDegrees: size.pitchDegrees,
         overhang: size.overhang,
       },
       facades: houseFacades(
-        prototypeSeed,
+        facadeSeed,
         style,
         size.width,
         size.depth,
-        storeys,
+        archetype.storeys,
         doorSign,
         size.garage ? garageSide : 0,
       ),

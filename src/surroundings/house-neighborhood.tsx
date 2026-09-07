@@ -6,6 +6,7 @@ import type { HousePlan } from './neighborhood'
 import { disposePrimitiveInstances, PrimitiveInstances } from './primitive-instances'
 import type { HousePrimitive } from './primitive-instances'
 import type { PresentationSurface } from './presentation-material'
+import { windowSurface } from './night-lighting'
 
 export type HouseNeighborhoodProps = Readonly<{ plans: readonly HousePlan[]; heightAt?: (x: number, z: number) => number }>
 const FOUNDATION_HEIGHT = 0.18
@@ -73,20 +74,25 @@ export function buildPascalHouseInstances(
     for (const facade of plan.facades) {
       const frame = houseFacadeFrame(plan, facade.side)
       const faceYaw = Math.atan2(frame.outward[0], frame.outward[1])
-      for (const opening of facade.openings) {
+      for (const [openingIndex, opening] of facade.openings.entries()) {
         const centerX = frame.center[0] + frame.right[0] * opening.offset
         const centerZ = frame.center[1] + frame.right[1] * opening.offset
-        const openingBox = (width: number, height: number, offsetY: number, outward: number, color: string) => {
+        const openingBox = (width: number, height: number, offsetY: number, outward: number,
+          color: string, surface: PresentationSurface = 'paint') => {
           position.set(centerX + frame.outward[0] * outward,
             groundLevel + FOUNDATION_HEIGHT + opening.bottom + opening.height / 2 + offsetY,
             centerZ + frame.outward[1] * outward)
           rotation.setFromEuler(euler.set(0, faceYaw, 0))
           matrix.compose(position, rotation, scale.set(width, height, 0.045))
-          instances.add('box', 'paint', color, matrix)
+          instances.add('box', surface, color, matrix)
           primitiveCount += 1
         }
         openingBox(opening.width + 0.14, opening.height + 0.14, 0, 0.04, palette.trim)
-        openingBox(opening.width, opening.height, 0, 0.07, opening.kind === 'door' ? palette.door : palette.glass)
+        openingBox(opening.width, opening.height, 0, 0.07,
+          opening.kind === 'door' ? palette.door : palette.glass,
+          opening.kind === 'window'
+            ? windowSurface(plan.id, `${facade.side}:${openingIndex}`)
+            : 'paint')
         if (opening.kind === 'window') {
           openingBox(0.045, opening.height, 0, 0.095, palette.trim)
           if (facade.side === 'front') {
@@ -98,16 +104,28 @@ export function buildPascalHouseInstances(
     }
     const door = plan.facades.find(({ side }) => side === 'front')?.openings.find(({ kind }) => kind === 'door')
     if (door) {
-      const width = plan.style === 'farmhouse' ? body.width * 0.82 : plan.style === 'pavilion' ? 4.2 : 2.5
-      const depth = 1.45
+      const targetPorchWidth = plan.style === 'farmhouse'
+        ? body.width * 0.82
+        : plan.style === 'pavilion'
+          ? 4.2
+          : plan.style === 'bungalow'
+            ? body.width * 0.58
+            : plan.style === 'townhouse'
+              ? 2.1
+              : 2.5
+      const width = Math.min(body.width - 0.36, targetPorchWidth)
+      const depth = plan.style === 'bungalow' ? 1.05 : plan.style === 'townhouse' ? 1.2 : 1.45
+      const roofY = Math.min(2.66, wallTop - 0.04)
+      const columnHeight = roofY - FOUNDATION_HEIGHT - 0.065
       const x = body.offset + door.offset
       const z = plan.depth / 2 + depth / 2 - 0.12
       add('box', 'paint', palette.foundation, x, 0.18, z, width, 0.18, depth)
       add('box', 'paint', palette.foundation, x, 0.065, z + depth / 2 + 0.18, 1.4, 0.13, 0.45)
-      add('box', 'roof', palette.roof, x, 2.66, z, width + 0.4, 0.13, depth + 0.35, 0.12)
+      add('box', 'roof', palette.roof, x, roofY, z, Math.min(body.width, width + 0.4), 0.13, depth + 0.35, 0.12)
       for (const side of [-1, 1]) {
-        add('box', 'paint', palette.trim, x + side * (width / 2 - 0.18), 1.38, z + depth / 2 - 0.15,
-          0.13, 2.4, 0.13)
+        add('box', 'paint', palette.trim, x + side * (width / 2 - 0.18),
+          FOUNDATION_HEIGHT + columnHeight / 2, z + depth / 2 - 0.15,
+          0.13, columnHeight, 0.13)
       }
     }
     const garage = plan.garage
@@ -124,7 +142,7 @@ export function buildPascalHouseInstances(
       add('box', 'paint', palette.door, offset[0], FOUNDATION_HEIGHT + garage.door.height / 2, offset[1] + garage.depth / 2 + 0.07,
         garage.door.width, garage.door.height, 0.04)
     }
-    if (plan.style !== 'pavilion') {
+    if (plan.style === 'cottage' || plan.style === 'farmhouse' || plan.style === 'townhouse') {
       add('box', 'paint', palette.accent, body.offset + body.width * 0.22, wallTop + roofHeight * 0.7, -plan.depth * 0.25,
         0.5, roofHeight * 0.9, 0.65)
     }

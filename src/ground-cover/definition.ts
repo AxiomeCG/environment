@@ -5,6 +5,7 @@ import { buildGrassFieldGeometry } from './geometry'
 import { grassFieldParametrics } from './parametrics'
 import {
   DEFAULT_GRASS_BLADE_HEIGHT,
+  DEFAULT_GRASS_BLADE_REST_BEND,
   DEFAULT_GRASS_BLADE_WIDTH,
   GrassFieldNode,
 } from './schema'
@@ -23,7 +24,7 @@ type GrassFieldDefinition = Omit<
 
 export const grassFieldDefinition: GrassFieldDefinition = {
   kind: 'environment:ground-cover',
-  schemaVersion: 1,
+  schemaVersion: 2,
   schema: GrassFieldNode,
   category: 'furnish',
 
@@ -38,6 +39,7 @@ export const grassFieldDefinition: GrassFieldDefinition = {
     bladeWidthVariation: 20,
     bladeHeight: DEFAULT_GRASS_BLADE_HEIGHT,
     bladeHeightVariation: 20,
+    bladeRestBend: DEFAULT_GRASS_BLADE_REST_BEND,
     bladeTintVariation: 20,
     bladeTipBrightness: 300,
     density: 100,

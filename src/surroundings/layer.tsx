@@ -3,9 +3,13 @@
 import { terrainFieldOf, useScene } from '@pascal-app/core'
 import type { AnyNodeId, SiteNode } from '@pascal-app/core'
 import { useThree } from '@react-three/fiber'
+import { useViewer } from '@pascal-app/viewer'
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type { ComponentType } from 'react'
 import { Color, DoubleSide, FrontSide } from 'three'
+import { useShallow } from 'zustand/react/shallow'
+import { RIVER_KIND, type RiverNode } from '../river/schema'
+import { riverTerrainBaseline } from '../river/terrain'
 import { useEnvironmentStore } from '../store'
 import { loadPresentationAlbedos } from '../surface-material/materials'
 import type { PresentationAlbedos } from '../surface-material/materials'
@@ -58,18 +62,31 @@ import {
 } from './streetscape-road-presentation'
 
 import { DistantTrees } from './distant-trees'
+import { DistantBirds } from './distant-birds'
 // EZ-Tree loads browser textures at module scope; preserve the SSR boundary.
-const NeighborhoodTrees = lazy(() => import('./neighborhood-trees').then((module) => ({ default: module.NeighborhoodTrees })))
+const NeighborhoodTrees = lazy(() =>
+  import('./neighborhood-trees').then((module) => ({ default: module.NeighborhoodTrees })),
+)
 import { deriveThirdRingPlan, type FieldPatch } from './third-ring'
 import { ThirdRing } from './third-ring-renderer'
-import { applyRoadSurfaceDetail, createLandscapeGroundMaterial, PresentationBasicMaterial, PresentationMaterial } from './presentation-material'
+import {
+  applyRoadSurfaceDetail,
+  createLandscapeGroundMaterial,
+  PresentationMaterial,
+} from './presentation-material'
+import { SurroundingsNightLighting } from './night-lighting'
 import { deriveOuterRoads } from './outer-roads'
 import { CoastalSea } from './coastal-sea'
 import { createRoadGradedTerrain } from './road-elevation'
 import type { RoadNetworkNode } from './streetscape/schema'
-import type { LandscapeRegion } from './landscape-region'
+import { deriveLandscapeRegion, type LandscapeRegion } from './landscape-region'
+import { SEA_LEVEL } from './landscape-noise'
+import { createRiverLandscape, type RiverLandscape } from './river-landscape'
+import { RiverLandscapeWater } from './river-landscape-water'
+import { createRiverBridges } from './river-bridges'
+import { RiverBridges } from './river-bridges-renderer'
 import { Boulders } from './boulders'
-import { buildFieldCoverageTexture, FieldVegetation } from './field-vegetation'
+import { buildFieldCoverageTexture } from './field-coverage'
 import { createPropertySurfaceTransition } from './property-surface'
 import type { PropertySurfaceTransition } from './property-surface'
 
@@ -83,6 +100,7 @@ type PresentedLayout = Readonly<{
   nearRoads: readonly RoadPresentationAlignmentDescriptor[]
   levelTerrainDistance: number
   network: RoadNetworkNode | null
+  landscape: RiverLandscape | null
 }>
 
 export type RoadSurfaceBatch = Readonly<{
@@ -104,7 +122,9 @@ export type RoadSurfaceBatch = Readonly<{
 type MutableRoadSurfaceBatch = {
   -readonly [Key in keyof RoadSurfaceBatch]: Key extends 'geometry'
     ? { positions: number[]; indices: number[] }
-    : Key extends 'triangleColors' ? number[] : RoadSurfaceBatch[Key]
+    : Key extends 'triangleColors'
+      ? number[]
+      : RoadSurfaceBatch[Key]
 }
 
 const EMPTY_ROAD_PLAN: RoadPresentationPlan = {
@@ -121,7 +141,6 @@ const EMPTY_DECORATION_PLAN: NeighborhoodDecorationPlan = {
   trees: [],
 }
 
-
 const EMPTY_PRESENTED_LAYOUT: PresentedLayout = {
   houses: [],
   decorations: EMPTY_DECORATION_PLAN,
@@ -132,6 +151,7 @@ const EMPTY_PRESENTED_LAYOUT: PresentedLayout = {
   road: EMPTY_ROAD_PLAN,
   levelTerrainDistance: 0,
   network: null,
+  landscape: null,
 }
 
 function disableRaycast(): void {}
@@ -148,21 +168,25 @@ function roadSurfaceBatchKey(surface: RoadPresentationSurface | RoadSurfaceBatch
     surface.polygonOffsetFactor,
   ])
 }
-const roadMaterials = new Map<string, PresentationBasicMaterial | PresentationMaterial>()
+const roadMaterials = new Map<string, PresentationMaterial>()
 
 function roadMaterial(surface: RoadSurfaceBatch) {
   const key = roadSurfaceBatchKey(surface)
   const cached = roadMaterials.get(key)
   if (cached) return cached
-  const material = surface.material === 'basic'
-    ? new PresentationBasicMaterial()
-    : new PresentationMaterial({ roughness: surface.roughness, metalness: surface.metalness })
+  // Road markings used to choose an unlit Basic material, which made them
+  // glaring at night. Both paint and asphalt now use matte scene lighting;
+  // only standard road surfaces receive aggregate/weathering detail.
+  const material = new PresentationMaterial({
+    roughness: surface.roughness,
+    metalness: surface.metalness,
+  })
   material.vertexColors = true
   material.depthWrite = surface.depthWrite
   material.polygonOffset = true
   material.polygonOffsetFactor = surface.polygonOffsetFactor
   material.side = surface.doubleSided ? DoubleSide : FrontSide
-  if (material instanceof PresentationMaterial) applyRoadSurfaceDetail(material)
+  if (surface.material === 'standard') applyRoadSurfaceDetail(material)
   roadMaterials.set(key, material)
   return material
 }
@@ -231,35 +255,58 @@ function ExteriorGroundMesh({
   fields: readonly FieldPatch[]
   propertyTransition: PropertySurfaceTransition
 }) {
-  const geometry = useMemo(() => mergeExteriorTerrainSections(
-    sections.map((address) => buildExteriorTerrainSection(address, sampler, site.polygon.points)),
-  ), [sections, sampler, site.polygon.points])
+  const geometry = useMemo(
+    () =>
+      mergeExteriorTerrainSections(
+        sections.map((address) =>
+          buildExteriorTerrainSection(address, sampler, site.polygon.points),
+        ),
+      ),
+    [sections, sampler, site.polygon.points],
+  )
   const [albedos, setAlbedos] = useState<PresentationAlbedos | null>(null)
   useEffect(() => {
     let mounted = true
-    loadPresentationAlbedos().then((textures) => {
-      if (mounted) setAlbedos(textures)
-    }).catch((error) => console.error('[Environment] Surroundings albedo loading failed', error))
-    return () => { mounted = false }
+    loadPresentationAlbedos()
+      .then((textures) => {
+        if (mounted) setAlbedos(textures)
+      })
+      .catch((error) => console.error('[Environment] Surroundings albedo loading failed', error))
+    return () => {
+      mounted = false
+    }
   }, [])
   const coverage = useMemo(() => buildFieldCoverageTexture(fields), [fields])
   const material = useMemo(
-    () => createLandscapeGroundMaterial(
-      region,
-      coverage,
-      albedos,
-      site.polygon.points,
-      seed,
-      propertyTransition,
-    ),
+    () =>
+      createLandscapeGroundMaterial(
+        region,
+        coverage,
+        albedos,
+        site.polygon.points,
+        seed,
+        propertyTransition,
+      ),
     [region, coverage, albedos, site.polygon.points, seed, propertyTransition],
   )
-  useEffect(() => () => { coverage.texture.dispose() }, [coverage])
-  useEffect(() => () => { material.dispose() }, [material])
+  useEffect(
+    () => () => {
+      coverage.texture.dispose()
+    },
+    [coverage],
+  )
+  useEffect(
+    () => () => {
+      material.dispose()
+    },
+    [material],
+  )
   const mesh = useSurfaceMesh(geometry, material)
 
   return (
-    <primitive object={mesh} dispose={null}
+    <primitive
+      object={mesh}
+      dispose={null}
       name="environment-exterior-ground"
       position={[0, EXTERIOR_TERRAIN_GROUND_OFFSET, 0]}
       raycast={disableRaycast}
@@ -274,17 +321,33 @@ function ExteriorGroundMesh({
   )
 }
 
-
-function RoadSurfaceMesh({ surface, heightAt }: { surface: RoadSurfaceBatch; heightAt: (x: number, z: number) => number }) {
+function RoadSurfaceMesh({
+  surface,
+  terrain,
+  bridgeHeightAt,
+}: {
+  surface: RoadSurfaceBatch
+  terrain: ExteriorTerrainSampler
+  bridgeHeightAt?: (x: number, z: number) => number
+}) {
   const geometry = useMemo(
-    () => buildTerrainRoadGeometry(surface.geometry.positions, surface.geometry.indices, heightAt, surface.triangleColors),
-    [surface.geometry, surface.triangleColors, heightAt],
+    () =>
+      buildTerrainRoadGeometry(
+        surface.geometry.positions,
+        surface.geometry.indices,
+        terrain.heightAt,
+        surface.triangleColors,
+        { terrain, bridgeHeightAt },
+      ),
+    [surface.geometry, surface.triangleColors, terrain, bridgeHeightAt],
   )
   const material = roadMaterial(surface)
   const mesh = useSurfaceMesh(geometry, material)
 
   return (
-    <primitive object={mesh} dispose={null}
+    <primitive
+      object={mesh}
+      dispose={null}
       name={surface.name}
       raycast={disableRaycast}
       receiveShadow={surface.receiveShadow}
@@ -293,18 +356,38 @@ function RoadSurfaceMesh({ surface, heightAt }: { surface: RoadSurfaceBatch; hei
   )
 }
 
-export default function SurroundingsLayer({ groundReplacementComponent: GroundReplacement }: {
+export default function SurroundingsLayer({
+  groundReplacementComponent: GroundReplacement,
+}: {
   /** Host-owned, scene-scoped replacement of the fallback horizon ground. */
   groundReplacementComponent: ComponentType
 }) {
   const active = useEnvironmentStore((state) => state.surroundingsEnabled)
   const frontageContexts = useEnvironmentStore((state) => state.frontageContexts)
   const seed = useEnvironmentStore((state) => state.surroundingsSeed)
+  const birdsEnabled = useEnvironmentStore((state) => state.birdsEnabled)
+  const ambientMotion = useEnvironmentStore((state) => state.ambientMotion)
+  const walkthroughMode = useViewer((state) => state.walkthroughMode)
+  const walkthroughSuspended = useViewer((state) => state.walkthroughSuspended)
+  const renderPaused = useViewer((state) => state.renderPaused)
   const site = useScene((state) => {
     const siteId = state.rootNodeIds.find((id) => state.nodes[id]?.type === 'site')
     return siteId ? (state.nodes[siteId] as SiteNode) : undefined
   })
   const boundary = site?.polygon.points
+  const rivers = useScene(
+    useShallow((state) => {
+      const result: RiverNode[] = []
+      if (!site) return result
+      for (const id of site.children) {
+        const child = state.nodes[id as AnyNodeId]
+        if ((child?.type as string | undefined) === RIVER_KIND && child?.visible !== false) {
+          result.push(child as unknown as RiverNode)
+        }
+      }
+      return result
+    }),
+  )
   const surfaceMaterial = useScene((state) => {
     if (!site) return undefined
     for (const childId of site.children) {
@@ -332,34 +415,23 @@ export default function SurroundingsLayer({ groundReplacementComponent: GroundRe
     }
     const transition = createPropertySurfaceTransition()
     setPropertySurface({ siteId: activeSiteId, transition })
-    return () => { transition.dispose() }
+    return () => {
+      transition.dispose()
+    }
   }, [activeSiteId])
-  const propertyTransition = propertySurface && propertySurface.siteId === activeSiteId
-    ? propertySurface.transition
-    : null
+  const propertyTransition =
+    propertySurface && propertySurface.siteId === activeSiteId ? propertySurface.transition : null
   useLayoutEffect(() => {
     if (!propertyTransition || !boundary) return
-    propertyTransition.update(
-      boundary,
-      surfaceField,
-      surfaceMaterial?.textureSize ?? 100,
-    )
+    propertyTransition.update(boundary, surfaceField, surfaceMaterial?.textureSize ?? 100)
     invalidate()
-  }, [
-    propertyTransition,
-    boundary,
-    surfaceField,
-    surfaceMaterial?.textureSize,
-    invalidate,
-  ])
+  }, [propertyTransition, boundary, surfaceField, surfaceMaterial?.textureSize, invalidate])
   const exteriorTerrainSections = useMemo(
-    () => active && site
-      ? deriveExteriorTerrainSectionAddresses(site.polygon.points)
-      : [],
+    () => (active && site ? deriveExteriorTerrainSectionAddresses(site.polygon.points) : []),
     [active, site],
   )
   const presentedLayout = useMemo(() => {
-    if (!active || !boundary) return EMPTY_PRESENTED_LAYOUT
+    if (!active || !boundary || !site) return EMPTY_PRESENTED_LAYOUT
 
     let segments: BoundarySegment[]
     let layout: SurroundingsLayoutDescriptor
@@ -369,11 +441,10 @@ export default function SurroundingsLayer({ groundReplacementComponent: GroundRe
         points: boundary,
         contexts: frontageContexts,
       })
-      layout = deriveSurroundingsLayout(
-        segments,
-        STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS,
-        { seed, depthVariation: 0.2 },
-      )
+      layout = deriveSurroundingsLayout(segments, STREETSCAPE_SURROUNDINGS_CORRIDOR_DIMENSIONS, {
+        seed,
+        depthVariation: 0.2,
+      })
       levelTerrainDistance = deriveSurroundingsLevelTerrainDistance(
         segments,
         layout,
@@ -383,14 +454,19 @@ export default function SurroundingsLayer({ groundReplacementComponent: GroundRe
       return EMPTY_PRESENTED_LAYOUT
     }
 
-
     try {
       const terrain = createExteriorTerrainSampler({
-        boundary, levelTerrainDistance, terrain: site ? terrainFieldOf(site) : null, seed,
+        boundary,
+        levelTerrainDistance,
+        terrain: riverTerrainBaseline(site),
+        seed,
       })
+      const landscape = createRiverLandscape(site, rivers, terrain, deriveLandscapeRegion(seed))
       const outerRoads = deriveOuterRoads(layout, { seed, heightAt: terrain.heightAt })
       const network = deriveRuntimeRoadNetwork(layout, outerRoads)
-      const neighborCells = deriveNeighborCellClassifications(layout, network, seed)
+      const neighborCells = deriveNeighborCellClassifications(layout, network, seed).filter(
+        (cell) => !landscape.intersectsFootprint(cell.polygon, 1.5),
+      )
       const houses = deriveHousePlans(neighborCells, seed)
       let road = EMPTY_ROAD_PLAN
       try {
@@ -408,6 +484,21 @@ export default function SurroundingsLayer({ groundReplacementComponent: GroundRe
           road,
           seed,
         )
+        decorations = {
+          ...decorations,
+          catalogProps: decorations.catalogProps.filter(
+            ({ position }) => landscape.waterLevelAt(position[0], position[1]) === null,
+          ),
+          streetLights: decorations.streetLights.filter(
+            ({ position }) => landscape.waterLevelAt(position[0], position[1]) === null,
+          ),
+          trees: decorations.trees.filter(
+            ({ position }) => landscape.waterLevelAt(position[0], position[1]) === null,
+          ),
+          paving: decorations.paving.filter(
+            ({ polygon }) => !landscape.intersectsFootprint(polygon),
+          ),
+        }
       } catch {
         // Decorative props must not own the house lifecycle.
       }
@@ -421,16 +512,19 @@ export default function SurroundingsLayer({ groundReplacementComponent: GroundRe
         road,
         levelTerrainDistance,
         network,
+        landscape,
       }
     } catch {
       return {
-        neighborCells: layout.neighborCells.map((cell): ClassifiedNeighborCell => ({
-          ...cell,
-          lotIndex: 0,
-          roadCoverage: 0,
-          use: 'residual',
-          occupancy: 'none',
-        })),
+        neighborCells: layout.neighborCells.map(
+          (cell): ClassifiedNeighborCell => ({
+            ...cell,
+            lotIndex: 0,
+            roadCoverage: 0,
+            use: 'residual',
+            occupancy: 'none',
+          }),
+        ),
         decorations: EMPTY_DECORATION_PLAN,
         outerRoads: [],
         nearRoads: [],
@@ -439,47 +533,71 @@ export default function SurroundingsLayer({ groundReplacementComponent: GroundRe
         road: EMPTY_ROAD_PLAN,
         levelTerrainDistance,
         network: null,
+        landscape: null,
       }
     }
-  }, [active, frontageContexts, boundary, seed, site])
+  }, [active, frontageContexts, boundary, seed, site, rivers])
   const distantLandscape = useMemo(() => {
     if (!active || !site) return null
-    const terrain = createExteriorTerrainSampler({
-      boundary: site.polygon.points,
-      levelTerrainDistance: presentedLayout.levelTerrainDistance,
-      terrain: terrainFieldOf(site),
-      seed,
-    })
-    const sampler = createRenderedTerrainSampler(presentedLayout.network
-      ? createRoadGradedTerrain(presentedLayout.network, terrain, site.polygon.points)
-      : terrain, exteriorTerrainSections)
+    const landscape = presentedLayout.landscape
+    const terrain =
+      landscape?.sampler ??
+      createExteriorTerrainSampler({
+        boundary: site.polygon.points,
+        levelTerrainDistance: presentedLayout.levelTerrainDistance,
+        terrain: terrainFieldOf(site),
+        seed,
+      })
+    const waterLevelAt = (x: number, z: number) =>
+      landscape?.waterLevelAt(x, z) ?? (terrain.heightAt(x, z) < SEA_LEVEL ? SEA_LEVEL : null)
+    const sampler = createRenderedTerrainSampler(
+      presentedLayout.network
+        ? createRoadGradedTerrain(
+            presentedLayout.network,
+            terrain,
+            site.polygon.points,
+            waterLevelAt,
+          )
+        : terrain,
+      exteriorTerrainSections,
+    )
+    const bridges = presentedLayout.network
+      ? createRiverBridges(presentedLayout.network, sampler, waterLevelAt)
+      : { heightAt: sampler.heightAt, spans: [] }
     const context = {
       boundary: site.polygon.points,
       corridors: presentedLayout.corridors,
       roads: presentedLayout.outerRoads,
       nearRoads: presentedLayout.nearRoads,
-      exclusions: presentedLayout.houses.map((house) => house.footprint),
+      exclusions: [
+        ...presentedLayout.houses.map((house) => house.footprint),
+        ...(landscape?.exclusions ?? []),
+      ],
       heightAt: sampler.heightAt,
       levelTerrainDistance: presentedLayout.levelTerrainDistance,
       seed,
     }
     const thirdRing = deriveThirdRingPlan(context)
-    return { thirdRing, sampler, foliage: deriveHorizonFoliagePlan(context) }
+    const foliage = deriveHorizonFoliagePlan(context).filter(
+      ({ position }) => waterLevelAt(position[0], position[2]) === null,
+    )
+    return { thirdRing, sampler, bridges, foliage }
   }, [active, site, presentedLayout, seed, exteriorTerrainSections])
   const roadSurfaceBatches = useMemo(
     () => buildRoadSurfaceBatches(presentedLayout.road.surfaces),
     [presentedLayout.road.surfaces],
   )
-  const hasPresentation = active && (
-    exteriorTerrainSections.length > 0
-    || presentedLayout.neighborCells.length > 0
-    || roadSurfaceBatches.length > 0
-  )
+  const hasPresentation =
+    active &&
+    (exteriorTerrainSections.length > 0 ||
+      presentedLayout.neighborCells.length > 0 ||
+      roadSurfaceBatches.length > 0)
 
   if (!hasPresentation || !site || !distantLandscape || !propertyTransition) return null
 
   return (
     <group name="environment-surroundings-root">
+      <SurroundingsNightLighting />
       <GroundReplacement />
       <group name="exterior-terrain-chunks">
         <ExteriorGroundMesh
@@ -493,19 +611,51 @@ export default function SurroundingsLayer({ groundReplacementComponent: GroundRe
         />
       </group>
 
-      <HouseNeighborhood plans={presentedLayout.houses} heightAt={distantLandscape.sampler.heightAt} />
-      <NeighborhoodShadows houses={presentedLayout.houses} trees={presentedLayout.decorations.trees} heightAt={distantLandscape.sampler.heightAt} />
-      <NeighborhoodDecorations plan={presentedLayout.decorations} heightAt={distantLandscape.sampler.heightAt} />
+      <HouseNeighborhood
+        plans={presentedLayout.houses}
+        heightAt={distantLandscape.sampler.heightAt}
+      />
+      <NeighborhoodShadows
+        houses={presentedLayout.houses}
+        trees={presentedLayout.decorations.trees}
+        heightAt={distantLandscape.sampler.heightAt}
+      />
+      <NeighborhoodDecorations
+        plan={presentedLayout.decorations}
+        heightAt={distantLandscape.sampler.heightAt}
+      />
       {distantLandscape && (
         <>
           <Suspense fallback={null}>
-            <NeighborhoodTrees plans={presentedLayout.decorations.trees} horizonPlans={distantLandscape.foliage} heightAt={distantLandscape.sampler.heightAt} />
+            <NeighborhoodTrees
+              plans={presentedLayout.decorations.trees}
+              horizonPlans={distantLandscape.foliage}
+              heightAt={distantLandscape.sampler.heightAt}
+            />
           </Suspense>
           <DistantTrees plans={distantLandscape.thirdRing.trees} />
-          <CoastalSea sections={exteriorTerrainSections} sampler={distantLandscape.sampler} boundary={site.polygon.points} region={distantLandscape.thirdRing.region} />
+          {birdsEnabled ? (
+            <DistantBirds
+              boundary={site.polygon.points}
+              heightAt={distantLandscape.sampler.heightAt}
+              moving={
+                !renderPaused && (ambientMotion || (walkthroughMode && !walkthroughSuspended))
+              }
+              seed={seed}
+            />
+          ) : null}
+          <CoastalSea
+            sections={exteriorTerrainSections}
+            sampler={distantLandscape.sampler}
+            boundary={site.polygon.points}
+            region={distantLandscape.thirdRing.region}
+          />
+          {presentedLayout.landscape ? (
+            <RiverLandscapeWater landscape={presentedLayout.landscape} />
+          ) : null}
+          <RiverBridges spans={distantLandscape.bridges.spans} />
           <ThirdRing plan={distantLandscape.thirdRing} />
           <Boulders plans={distantLandscape.thirdRing.boulders} />
-          <FieldVegetation plans={distantLandscape.thirdRing.fields} heightAt={distantLandscape.sampler.heightAt} />
         </>
       )}
 
@@ -517,7 +667,14 @@ export default function SurroundingsLayer({ groundReplacementComponent: GroundRe
         }}
       >
         {roadSurfaceBatches.map((surface) => (
-          <RoadSurfaceMesh key={surface.id} surface={surface} heightAt={distantLandscape.sampler.heightAt} />
+          <RoadSurfaceMesh
+            key={surface.id}
+            surface={surface}
+            terrain={distantLandscape.sampler}
+            bridgeHeightAt={
+              distantLandscape.bridges.spans.length ? distantLandscape.bridges.heightAt : undefined
+            }
+          />
         ))}
       </group>
     </group>

@@ -90,6 +90,36 @@ describe('Ground Cover static bake geometry', () => {
     expect(raisedBounds.max.y).toBeCloseTo(baselineBounds.max.y * 2, 5)
   })
 
+  test('bakes rest curvature with a fixed root and lowered tip', () => {
+    const site = smallSite()
+    const straight = GrassFieldNode.parse({
+      id: 'grass-field_straight_bake',
+      parentId: site.id,
+      bladeHeightVariation: 0,
+      bladeWidthVariation: 0,
+      bladeRestBend: 0,
+    })
+    const curved = GrassFieldNode.parse({
+      ...straight,
+      id: 'grass-field_curved_bake',
+      bladeRestBend: 0.5,
+    })
+
+    const straightBounds = new Box3().setFromObject(
+      buildGrassFieldBakeGeometry(straight, contextFor(site, [site])),
+    )
+    const curvedBounds = new Box3().setFromObject(
+      buildGrassFieldBakeGeometry(curved, contextFor(site, [site])),
+    )
+
+    expect(straightBounds.min.y).toBeCloseTo(curvedBounds.min.y, 8)
+    expect(curvedBounds.max.y).toBeCloseTo(
+      (straight.bladeHeight * Math.sin(0.5)) / 0.5,
+      5,
+    )
+    expect(curvedBounds.max.y).toBeLessThan(straightBounds.max.y)
+  })
+
   test('bakes the painted RGB directly as glTF linear vertex colors', async () => {
     const site = smallSite()
     const node = GrassFieldNode.parse({

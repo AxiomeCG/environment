@@ -1,9 +1,10 @@
 'use client'
 
 import { useScene } from '@pascal-app/core'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
 import { type ComponentType, useEffect, useMemo, useRef } from 'react'
 import { useEnvironmentStore } from '../store'
+import { registerActiveSolar, type ActiveSolarRegistration } from './active-solar'
 import { wrap } from './settings'
 import { createSkyProvider, type SkyProvider } from './sky-provider'
 
@@ -23,14 +24,24 @@ export default function AtmosphereLayer(props: AtmosphereLayerProps) {
 }
 
 function ActiveAtmosphere({ atmosphereComponent: SceneAtmosphere }: AtmosphereLayerProps) {
+  const scene = useThree((state) => state.scene)
   const runtime = useMemo(() => ({ ...useEnvironmentStore.getState().skySettings }), [])
   const source = useMemo(() => createSkyProvider(runtime), [runtime])
   const lastSettings = useRef(useEnvironmentStore.getState().skySettings)
   const cloudTime = useRef(0)
+  const solarRegistration = useRef<ActiveSolarRegistration | null>(null)
   const lastPublished = useRef(0)
 
   const wasPlaying = useRef(false)
   useEffect(() => () => source.dispose?.(), [source])
+  useEffect(() => {
+    const registration = registerActiveSolar(scene, source)
+    solarRegistration.current = registration
+    return () => {
+      if (solarRegistration.current === registration) solarRegistration.current = null
+      registration.dispose()
+    }
+  }, [scene, source])
 
   useFrame((_, delta) => {
     const state = useEnvironmentStore.getState()
@@ -58,6 +69,7 @@ function ActiveAtmosphere({ atmosphereComponent: SceneAtmosphere }: AtmosphereLa
     }
     if (settingsChanged || state.skyMotion || state.skyPlaying)
       source.update(runtime, cloudTime.current)
+    solarRegistration.current?.publish()
     wasPlaying.current = state.skyPlaying
   }, -2)
 

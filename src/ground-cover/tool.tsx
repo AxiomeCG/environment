@@ -21,7 +21,7 @@ import {
   useEnvironmentStore,
 } from '../store'
 import {
-  cancelGroundCoverToolFor2D,
+  cancelEnvironmentPaintToolFor2D,
   type GroundCoverToolActionTarget,
 } from '../pascal-tool-actions'
 import GrassFieldBrushCursor from './brush-cursor'
@@ -124,7 +124,7 @@ export function GrassFieldPaintTool() {
   useEffect(
     () =>
       useEditor.subscribe((editor) => {
-        cancelGroundCoverToolFor2D(
+        cancelEnvironmentPaintToolFor2D(
           editor as unknown as GroundCoverToolActionTarget,
         )
       }),

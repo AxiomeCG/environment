@@ -23,6 +23,14 @@ export const grassFieldParametrics: ParametricDescriptor<GrassFieldNode> = {
           step: 0.01,
         },
         {
+          key: "bladeRestBend",
+          kind: "number",
+          unit: "rad",
+          min: 0,
+          max: 1,
+          step: 0.01,
+        },
+        {
           key: "bladeWidth",
           kind: "number",
           unit: "m",

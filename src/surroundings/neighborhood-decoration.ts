@@ -56,6 +56,8 @@ const YARD_TREE: Readonly<Record<HouseStyle, { species: TreeSpecies; size: TreeS
   cottage: { species: 'oak', size: 'medium', height: [7.2, 9.5] },
   farmhouse: { species: 'ash', size: 'large', height: [8.2, 11.2] },
   pavilion: { species: 'pine', size: 'medium', height: [7.8, 10.4] },
+  townhouse: { species: 'ash', size: 'medium', height: [7.2, 9.6] },
+  bungalow: { species: 'pine', size: 'medium', height: [6.8, 9.2] },
 }
 const GROVE_SPECIES = ['oak', 'ash', 'pine'] as const
 const GROVE_COMPANION: Readonly<Record<(typeof GROVE_SPECIES)[number], TreeSpecies>> = {
@@ -267,8 +269,10 @@ function frontEdgeDistance(house: HousePlan, cell: ClassifiedNeighborCell): numb
 }
 
 function fenceStyle(style: HouseStyle): Pick<FencePlan, 'height' | 'style'> {
-  if (style === 'farmhouse') return { height: 1.25, style: 'horizontal' }
-  if (style === 'pavilion') return { height: 1.1, style: 'slat' }
+  if (style === 'farmhouse' || style === 'townhouse') {
+    return { height: 1.25, style: 'horizontal' }
+  }
+  if (style === 'pavilion' || style === 'bungalow') return { height: 1.1, style: 'slat' }
   return { height: 1.05, style: 'rail' }
 }
 

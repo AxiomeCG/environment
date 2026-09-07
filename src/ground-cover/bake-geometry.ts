@@ -4,8 +4,6 @@ import {
   BufferGeometry,
   DoubleSide,
   Group,
-  Matrix3,
-  Matrix4,
   Mesh,
   MeshStandardMaterial,
   Quaternion,
@@ -16,6 +14,12 @@ import { localGrassHeightScaleAt } from './height-field'
 import { sampleGrassObstacle } from './obstacle-field'
 import { paintAt } from './paint-field'
 import { buildBladeGeometry } from './render/blade-geometry'
+import {
+  evaluateGrassBladeCurve,
+  MAX_GRASS_NORMAL_YAW,
+  shapeGrassCoverageValue,
+  type GrassBladeCurvePoint,
+} from './render/blade-shape'
 import { visitGrassCandidates } from './scatter'
 import type { GrassFieldNode } from './schema'
 
@@ -123,17 +127,12 @@ export function buildGrassFieldBakeGeometry(
     chunks.push({ colors, geometry, normals, positions })
   }
 
-  const matrix = new Matrix4()
-  const normalMatrix = new Matrix3()
-  const position = new Vector3()
-  const scale = new Vector3()
   const up = new Vector3(0, 1, 0)
   const yawRotation = new Quaternion()
-  const bendRotation = new Quaternion()
-  const rotation = new Quaternion()
-  const bentUp = new Vector3()
+  const normalVariationRotation = new Quaternion()
   const transformedPosition = new Vector3()
   const transformedNormal = new Vector3()
+  const restCurve: GrassBladeCurvePoint = { horizontal: 0, vertical: 0 }
   let acceptedIndex = 0
 
   visitGrassCandidates(
@@ -141,36 +140,22 @@ export function buildGrassFieldBakeGeometry(
     fields.boundary,
     fields.bounds,
     fields.terrain,
-    (x, y, z, yaw, widthFactor, heightFactor, threshold) => {
+    (x, y, z, yaw, widthFactor, heightFactor, threshold, tint) => {
       if (!evaluateCandidate(node, fields, x, z, threshold, evaluation, true)) return
 
       const bladeHeight = resolvedBladeHeight(node, heightFactor, evaluation)
       if (bladeHeight <= 0) return
 
       yawRotation.setFromAxisAngle(up, yaw)
-      const bendOffset = (node.obstacleBendStrength ?? 0.12) * evaluation.obstacleInfluence
-      if (bendOffset > 0) {
-        bentUp
-          .set(
-            evaluation.obstacleDirectionX * bendOffset,
-            bladeHeight,
-            evaluation.obstacleDirectionZ * bendOffset,
-          )
-          .normalize()
-        bendRotation.setFromUnitVectors(up, bentUp)
-        rotation.copy(bendRotation).multiply(yawRotation)
-      } else {
-        rotation.copy(yawRotation)
-      }
-
-      position.set(x, y, z)
-      scale.set(
-        node.bladeWidth * widthFactor,
-        bladeHeight,
-        node.bladeWidth * widthFactor,
+      normalVariationRotation.setFromAxisAngle(
+        up,
+        tint * MAX_GRASS_NORMAL_YAW,
       )
-      matrix.compose(position, rotation, scale)
-      normalMatrix.getNormalMatrix(matrix)
+      const width = node.bladeWidth * widthFactor
+      const obstacleOffset =
+        (node.obstacleBendStrength ?? 0.12) *
+        evaluation.obstacleInfluence *
+        clamp01(resolvedBladeHeightScale(node, evaluation))
 
       const chunkIndex = Math.floor(acceptedIndex / bladesPerChunk)
       const bladeIndex = acceptedIndex - chunkIndex * bladesPerChunk
@@ -182,14 +167,38 @@ export function buildGrassFieldBakeGeometry(
 
       for (let vertexIndex = 0; vertexIndex < verticesPerBlade; vertexIndex += 1) {
         const outputOffset = (vertexOffset + vertexIndex) * 3
+        transformedPosition.fromBufferAttribute(bladePositions, vertexIndex)
+        const bladeProgress = clamp01(transformedPosition.y)
+        evaluateGrassBladeCurve(
+          bladeProgress,
+          bladeHeight * bladeProgress,
+          node.bladeRestBend ?? 0.22,
+          restCurve,
+        )
         transformedPosition
-          .fromBufferAttribute(bladePositions, vertexIndex)
-          .applyMatrix4(matrix)
-          .toArray(chunk.positions, outputOffset)
+          .set(
+            transformedPosition.x * width,
+            restCurve.vertical,
+            transformedPosition.z * width + restCurve.horizontal,
+          )
+          .applyQuaternion(yawRotation)
+        const contactHeightMask = bladeProgress * bladeProgress
+        transformedPosition.x +=
+          x +
+          evaluation.obstacleDirectionX * obstacleOffset * contactHeightMask
+        transformedPosition.y += y
+        transformedPosition.z +=
+          z +
+          evaluation.obstacleDirectionZ * obstacleOffset * contactHeightMask
+        transformedPosition.toArray(chunk.positions, outputOffset)
+
         transformedNormal
           .fromBufferAttribute(bladeNormals, vertexIndex)
-          .applyNormalMatrix(normalMatrix)
-          .toArray(chunk.normals, outputOffset)
+          .applyQuaternion(yawRotation)
+          .applyQuaternion(normalVariationRotation)
+        transformedNormal.y = Math.abs(transformedNormal.y) * 0.2 + 0.85
+        transformedNormal.normalize().toArray(chunk.normals, outputOffset)
+
         chunk.colors[outputOffset] = red
         chunk.colors[outputOffset + 1] = green
         chunk.colors[outputOffset + 2] = blue
@@ -221,7 +230,9 @@ function evaluateCandidate(
   includeColor: boolean,
 ): boolean {
   const painted = paintAt(fields.paint, x, z)
-  const density = clamp01(painted.a * ((node.density ?? 100) / 100))
+  const density = shapeGrassCoverageValue(
+    painted.a * ((node.density ?? 100) / 100),
+  )
   if (density <= 0 || threshold > density) return false
 
   const obstacle = sampleGrassObstacle(fields.obstacles, x, z)
@@ -253,16 +264,20 @@ function resolvedBladeHeight(
   heightFactor: number,
   sample: AcceptedGrassSample,
 ): number {
-  const heightScale = sample.density * sample.density
-  const flattening =
-    1 - sample.obstacleInfluence * ((node.obstacleFlattening ?? 60) / 100)
-  return (
-    node.bladeHeight *
-    heightFactor *
-    sample.localHeightScale *
-    heightScale *
-    flattening
+  return node.bladeHeight * heightFactor * resolvedBladeHeightScale(node, sample)
+}
+
+function resolvedBladeHeightScale(
+  node: GrassFieldNode,
+  sample: AcceptedGrassSample,
+): number {
+  const densityScale = sample.density * sample.density
+  const flattening = clamp01(
+    1 -
+      sample.obstacleInfluence *
+        clamp01((node.obstacleFlattening ?? 60) / 100),
   )
+  return Math.max(0, sample.localHeightScale * densityScale * flattening)
 }
 
 

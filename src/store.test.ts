@@ -27,3 +27,30 @@ describe('Surroundings visibility', () => {
     expect(useEnvironmentStore.getState().surroundingsEnabled).toBe(false)
   })
 })
+
+describe('Pond tool state', () => {
+  beforeEach(() => {
+    useEnvironmentStore.setState(useEnvironmentStore.getInitialState(), true)
+  })
+
+  test('clears the ephemeral basin while retaining the chosen water quality', () => {
+    const state = useEnvironmentStore.getState()
+    state.setPondToolMode('koi')
+    state.setPondTarget({
+      siteId: 'site-one',
+      seed: [2, 3],
+      pondId: null,
+    })
+    state.setPondQuality('swampy')
+    state.setPondFeedback('Place koi')
+
+    state.resetPondTool()
+
+    expect(useEnvironmentStore.getState()).toMatchObject({
+      pondToolMode: 'select-basin',
+      pondTarget: null,
+      pondQuality: 'swampy',
+      pondFeedback: '',
+    })
+  })
+})

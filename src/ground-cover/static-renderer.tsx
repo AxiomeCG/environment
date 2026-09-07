@@ -6,10 +6,12 @@ import {
   type AnyNodeId,
   type GeometryContext,
 } from '@pascal-app/core'
+import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import type { Material, Object3D } from 'three'
 import { buildGrassFieldGeometry } from './geometry'
 import type { GrassFieldNode } from './schema'
+import { updateGrassTileLod } from './render/grass-tiles'
 
 export default function GroundCoverStaticRenderer({
   nodes,
@@ -39,6 +41,9 @@ function GroundCoverStaticNode({
   )
 
   useEffect(() => () => disposeObjectResources(geometry), [geometry])
+  useFrame(({ camera, size, gl }) => {
+    updateGrassTileLod(geometry, camera, size.height * gl.getPixelRatio())
+  })
 
   return (
     <primitive

@@ -148,21 +148,55 @@ function ribbonPolygons(
   edgeId: string,
 ): RoadMarkingPolygon[] {
   const halfWidth = width / 2
-  return points.slice(0, -1).flatMap((start, index) => {
-    const end = points[index + 1]!
-    const length = distanceXZ(start, end)
-    if (length <= 1e-6) return []
-    const left = [-(end[2] - start[2]) / length, (end[0] - start[0]) / length] as const
+  const edges = points.map((point, index) => {
+    const previous = points[Math.max(0, index - 1)]!
+    const next = points[Math.min(points.length - 1, index + 1)]!
+    const incomingLength = Math.max(distanceXZ(previous, point), 1e-6)
+    const outgoingLength = Math.max(distanceXZ(point, next), 1e-6)
+    const incomingNormalX = -(point[2] - previous[2]) / incomingLength
+    const incomingNormalZ = (point[0] - previous[0]) / incomingLength
+    const outgoingNormalX = -(next[2] - point[2]) / outgoingLength
+    const outgoingNormalZ = (next[0] - point[0]) / outgoingLength
+    let normalX = outgoingNormalX
+    let normalZ = outgoingNormalZ
+    let offset = halfWidth
+    if (index === points.length - 1) {
+      normalX = incomingNormalX
+      normalZ = incomingNormalZ
+    } else if (index > 0) {
+      const sumX = incomingNormalX + outgoingNormalX
+      const sumZ = incomingNormalZ + outgoingNormalZ
+      const sumLength = Math.hypot(sumX, sumZ)
+      if (sumLength > 1e-6) {
+        normalX = sumX / sumLength
+        normalZ = sumZ / sumLength
+        const projection = Math.abs(
+          normalX * outgoingNormalX + normalZ * outgoingNormalZ,
+        )
+        offset *= Math.min(4, 1 / Math.max(projection, 0.25))
+      }
+    }
+    return {
+      left: [
+        point[0] + normalX * offset,
+        point[1],
+        point[2] + normalZ * offset,
+      ] as Point3,
+      right: [
+        point[0] - normalX * offset,
+        point[1],
+        point[2] - normalZ * offset,
+      ] as Point3,
+    }
+  })
+  return edges.slice(0, -1).flatMap((start, index) => {
+    const end = edges[index + 1]!
+    if (distanceXZ(points[index]!, points[index + 1]!) <= 1e-6) return []
     return [{
       color,
       edgeId,
       kind,
-      points: [
-        [start[0] + left[0] * halfWidth, start[1], start[2] + left[1] * halfWidth],
-        [end[0] + left[0] * halfWidth, end[1], end[2] + left[1] * halfWidth],
-        [end[0] - left[0] * halfWidth, end[1], end[2] - left[1] * halfWidth],
-        [start[0] - left[0] * halfWidth, start[1], start[2] - left[1] * halfWidth],
-      ],
+      points: [start.left, end.left, end.right, start.right],
     }]
   })
 }
@@ -294,12 +328,24 @@ function buildJunctionData(node: RoadNetworkNode) {
 }
 
 /** Build all topology-driven painted road markings as flat, non-interactive polygons. */
-export function buildRoadNetworkMarkings(node: RoadNetworkNode): RoadMarkingPolygon[] {
+export function buildRoadNetworkMarkings(
+  node: RoadNetworkNode,
+  junctionApproachCuts: Readonly<Record<string, Readonly<Record<string, number>>>> = {},
+): RoadMarkingPolygon[] {
   const polygons: RoadMarkingPolygon[] = []
-	const regionalPack = resolveRoadRegionalPack(node)
+  const regionalPack = resolveRoadRegionalPack(node)
   const junctionData = buildJunctionData(node)
-  const approachCuts = Object.fromEntries(junctionData.flatMap(({ junction, solution }) =>
-    Object.entries(solution.approachCuts).map(([edgeId, cut]) => [`${junction.nodeId}:${edgeId}`, cut])))
+  const approachCut = (() => {
+    const genericCuts = Object.fromEntries(junctionData.flatMap(({ junction, solution }) =>
+      Object.entries(solution.approachCuts).map(([edgeId, cut]) => [
+        `${junction.nodeId}:${edgeId}`,
+        cut,
+      ])))
+    return (junctionId: string, edgeId: string): number =>
+      junctionApproachCuts[junctionId]?.[edgeId]
+      ?? genericCuts[`${junctionId}:${edgeId}`]
+      ?? 0
+  })()
 
   for (const profile of buildRoadTransitionProfiles(node)) {
     const edge = node.edges[profile.edgeIds[0]!]
@@ -308,8 +354,8 @@ export function buildRoadNetworkMarkings(node: RoadNetworkNode): RoadMarkingPoly
     if (!style?.markings) continue
     const trimmed = trimRoadTransitionProfile(
       profile,
-      approachCuts[`${profile.startNodeId}:${profile.edgeIds[0]}`] ?? 0,
-      approachCuts[`${profile.endNodeId}:${profile.edgeIds.at(-1)}`] ?? 0,
+      approachCut(profile.startNodeId, profile.edgeIds[0]!),
+      approachCut(profile.endNodeId, profile.edgeIds.at(-1)!),
     )
     const points = trimmed.samples.map((sample) => [
       sample.point[0],
@@ -319,12 +365,12 @@ export function buildRoadNetworkMarkings(node: RoadNetworkNode): RoadMarkingPoly
     if (points.length < 2) continue
     if (style.medianWidth === 0 && style.laneCount >= 2) {
       polygons.push(...ribbonPolygons(
-			points,
-			0.12,
-			'centerline',
-			regionalPack.centerlineColor,
-			edge.id,
-		))
+        points,
+        0.12,
+        'centerline',
+        regionalPack.centerlineColor,
+        edge.id,
+      ))
     }
     for (let boundary = 1; boundary < style.laneCount; boundary++) {
       if (style.laneCount % 2 === 0 && boundary === style.laneCount / 2) continue
@@ -332,32 +378,36 @@ export function buildRoadNetworkMarkings(node: RoadNetworkNode): RoadMarkingPoly
         offsetTransitionPath(trimmed.samples, boundary - 1),
       )) {
         polygons.push(...ribbonPolygons(
-			dash,
-			0.09,
-			'lane-dash',
-			regionalPack.markingColor,
-			edge.id,
-		))
+          dash,
+          0.09,
+          'lane-dash',
+          regionalPack.markingColor,
+          edge.id,
+        ))
       }
     }
   }
 
-  for (const { junction, incident, solution } of junctionData) {
+  for (const { junction, incident } of junctionData) {
     const primaryEdges = new Set(junction.primaryEdgeIds)
     for (const edge of incident) {
       const style = resolveStyle(node, edge)
-      const cut = solution.approachCuts[edge.id]
-      if (!style?.markings || cut === undefined) continue
+      const cut = approachCut(junction.nodeId, edge.id)
+      if (!style?.markings) continue
       const sampled = sampleRoadEdgePoints(node, edge, 96)
       const outward = edge.startNodeId === junction.nodeId ? sampled : [...sampled].reverse()
       const yOffset = style.surfaceThickness + 0.016
-      const elevated = outward.map((point) => [point[0], point[1] + yOffset, point[2]] as Point3)
+      const elevated = outward.map((point) => [
+        point[0],
+        point[1] + yOffset,
+        point[2],
+      ] as Point3)
       const laneOffsets = incomingLaneOffsets(
-			edge,
-			junction.nodeId,
-			style,
-			regionalPack.drivingSide,
-		)
+        edge,
+        junction.nodeId,
+        style,
+        regionalPack.drivingSide,
+      )
       const arrowSample = pointAtDistance(elevated, cut + 10.5)
       if (arrowSample) {
         for (const laneOffset of laneOffsets) {
@@ -381,27 +431,42 @@ export function buildRoadNetworkMarkings(node: RoadNetworkNode): RoadMarkingPoly
             ? 'stop'
             : 'none'
       const controlWidth = approachControlWidth(
-			edge,
-			junction.nodeId,
-			style,
-			regionalPack.drivingSide,
-		)
+        edge,
+        junction.nodeId,
+        style,
+        regionalPack.drivingSide,
+      )
       if (control === 'none' || !controlWidth) continue
       const stopSample = pointAtDistance(elevated, cut + 5.5)
       if (stopSample) {
-		if (control === 'yield') {
-			for (const points of yieldTeeth(stopSample, controlWidth.centerOffset, controlWidth.width)) {
-				polygons.push({ color: regionalPack.markingColor, edgeId: edge.id, junctionId: junction.nodeId, kind: 'yield-line', points })
-			}
-		} else {
-			polygons.push({
-				color: regionalPack.markingColor,
-				edgeId: edge.id,
-				junctionId: junction.nodeId,
-				kind: 'stop-line',
-				points: orientedRectangle(stopSample, controlWidth.centerOffset, controlWidth.width, 0.35),
-			})
-		}
+        if (control === 'yield') {
+          for (const points of yieldTeeth(
+            stopSample,
+            controlWidth.centerOffset,
+            controlWidth.width,
+          )) {
+            polygons.push({
+              color: regionalPack.markingColor,
+              edgeId: edge.id,
+              junctionId: junction.nodeId,
+              kind: 'yield-line',
+              points,
+            })
+          }
+        } else {
+          polygons.push({
+            color: regionalPack.markingColor,
+            edgeId: edge.id,
+            junctionId: junction.nodeId,
+            kind: 'stop-line',
+            points: orientedRectangle(
+              stopSample,
+              controlWidth.centerOffset,
+              controlWidth.width,
+              0.35,
+            ),
+          })
+        }
       }
       for (let bar = 0; bar < 6; bar++) {
         const sample = pointAtDistance(elevated, cut + 1 + bar * 0.68)

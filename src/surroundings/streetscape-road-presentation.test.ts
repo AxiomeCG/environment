@@ -12,6 +12,7 @@ import {
   type RoadPresentationPlan,
   type RoadPresentationSurface,
 } from './streetscape-road-presentation'
+import { buildRoadNetworkMarkings } from './streetscape/road-network-markings'
 
 const SITE = [
   [-15, -15],
@@ -292,7 +293,6 @@ function expectFiniteGeometry(plan: RoadPresentationPlan): void {
 }
 
 describe('pinned Streetscape road-network presentation', () => {
-
   test('keeps local-street width and ordered side bands along the frontage', () => {
     const network = runtimeRoadNetwork({ 2: SECONDARY })
     const plan = buildRoadPresentationPlan(network)
@@ -478,7 +478,7 @@ describe('pinned Streetscape road-network presentation', () => {
     }
   })
 
-  test('joins mixed widths at the production outer-road extension without crossing side bands', () => {
+  test('joins mixed widths at the production outer-road extension without crossing side bands or paint', () => {
     const layout = deriveSurroundingsLayout(
       deriveBoundarySegments({
         points: SITE,
@@ -535,6 +535,28 @@ describe('pinned Streetscape road-network presentation', () => {
         )
       }
     }
+
+    const markings = buildRoadNetworkMarkings(network, Object.fromEntries(
+      plan.junctions.map((junction) => [junction.id, junction.approachCuts]),
+    ))
+    // The straight side-road crossing has a one-metre setback from the
+    // rendered junction cut, not from an independently solved fillet.
+    const crossing = markings.filter(({ edgeId, kind }) =>
+      edgeId === 'surroundings-local-cross-0:segment-0' && kind === 'crosswalk')
+    const crossingJunction = plan.junctions.find(({ id }) => id === crossing[0]!.junctionId)!
+    const edge = network.edges[crossing[0]!.edgeId]!
+    const origin = network.graphNodes[crossingJunction.id]!.position
+    const target = edge.startNodeId === crossingJunction.id
+      ? edge.alignment[0] ?? network.graphNodes[edge.endNodeId]!.position
+      : edge.alignment.at(-1) ?? network.graphNodes[edge.startNodeId]!.position
+    const dx = target[0] - origin[0], dz = target[2] - origin[2]
+    const length = Math.hypot(dx, dz)
+    const nearestPaint = Math.min(...crossing.flatMap(({ points }) => points.map((point) =>
+      ((point[0] - origin[0]) * dx + (point[2] - origin[2]) * dz) / length)))
+    // First bar center is 1 m beyond the cut; its half-thickness is 17 cm.
+    const setback = nearestPaint - crossingJunction.approachCuts[edge.id]!
+    expect(setback).toBeGreaterThan(0.8)
+    expect(setback).toBeLessThan(0.86)
   })
 
   test('keeps mixed crossing carriageways outside the Site without collapsed corner bands', () => {
@@ -672,4 +694,26 @@ describe('pinned Streetscape road-network presentation', () => {
     expect(centralCarriageways.every(Boolean)).toBe(true)
   })
 
+  test('shares marking ribbon edges through bends instead of overlapping square caps', () => {
+    const network = deriveRuntimeRoadNetwork(
+      { corridors: [], neighborCells: [], roadJunctions: [] },
+      [{
+        id: 'bent-road',
+        separator: 'secondary-road',
+        centerline: [[0, 0], [18, 0], [18, 18]],
+        corridorIds: [],
+        junctionIds: [],
+      }],
+    )
+    const centerline = buildRoadNetworkMarkings(network).filter((marking) =>
+      marking.edgeId === 'bent-road:segment-0' && marking.kind === 'centerline')
+
+    expect(centerline.length).toBeGreaterThan(2)
+    for (let index = 0; index < centerline.length - 1; index += 1) {
+      expect([centerline[index]!.points[1], centerline[index]!.points[2]]).toEqual([
+        centerline[index + 1]!.points[0],
+        centerline[index + 1]!.points[3],
+      ])
+    }
+  })
 })

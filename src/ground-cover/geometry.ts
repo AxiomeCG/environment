@@ -11,22 +11,12 @@ import {
 	DoubleSide,
 	type DataTexture,
 	Group,
-	InstancedBufferAttribute,
-	InstancedMesh,
-	Matrix4,
 	Mesh,
 	type Object3D,
-	Quaternion,
-	Vector3,
 } from "three";
 import * as TSL from "three/tsl";
 import { MeshStandardNodeMaterial, type Node } from "three/webgpu";
-import {
-	GLOBAL_WIND_STRENGTH,
-	grassWindPosition,
-	PLANT_WIND_STRENGTH,
-	setGlobalWindStrength,
-} from "../wind-node";
+import { setGlobalWindStrength } from "../wind-node";
 import { buildSurfaceUnderlayColorNodes } from "../surface-material/materials";
 import {
 	resolveSurfaceMaterial,
@@ -58,32 +48,29 @@ import {
 	updateGrassObstacleTexture,
 } from "./obstacle-texture";
 import { resolveGroundCoverFields } from "./field-context";
-import { buildBladeGeometry } from "./render/blade-geometry";
-import type { GrassFieldNode } from "./schema";
 import {
-	grassCandidateCapacity,
-	visitGrassCandidates,
-} from "./scatter";
+	createGrassBladePosition,
+	createGrassBladeShading,
+	GRASS_BLADE_PROGRESS,
+} from "./render/blade-nodes";
+import {
+	createGrassTiles,
+	updateGrassTileTerrain,
+	visitGrassTileMeshes,
+} from "./render/grass-tiles";
+import type { GrassFieldNode } from "./schema";
 import { buildDrapedGroundGeometry } from "./terrain-drape";
 
 const {
-	abs,
 	attribute,
-	cameraPosition,
 	cameraViewMatrix,
 	clamp,
 	cos,
 	dot,
 	max,
+	length,
 	mix,
-	mul,
-	negate,
-	normalize,
-	normalWorldGeometry,
 	positionGeometry,
-	positionLocal,
-	positionWorld,
-	pow,
 	sin,
 	smoothstep,
 	step,
@@ -96,10 +83,7 @@ const {
 	vec3,
 } = TSL;
 
-const MAX_WIND_WAVE = 1.8;
 const MAX_TINT_ROTATION = Math.PI / 6;
-const MAX_CONFIGURED_WIND_STRENGTH = 2;
-const MAX_CONFIGURED_GRASS_WIND_INFLUENCE = 3;
 
 const PERIPHERAL_TIP_BASE_MIX = 0.3;
 const SURFACE_ROOT_BLEND_END = 0.35;
@@ -107,15 +91,6 @@ const SURFACE_GROUND_TEXTURE_MIX = 0.25;
 const SURFACE_BLADE_SAMPLE_FILTER = 3;
 const GRASS_COVERAGE_START = 0.05;
 const SURFACE_EDGE_TEXTURE_MIX = 0.6;
-const NORMALIZED_BLADE_HEIGHT = clamp(positionGeometry.y, 0, 1);
-export const GRASS_FIELD_WIND_INFLUENCE = uniform(1);
-
-const GRASS_FIELD_WIND = grassWindPosition(
-	positionLocal,
-	positionLocal.y,
-	NORMALIZED_BLADE_HEIGHT.mul(NORMALIZED_BLADE_HEIGHT),
-	GRASS_FIELD_WIND_INFLUENCE,
-);
 const varyingFloat = varying as unknown as (
 	node: Node<"float">,
 	name: string,
@@ -185,6 +160,7 @@ function createGroundPlane(
 	density: Node<"float">,
 	surface: GroundTextureSource | null,
 	terrain: TerrainField | null,
+	onDispose: () => void,
 ): Mesh {
 	const planeGeometry = buildDrapedGroundGeometry(boundary, terrain);
 
@@ -193,6 +169,7 @@ function createGroundPlane(
 		side: DoubleSide,
 		transparent: true,
 	});
+	material.addEventListener("dispose", onDispose);
 	const paintSize = vec2(
 		Math.max((field.cols - 1) * field.spacing, field.spacing),
 		Math.max((field.rows - 1) * field.spacing, field.spacing),
@@ -244,9 +221,7 @@ export function buildGrassFieldGeometry(
 	context: GeometryContext,
 ): Group {
 	const windStrength = (node.windStrength ?? 100) / 100;
-	const grassWindInfluence = (node.grassWindInfluence ?? 100) / 100;
 	setGlobalWindStrength(windStrength);
-	GRASS_FIELD_WIND_INFLUENCE.value = grassWindInfluence;
 
 	const fields = resolveGroundCoverFields(node, context);
 	if (!fields) {
@@ -263,13 +238,13 @@ export function buildGrassFieldGeometry(
 		height: heightField,
 		obstacles: obstacleField,
 	} = fields;
-	const maxCandidateCount = grassCandidateCapacity(bounds);
 	const density = (node.density ?? 100) / 100;
-	const heightVariation = (node.bladeHeightVariation ?? 20) / 100;
 	const tintVariation = (node.bladeTintVariation ?? 20) / 100;
 	const tipBrightness = (node.bladeTipBrightness ?? 300) / 100;
 	const grassFieldUniforms = {
 		density: uniform(density),
+		restBend: uniform(node.bladeRestBend ?? 0.22),
+		windInfluence: uniform((node.grassWindInfluence ?? 100) / 100),
 		tintVariation: uniform(tintVariation),
 		tipBrightness: uniform(tipBrightness),
 		obstacleBendRadius: uniform(node.obstacleBendRadius ?? 0.75),
@@ -285,10 +260,6 @@ export function buildGrassFieldGeometry(
 		? createSurfacePaintTexture(surface.node.id, surface.field)
 		: null;
 
-	const geometry = buildBladeGeometry({
-		width: node.bladeWidth,
-		height: node.bladeHeight,
-	});
 	const grassRoot = attribute<"vec3">("grassRoot", "vec3");
 	const densityThreshold = attribute<"float">("grassDensityThreshold", "float");
 	const tintRandom = varyingFloat(
@@ -369,84 +340,54 @@ export function buildGrassFieldGeometry(
 	)
 		.mul(obstacleAllowed)
 		.mul(obstacleEnabled);
-	const obstacleDirection = normalize(
-		vec3(
-			sampledObstacle.g.mul(2).sub(1),
-			0,
-			sampledObstacle.b.mul(2).sub(1),
-		),
+	const obstacleDirectionVector = vec3(
+		sampledObstacle.g.mul(2).sub(1),
+		0,
+		sampledObstacle.b.mul(2).sub(1),
 	);
-	const contactHeightMask = NORMALIZED_BLADE_HEIGHT.mul(
-		NORMALIZED_BLADE_HEIGHT,
-	);
-	const contactedWind = mix(
-		positionLocal,
-		GRASS_FIELD_WIND,
-		sub(1, obstacleInfluence.mul(0.75)),
-	);
-	const flattenedHeight = grassRoot.y.add(
-		contactedWind.y
-			.sub(grassRoot.y)
-			.mul(
-				sub(
-					1,
-					obstacleInfluence.mul(
-						grassFieldUniforms.obstacleFlattening,
-					),
-				),
-			),
-	);
-	const obstacleOffset = obstacleDirection
-		.mul(grassFieldUniforms.obstacleBendStrength)
-		.mul(obstacleInfluence)
-		.mul(contactHeightMask);
-	const contactedPosition = vec3(
-		contactedWind.x.add(obstacleOffset.x),
-		flattenedHeight,
-		contactedWind.z.add(obstacleOffset.z),
+	const obstacleDirection = obstacleDirectionVector.div(
+		max(length(obstacleDirectionVector), 1e-5),
 	);
 	const effectiveDensity = shapeGrassCoverage(
 		painted.a.mul(grassFieldUniforms.density),
 	);
-	const heightScale = effectiveDensity.mul(effectiveDensity);
-	const renderedBladeHeight = NORMALIZED_BLADE_HEIGHT.mul(heightScale);
-	const visible = step(densityThreshold, effectiveDensity).mul(obstacleAllowed);
-	const densityScaledPosition = vec3(
-		contactedPosition.x,
-		mix(
-			grassRoot.y,
-			grassRoot.y.add(
-				contactedPosition.y.sub(grassRoot.y).mul(localHeightScale),
+	const densityHeightScale = effectiveDensity.mul(effectiveDensity);
+	const flatteningScale = clamp(
+		sub(
+			1,
+			obstacleInfluence.mul(
+				clamp(grassFieldUniforms.obstacleFlattening, 0, 1),
 			),
-			heightScale,
 		),
-		contactedPosition.z,
+		0,
+		1,
 	);
-
+	const effectiveHeightScale = localHeightScale
+		.mul(densityHeightScale)
+		.mul(flatteningScale);
+	const curvedPosition = createGrassBladePosition({
+		heightScale: effectiveHeightScale,
+		restBend: grassFieldUniforms.restBend,
+		windInfluence: grassFieldUniforms.windInfluence,
+		obstacleInfluence,
+		obstacleDirection,
+		obstacleBendStrength: grassFieldUniforms.obstacleBendStrength,
+	});
+	const visible = step(densityThreshold, effectiveDensity).mul(obstacleAllowed);
 
 	const material = new MeshStandardNodeMaterial({ side: DoubleSide });
-	material.positionNode = densityScaledPosition;
+	material.positionNode = curvedPosition;
 	material.maskNode = visible.greaterThan(0.5);
-	material.addEventListener("dispose", () => {
+	const disposeFieldTextures = () => {
 		disposeGrassPaintTexture(node.id, paintTexture);
 		disposeGrassHeightTexture(node.id, heightTexture);
 		disposeGrassObstacleTexture(node.id, obstacleTexture);
 		if (surface && surfacePaintTexture) {
 			disposeSurfacePaintTexture(surface.node.id, surfacePaintTexture);
 		}
-	});
+	};
 
-	const sunDirection = normalize(vec3(-1, -1, -1));
-	const bladeFacingSun = abs(dot(normalWorldGeometry, sunDirection));
-	const edgeFactor = sub(1, bladeFacingSun);
-	const viewDirection = normalize(sub(cameraPosition, positionWorld));
-	const lookingThroughSun = max(dot(viewDirection, negate(sunDirection)), 0);
-	const backFactor = pow(lookingThroughSun, 6.4);
-	const transmissionMask = mul(edgeFactor, backFactor);
-	const tipBiasedTransmission = mul(
-		transmissionMask,
-		renderedBladeHeight,
-	);
+	const grassBladeShading = createGrassBladeShading(tintRandom);
 	const sampledColor = painted.rgb.div(max(painted.a, 1 / 255));
 	const groundSampleColor = blendBladeRootColor(
 		sampledColor,
@@ -495,117 +436,27 @@ export function buildGrassFieldGeometry(
 		variedBaseColor,
 		peripheralBaseMix,
 	);
-	const gradientFactor = smoothstep(0.2, 0.85, renderedBladeHeight);
+	const gradientFactor = smoothstep(0.2, 0.85, GRASS_BLADE_PROGRESS);
 	const grassBladeColor = mix(variedBaseColor, tipColor, gradientFactor);
 	const groundRootBlend = sub(
 		1,
-		smoothstep(0, SURFACE_ROOT_BLEND_END, renderedBladeHeight),
+		smoothstep(0, SURFACE_ROOT_BLEND_END, GRASS_BLADE_PROGRESS),
 	);
 	const finalBladeColor = mix(
-		grassBladeColor,
+		grassBladeColor.mul(grassBladeShading.rootShade),
 		groundSampleColor,
 		groundRootBlend,
 	);
 	material.colorNode = finalBladeColor;
-	material.emissiveNode = mul(
-		tipColor,
-		mul(
-			tipBiasedTransmission.mul(sub(1, groundRootBlend)),
-			0.25,
-		),
-	);
-	material.normalNode = transformDirection(vec3(0, 1, 0), cameraViewMatrix);
+	material.emissiveNode = tipColor
+		.mul(grassBladeShading.transmission)
+		.mul(sub(1, groundRootBlend));
+	material.normalNode = grassBladeShading.normal;
 
-	const instancedBlades = new InstancedMesh(
-		geometry,
-		material,
-		maxCandidateCount,
-	);
-	instancedBlades.name = "grass-field-blade";
-	instancedBlades.userData.grassFieldUniforms = grassFieldUniforms;
-
-	const rootValues = new Float32Array(maxCandidateCount * 3);
-	const thresholdValues = new Float32Array(maxCandidateCount);
-	const tintValues = new Float32Array(maxCandidateCount);
-	const surfaceSampleBasisValues = new Float32Array(maxCandidateCount * 2);
-	const matrix = new Matrix4();
-	const position = new Vector3();
-	const quaternion = new Quaternion();
-	const scale = new Vector3();
-	const up = new Vector3(0, 1, 0);
-
-	let acceptedCount = 0;
-	visitGrassCandidates(
-		node,
-		boundary,
-		bounds,
-		terrain,
-		(x, y, z, yaw, widthFactor, heightFactor, threshold, tint) => {
-			position.set(x, y, z);
-			quaternion.setFromAxisAngle(up, yaw);
-			scale.set(
-				node.bladeWidth * widthFactor,
-				node.bladeHeight * heightFactor,
-				node.bladeWidth * widthFactor,
-			);
-			const scaledWidth = node.bladeWidth * widthFactor;
-			surfaceSampleBasisValues[acceptedCount * 2] = Math.cos(yaw) * scaledWidth;
-			surfaceSampleBasisValues[acceptedCount * 2 + 1] =
-				Math.sin(yaw) * scaledWidth;
-			matrix.compose(position, quaternion, scale);
-			instancedBlades.setMatrixAt(acceptedCount, matrix);
-			rootValues[acceptedCount * 3] = x;
-			rootValues[acceptedCount * 3 + 1] = y;
-			rootValues[acceptedCount * 3 + 2] = z;
-			thresholdValues[acceptedCount] = threshold;
-			tintValues[acceptedCount] = tint;
-			acceptedCount += 1;
-		},
-	);
-
-	geometry.setAttribute(
-		"grassRoot",
-		new InstancedBufferAttribute(rootValues.slice(0, acceptedCount * 3), 3),
-	);
-	geometry.setAttribute(
-		"grassDensityThreshold",
-		new InstancedBufferAttribute(thresholdValues.slice(0, acceptedCount), 1),
-	);
-	geometry.setAttribute(
-		"grassTintVariation",
-		new InstancedBufferAttribute(tintValues.slice(0, acceptedCount), 1),
-	);
-	geometry.setAttribute(
-		"grassSurfaceSampleBasis",
-		new InstancedBufferAttribute(
-			surfaceSampleBasisValues.slice(0, acceptedCount * 2),
-			2,
-		),
-	);
-	instancedBlades.count = acceptedCount;
-	instancedBlades.instanceMatrix.needsUpdate = true;
-
-	const maxWindOffset =
-		node.bladeHeight *
-			(1 + heightVariation) *
-			PLANT_WIND_STRENGTH *
-			MAX_CONFIGURED_WIND_STRENGTH *
-			MAX_CONFIGURED_GRASS_WIND_INFLUENCE *
-			MAX_WIND_WAVE +
-		(node.obstacleBendStrength ?? 0.12);
-	instancedBlades.userData.grassMaxWindOffset = maxWindOffset;
-	instancedBlades.computeBoundingBox();
-	instancedBlades.boundingBox?.expandByScalar(maxWindOffset);
-	instancedBlades.computeBoundingSphere();
-	if (
-		instancedBlades.boundingSphere &&
-		instancedBlades.boundingSphere.radius >= 0
-	) {
-		instancedBlades.boundingSphere.radius += maxWindOffset;
-	}
-
-	const group = new Group();
-	group.add(instancedBlades);
+	const group = createGrassTiles(node, boundary, bounds, terrain, material);
+	visitGrassTileMeshes(group, (blade) => {
+		blade.userData.grassFieldUniforms = grassFieldUniforms;
+	});
 	group.add(
 		createGroundPlane(
 			boundary,
@@ -622,6 +473,7 @@ export function buildGrassFieldGeometry(
 					}
 				: null,
 			terrain,
+			disposeFieldTextures,
 		),
 	);
 	return group;
@@ -631,43 +483,11 @@ export function updateGrassFieldTerrain(
 	root: Object3D,
 	site: SiteNode,
 ): boolean {
-	const blade = root.getObjectByName("grass-field-blade");
 	const ground = root.getObjectByName("grass-field-ground");
-	if (!(blade instanceof InstancedMesh) || !(ground instanceof Mesh))
-		return false;
+	if (!(ground instanceof Mesh)) return false;
 
 	const terrain = terrainFieldOf(site);
-	const roots = blade.geometry.getAttribute("grassRoot");
-	const matrix = new Matrix4();
-	const position = new Vector3();
-	const rotation = new Quaternion();
-	const scale = new Vector3();
-
-	for (let index = 0; index < blade.count; index += 1) {
-		const x = roots.getX(index);
-		const z = roots.getZ(index);
-		const y = terrain ? surfaceHeightAt(terrain, x, z) : 0;
-		roots.setY(index, y);
-		blade.getMatrixAt(index, matrix);
-		matrix.decompose(position, rotation, scale);
-		position.y = y;
-		matrix.compose(position, rotation, scale);
-		blade.setMatrixAt(index, matrix);
-	}
-	roots.needsUpdate = true;
-	blade.instanceMatrix.needsUpdate = true;
-	blade.computeBoundingBox();
-	const maxWindOffset = blade.userData.grassMaxWindOffset;
-	if (typeof maxWindOffset === "number")
-		blade.boundingBox?.expandByScalar(maxWindOffset);
-	blade.computeBoundingSphere();
-	if (
-		typeof maxWindOffset === "number" &&
-		blade.boundingSphere &&
-		blade.boundingSphere.radius >= 0
-	) {
-		blade.boundingSphere.radius += maxWindOffset;
-	}
+	if (!updateGrassTileTerrain(root, terrain)) return false;
 
 	const nextTopology = terrainTopologyKey(terrain);
 	if (ground.userData.grassTerrainTopology === nextTopology) {
@@ -716,6 +536,8 @@ export function updateGrassFieldUniforms(
 	const uniforms = blade?.userData.grassFieldUniforms as
 		| {
 				density: { value: number };
+				restBend: { value: number };
+				windInfluence: { value: number };
 				tintVariation: { value: number };
 				tipBrightness: { value: number };
 				obstacleBendRadius: { value: number };
@@ -726,12 +548,13 @@ export function updateGrassFieldUniforms(
 	if (!uniforms) return false;
 
 	uniforms.density.value = (node.density ?? 100) / 100;
+	uniforms.restBend.value = node.bladeRestBend ?? 0.22;
+	uniforms.windInfluence.value = (node.grassWindInfluence ?? 100) / 100;
 	uniforms.tintVariation.value = (node.bladeTintVariation ?? 20) / 100;
 	uniforms.tipBrightness.value = (node.bladeTipBrightness ?? 300) / 100;
 	uniforms.obstacleBendRadius.value = node.obstacleBendRadius ?? 0.75;
 	uniforms.obstacleBendStrength.value = node.obstacleBendStrength ?? 0.12;
 	uniforms.obstacleFlattening.value = (node.obstacleFlattening ?? 60) / 100;
 	setGlobalWindStrength((node.windStrength ?? 100) / 100);
-	GRASS_FIELD_WIND_INFLUENCE.value = (node.grassWindInfluence ?? 100) / 100;
 	return true;
 }

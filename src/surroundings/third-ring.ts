@@ -6,6 +6,7 @@ import { hashString, seededRange, seededUnit } from './seeded-random'
 import { polygonCentroid } from './exterior-terrain'
 import { deriveLandscapeRegion, regionPoint, type LandscapeRegion } from './landscape-region'
 import { SEA_LEVEL } from './landscape-noise'
+import { STREETSCAPE_COMPATIBLE_ROAD_WIDTHS } from './streetscape-road-presentation'
 
 export type DistantHousePalette = Readonly<{
   wall: string
@@ -21,10 +22,10 @@ export type DistantMass = Readonly<{
   position: readonly [number, number, number]
   dimensions: readonly [width: number, wallHeight: number, depth: number]
   rotationY: number
-  style: 'bungalow' | 'cottage' | 'villa'
+  style: 'bungalow' | 'cottage' | 'villa' | 'farmhouse' | 'barnhouse'
   storeys: 1 | 2
   roof: Readonly<{
-    kind: 'gable' | 'hip'
+    kind: 'gable' | 'hip' | 'gambrel'
     pitchDegrees: number
     overhang: number
   }>
@@ -41,6 +42,14 @@ export type DistantMass = Readonly<{
     roofKind: 'gable' | 'hip'
     roofPitchDegrees: number
   }>
+  crossGable?: Readonly<{
+    center: Point2
+    width: number
+    depth: number
+    wallHeight: number
+    roofPitchDegrees: number
+    overhang: number
+  }>
   palette: DistantHousePalette
   foundationDepth: number
 }>
@@ -49,19 +58,21 @@ export type SkylineMass = Readonly<{
   position: readonly [number, number, number]
   dimensions: readonly [width: number, height: number, depth: number]
   rotationY: number
-  style: 'slab' | 'stepped' | 'tower'
+  style: 'slab' | 'stepped' | 'tower' | 'shouldered' | 'podium' | 'crowned'
   storeys: number
   palette: DistantHousePalette
   foundationDepth: number
 }>
 export type FieldPatch = Readonly<{
   id: string
-  kind: 'wheat' | 'woodland'
+  kind: 'wheat' | 'woodland' | 'meadow'
   center: Point2
   width: number
   depth: number
   rotationY: number
   seed: number
+  /** Accepted tree roots; understory is clipped to their clearance-safe 4.5 m discs. */
+  roots?: readonly Point2[]
 }>
 export type BoulderPlan = Readonly<{
   id: string
@@ -78,8 +89,30 @@ export type LighthousePlan = Readonly<{
   stripe: string
   foundationDepth: number
 }>
+export type CommercialSitePlan = Readonly<{
+  id: string
+  kind: 'gas-station' | 'supermarket'
+  position: readonly [number, number, number]
+  rotationY: number
+  lotDimensions: readonly [width: number, depth: number]
+  buildingDimensions: readonly [width: number, height: number, depth: number]
+  buildingOffsetX: number
+  accessWidth: number
+  accessDepth: number
+  foundationDepth: number
+  palette: Readonly<{
+    wall: string
+    roof: string
+    trim: string
+    glass: string
+    pavement: string
+    marking: string
+    accent: string
+  }>
+}>
 export type ThirdRingPlan = Readonly<{
   buildings: readonly DistantMass[]
+  commercialSites: readonly CommercialSitePlan[]
   skyline: readonly SkylineMass[]
   trees: readonly HorizonFoliagePlan[]
   fields: readonly FieldPatch[]
@@ -95,7 +128,15 @@ export type ThirdRingContext = Readonly<{
   nearRoads?: readonly RoadPresentationAlignmentDescriptor[]
   exclusions?: readonly (readonly Point2[])[]
 }>
-export const THIRD_RING_BUDGET = { buildings: 64, skyline: 12, trees: 3072, fields: 8, fieldBlades: 8192, boulders: 96 } as const
+export const THIRD_RING_BUDGET = {
+  buildings: 64,
+  commercialSites: 2,
+  commercialPrimitives: 96,
+  skyline: 12,
+  trees: 3072,
+  fields: 20,
+  boulders: 96,
+} as const
 
 type FootprintRectangle = Readonly<{
   center: Point2
@@ -113,12 +154,17 @@ type RoadCandidate = Readonly<{
   tangent: Point2
   side: -1 | 1
   priority: number
+  distance: number
+  roadLength: number
+  closed: boolean
 }>
 
 const EPSILON = 1e-7
 const SITE_CLEARANCE = 10
 const HOUSE_CLEARANCE = 3.5
 const MAX_FOOTPRINT_RELIEF = 0.85
+const DISTANT_FIELD_BUDGET = 8
+const MEADOW_FIELD_BUDGET = 6
 
 const DISTANT_PALETTE_DISTRICTS = [
   {
@@ -401,6 +447,9 @@ function collectRoadCandidates(
               tangent: sample.tangent,
               side,
               priority: seededUnit(seed, `${key}:priority`),
+              distance: station,
+              roadLength: length,
+              closed,
             })
           }
         }
@@ -413,6 +462,143 @@ function collectRoadCandidates(
     first.priority - second.priority || first.key.localeCompare(second.key))
 }
 
+function clearOfCommercialJunctions(
+  candidate: RoadCandidate,
+  halfFrontage: number,
+  roads: readonly RoadPresentationAlignmentDescriptor[],
+): boolean {
+  const junctionMargin = halfFrontage + 8
+  if (!candidate.closed
+    && (candidate.distance < junctionMargin
+      || candidate.roadLength - candidate.distance < junctionMargin)) return false
+  for (const road of roads) {
+    if (road.id === candidate.road.id) continue
+    for (let index = 1; index < road.centerline.length; index += 1) {
+      if (pointToSegmentDistance(
+        candidate.point,
+        road.centerline[index - 1]!,
+        road.centerline[index]!,
+      ) < junctionMargin + alignmentClearance(road)) return false
+    }
+  }
+  return true
+}
+
+function commercialPalette(
+  seed: string,
+  key: string,
+  kind: CommercialSitePlan['kind'],
+): CommercialSitePlan['palette'] {
+  const accent = kind === 'gas-station'
+    ? ['#b44338', '#356b74', '#bd8839'][Math.floor(seededUnit(seed, `${key}:accent`) * 3)]!
+    : ['#496d54', '#5b5c88', '#9a633d'][Math.floor(seededUnit(seed, `${key}:accent`) * 3)]!
+  return {
+    wall: kind === 'gas-station' ? '#d7d0c1' : '#b9b5aa',
+    roof: '#535653',
+    trim: '#e3ded2',
+    glass: '#263b40',
+    pavement: '#555854',
+    marking: '#c8c1a8',
+    accent,
+  }
+}
+
+function deriveCommercialSites(
+  candidates: readonly RoadCandidate[],
+  boundary: readonly Point2[],
+  roads: readonly RoadPresentationAlignmentDescriptor[],
+  heightAt: (x: number, z: number) => number,
+  occupied: (readonly Point2[])[],
+  seed: string,
+): CommercialSitePlan[] {
+  const requests: readonly CommercialSitePlan['kind'][] = ['gas-station', 'supermarket']
+  const center = polygonCentroid(boundary)
+  const sites: CommercialSitePlan[] = []
+  const usedCandidates = new Set<string>()
+  for (const kind of requests) {
+    if (sites.length >= THIRD_RING_BUDGET.commercialSites) break
+    const ordered = [...candidates].sort((first, second) => {
+      const firstBand = Math.floor(Math.hypot(first.point[0] - center[0], first.point[1] - center[1]) / 64)
+      const secondBand = Math.floor(Math.hypot(second.point[0] - center[0], second.point[1] - center[1]) / 64)
+      if (firstBand !== secondBand) return firstBand - secondBand
+      const firstBias = kind === 'supermarket' && first.road.separator !== 'primary-road'
+        ? 0.18
+        : 0
+      const secondBias = kind === 'supermarket' && second.road.separator !== 'primary-road'
+        ? 0.18
+        : 0
+      return seededUnit(seed, `commercial:${kind}:${first.key}:priority`) + firstBias
+        - seededUnit(seed, `commercial:${kind}:${second.key}:priority`) - secondBias
+        || first.key.localeCompare(second.key)
+    })
+    for (const candidate of ordered) {
+      if (usedCandidates.has(candidate.key)) continue
+      const { key, point, tangent, side } = candidate
+      const lotWidth = kind === 'gas-station'
+        ? seededRange(seed, `${key}:${kind}:lot-width`, 25, 29)
+        : seededRange(seed, `${key}:${kind}:lot-width`, 34, 39)
+      const lotDepth = kind === 'gas-station'
+        ? seededRange(seed, `${key}:${kind}:lot-depth`, 24, 28)
+        : seededRange(seed, `${key}:${kind}:lot-depth`, 31, 36)
+      if (!clearOfCommercialJunctions(candidate, lotWidth / 2, roads)) continue
+      const front: Point2 = [tangent[1] * side, -tangent[0] * side]
+      const right: Point2 = [front[1], -front[0]]
+      const roadHalfWidth = STREETSCAPE_COMPATIBLE_ROAD_WIDTHS[candidate.road.separator] / 2
+      const accessDepth = alignmentClearance(candidate.road) + 1 - roadHalfWidth
+      const awayFromRoad = scale(front, -1)
+      const centerPoint = add(
+        point,
+        scale(awayFromRoad, alignmentClearance(candidate.road) + 1 + lotDepth / 2),
+      )
+      const lot = rectangle(centerPoint, right, front, lotWidth, lotDepth)
+      const accessCenter = add(
+        centerPoint,
+        scale(front, lotDepth / 2 + accessDepth / 2),
+      )
+      const access = rectangle(accessCenter, right, front, kind === 'gas-station' ? 5.4 : 7.2, accessDepth)
+      if (!clearOfRoads([lot], roads)
+        || !clearOfSiteAndHouses([lot, access], boundary, occupied)) continue
+      const ground = footprintGround([lot, access], heightAt, 0.72)
+      if (!ground) continue
+      const buildingWidth = kind === 'gas-station'
+        ? seededRange(seed, `${key}:${kind}:building-width`, 9, 12)
+        : lotWidth - seededRange(seed, `${key}:${kind}:building-side-clearance`, 5, 7)
+      const buildingHeight = kind === 'gas-station'
+        ? seededRange(seed, `${key}:${kind}:building-height`, 3.2, 3.8)
+        : seededRange(seed, `${key}:${kind}:building-height`, 5.2, 6.4)
+      const buildingDepth = kind === 'gas-station'
+        ? seededRange(seed, `${key}:${kind}:building-depth`, 6.5, 8.2)
+        : seededRange(seed, `${key}:${kind}:building-depth`, 12, 15)
+      const maximumBuildingOffset = kind === 'gas-station'
+        ? Math.max(0, (lotWidth - buildingWidth) / 2 - 1)
+        : 0.8
+      sites.push({
+        id: `third-ring-${kind}-${key}`,
+        kind,
+        position: [centerPoint[0], ground.base, centerPoint[1]],
+        rotationY: Math.atan2(front[0], front[1]),
+        lotDimensions: [lotWidth, lotDepth],
+        buildingDimensions: [buildingWidth, buildingHeight, buildingDepth],
+        buildingOffsetX: seededRange(
+          seed,
+          `${key}:${kind}:building-offset`,
+          -maximumBuildingOffset,
+          maximumBuildingOffset,
+        ),
+        accessWidth: kind === 'gas-station' ? 5.4 : 7.2,
+        accessDepth,
+        foundationDepth: ground.foundationDepth,
+        palette: commercialPalette(seed, key, kind),
+      })
+      occupied.push(lot.polygon, access.polygon)
+      usedCandidates.add(candidate.key)
+      break
+    }
+  }
+  return sites
+}
+
+
 function deriveSkyline(
   center: Point2,
   radius: number,
@@ -424,6 +610,10 @@ function deriveSkyline(
   region: LandscapeRegion,
 ): SkylineMass[] {
   const skyline: SkylineMass[] = []
+  const profiles: readonly SkylineMass['style'][] = [
+    'slab', 'tower', 'crowned',
+    'shouldered', 'stepped', 'podium',
+  ]
   for (let district = 0; district < region.cityDistricts; district += 1) {
     let districtCenter: Point2 | undefined
     let bestScore = Infinity
@@ -445,17 +635,22 @@ function deriveSkyline(
     for (let row = 0; row < 2; row += 1) for (let column = 0; column < 3; column += 1) {
       if (skyline.length >= THIRD_RING_BUDGET.skyline) return skyline
       const key = `skyline:${district}:${row}:${column}`
-      const style: SkylineMass['style'] = column === 1 ? 'tower' : row === 1 ? 'stepped' : 'slab'
-      const storeys = Math.floor(seededRange(seed, `${key}:storeys`,
-        style === 'tower' ? 19 : style === 'stepped' ? 12 : 8,
-        style === 'tower' ? 25 : style === 'stepped' ? 17 : 12))
-      const width = seededRange(seed, `${key}:width`, style === 'slab' ? 28 : 18, style === 'slab' ? 38 : 26)
-      const depth = seededRange(seed, `${key}:depth`, 16, 24)
+      const style = profiles[row * 3 + column]!
+      const storeyRange: readonly [number, number] = style === 'tower'
+        ? [19, 25]
+        : style === 'crowned' ? [16, 22]
+          : style === 'shouldered' ? [13, 19]
+            : style === 'stepped' ? [12, 17]
+              : style === 'podium' ? [14, 20] : [8, 12]
+      const storeys = Math.floor(seededRange(seed, `${key}:storeys`, storeyRange[0], storeyRange[1]))
+      const broad = style === 'slab' || style === 'shouldered'
+      const width = seededRange(seed, `${key}:width`, broad ? 28 : 18, broad ? 38 : 26)
+      const depth = seededRange(seed, `${key}:depth`, style === 'podium' ? 19 : 16, style === 'podium' ? 26 : 24)
       const point = add(add(districtCenter,
         scale(right, (column - 1) * 50 + seededRange(seed, `${key}:x`, -6, 6))),
       scale(front, row * 48 + seededRange(seed, `${key}:z`, -6, 6)))
-      // Include the wider two-storey podium in every clearance and ground check.
-      const footprint = rectangle(point, right, front, width + 4, depth + 4)
+      // The roofline and foundation remain inside this widest podium trim.
+      const footprint = rectangle(point, right, front, width + 4.6, depth + 4.6)
       if (!clearOfRoads([footprint], roads)
         || !clearOfSiteAndHouses([footprint], boundary, occupied)) continue
       const ground = footprintGround([footprint], heightAt, 5)
@@ -532,37 +727,151 @@ function deriveFields(
   heightAt: (x: number, z: number) => number,
   occupied: (readonly Point2[])[],
   trees: readonly HorizonFoliagePlan[],
+  boulders: readonly BoulderPlan[],
   seed: string,
 ): FieldPatch[] {
   const fields: FieldPatch[] = []
-  const woodlandTrees = trees.filter(({ position }) =>
-    Math.hypot(position[0] - center[0], position[2] - center[1]) < radius + 330)
-  const counts = { wheat: 0, woodland: 0 }
-  for (let index = 0; index < 48 && fields.length < THIRD_RING_BUDGET.fields; index += 1) {
-    const kind = index % 2 === 0 ? 'wheat' : 'woodland'
-    if (counts[kind] >= THIRD_RING_BUDGET.fields / 2) continue
+  const woodlandGroups = new Map<string, Point2[]>()
+  for (const tree of trees) {
+    const key = tree.clusterId.startsWith('city-woodland-') ? tree.clusterId : 'outer-forest'
+    let roots = woodlandGroups.get(key)
+    if (!roots) { roots = []; woodlandGroups.set(key, roots) }
+    // Accepted roots already protect roads, buildings and the Site. Only the
+    // later boulder pass needs checking; avoid repeating polygon tests per tree.
+    const point: Point2 = [tree.position[0], tree.position[2]]
+    if (!boulders.some(boulder =>
+      (point[0] - boulder.position[0]) ** 2 + (point[1] - boulder.position[2]) ** 2
+        < (Math.hypot(boulder.dimensions[0], boulder.dimensions[2]) / 2 + 8) ** 2)) roots.push(point)
+  }
+  for (const [key, roots] of woodlandGroups) {
+    if (!roots.length) continue
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity
+    for (const [x, z] of roots) {
+      minX = Math.min(minX, x - 4.5); maxX = Math.max(maxX, x + 4.5)
+      minZ = Math.min(minZ, z - 4.5); maxZ = Math.max(maxZ, z + 4.5)
+    }
+    fields.push({
+      id: `field:${key}`, kind: 'woodland', roots,
+      center: [(minX + maxX) / 2, (minZ + maxZ) / 2],
+      width: maxX - minX, depth: maxZ - minZ, rotationY: 0,
+      seed: hashString(`${seed}:field:${key}`),
+    })
+  }
+  const distantCounts = { wheat: 0, woodland: fields.length }
+  const distantFieldBudget = DISTANT_FIELD_BUDGET
+  for (let index = 0; index < 48
+    && distantCounts.wheat + distantCounts.woodland < distantFieldBudget; index += 1) {
+    const kind = 'wheat'
+    if (distantCounts.wheat >= distantFieldBudget / 2) break
     const key = `field:${kind}:${index}`
     const angle = index * 2.399963229728653 + seededRange(seed, `${key}:angle`, -0.3, 0.3)
     const distance = radius + seededRange(seed, `${key}:distance`, 110, 195)
-    const tree = woodlandTrees[Math.floor(seededUnit(seed, `${key}:tree`) * woodlandTrees.length)]
-    if (kind === 'woodland' && !tree) continue
-    const point: Point2 = kind === 'woodland' && tree
-      ? [tree.position[0] + 6, tree.position[2] - 6]
-      : [center[0] + Math.cos(angle) * distance, center[1] + Math.sin(angle) * distance]
+    const point: Point2 = [center[0] + Math.cos(angle) * distance, center[1] + Math.sin(angle) * distance]
     const rotationY = seededRange(seed, `${key}:yaw`, -0.3, 0.3)
-    const width = seededRange(seed, `${key}:width`, kind === 'wheat' ? 50 : 32, kind === 'wheat' ? 74 : 54)
+    const width = seededRange(seed, `${key}:width`, 50, 74)
     const depth = seededRange(seed, `${key}:depth`, 30, 48)
     const right: Point2 = [Math.cos(rotationY), -Math.sin(rotationY)]
     const front: Point2 = [Math.sin(rotationY), Math.cos(rotationY)]
     const footprint = rectangle(point, right, front, width, depth)
     if (!clearOfRoads([footprint], roads)
       || !clearOfSiteAndHouses([footprint], boundary, occupied)
-      || !footprintGround([footprint], heightAt, kind === 'wheat' ? 5 : 9)) continue
+      || !footprintGround([footprint], heightAt, 5)) continue
     if (kind === 'wheat' && trees.some(({ position }) =>
       pointInPolygon([position[0], position[2]], footprint.polygon))) continue
     fields.push({ id: key, kind, center: point, width, depth, rotationY, seed: hashString(`${seed}:${key}`) })
     occupied.push(footprint.polygon)
-    counts[kind] += 1
+    distantCounts[kind] += 1
+  }
+
+  type MeadowCandidate = Readonly<{
+    key: string
+    point: Point2
+    right: Point2
+    front: Point2
+    width: number
+    depth: number
+    rotationY: number
+    priority: number
+  }>
+  const meadowCandidates: MeadowCandidate[] = []
+  for (const road of roads) {
+    const length = alignmentLength(road.centerline)
+    if (length < 20) continue
+    const first = road.centerline[0]!, last = road.centerline[road.centerline.length - 1]!
+    const closed = Math.hypot(last[0] - first[0], last[1] - first[1]) <= EPSILON
+    const margin = closed ? 0 : Math.min(14, length * 0.2)
+    let station = margin + seededRange(seed, `meadow:${road.id}:origin`, 8, 18)
+    let slot = 0
+    while (station < length - margin && slot < 12) {
+      const sample = sampleAlignment(road.centerline, station)
+      if (sample) {
+        const firstSide: -1 | 1 = seededUnit(seed, `meadow:${road.id}:${slot}:side`) < 0.5 ? -1 : 1
+        for (const side of [firstSide, firstSide === 1 ? -1 : 1] as const) {
+          const key = `meadow:verge:${road.id}:${slot}:${side}`
+          const depth = seededRange(seed, `${key}:depth`, 6, 10)
+          const front: Point2 = [sample.tangent[1] * side, -sample.tangent[0] * side]
+          const right: Point2 = [front[1], -front[0]]
+          const point = add(sample.point, scale(front,
+            alignmentClearance(road) + depth / 2 + seededRange(seed, `${key}:verge`, 1.5, 4)))
+          const radialDistance = Math.hypot(point[0] - center[0], point[1] - center[1])
+          if (radialDistance < radius + 20 || radialDistance > radius + 110) continue
+          meadowCandidates.push({
+            key,
+            point,
+            right,
+            front,
+            width: seededRange(seed, `${key}:width`, 8, 14),
+            depth,
+            rotationY: Math.atan2(front[0], front[1]),
+            priority: seededUnit(seed, `${key}:priority`),
+          })
+        }
+      }
+      station += seededRange(seed, `meadow:${road.id}:${slot}:gap`, 24, 38)
+      slot += 1
+    }
+  }
+  for (let index = 0; index < 72; index += 1) {
+    const key = `meadow:ring:${index}`
+    const angle = index * 2.399963229728653 + seededRange(seed, `${key}:angle`, -0.24, 0.24)
+    const rotationY = angle + seededRange(seed, `${key}:yaw`, -0.5, 0.5)
+    meadowCandidates.push({
+      key,
+      point: regionPoint(center, angle, radius + seededRange(seed, `${key}:distance`, 25, 100)),
+      right: [Math.cos(rotationY), -Math.sin(rotationY)],
+      front: [Math.sin(rotationY), Math.cos(rotationY)],
+      width: seededRange(seed, `${key}:width`, 8, 14),
+      depth: seededRange(seed, `${key}:depth`, 6, 10),
+      rotationY,
+      priority: seededUnit(seed, `${key}:priority`),
+    })
+  }
+  meadowCandidates.sort((first, second) =>
+    first.priority - second.priority || first.key.localeCompare(second.key))
+  let meadowCount = 0
+  for (const candidate of meadowCandidates) {
+    if (meadowCount >= MEADOW_FIELD_BUDGET || fields.length >= THIRD_RING_BUDGET.fields) break
+    const footprint = rectangle(
+      candidate.point,
+      candidate.right,
+      candidate.front,
+      candidate.width,
+      candidate.depth,
+    )
+    if (!clearOfRoads([footprint], roads)
+      || !clearOfSiteAndHouses([footprint], boundary, occupied)
+      || !footprintGround([footprint], heightAt, 1.8)) continue
+    fields.push({
+      id: candidate.key,
+      kind: 'meadow',
+      center: candidate.point,
+      width: candidate.width,
+      depth: candidate.depth,
+      rotationY: candidate.rotationY,
+      seed: hashString(`${seed}:${candidate.key}`),
+    })
+    occupied.push(footprint.polygon)
+    meadowCount += 1
   }
   return fields
 }
@@ -653,44 +962,113 @@ function deriveBoulders(
 /** Streets determine settlements; elevation and clearance determine buildable ground. */
 export function deriveThirdRingPlan({ boundary, roads, heightAt, seed = 'pascal-suburbs', nearRoads = [], exclusions = [] }: ThirdRingContext): ThirdRingPlan {
   const region = deriveLandscapeRegion(seed)
-  if (boundary.length < 3 || !boundary.every((point) => point.every(Number.isFinite))) return { buildings: [], skyline: [], trees: [], fields: [], region, boulders: [], lighthouse: null }
+  if (boundary.length < 3 || !boundary.every((point) => point.every(Number.isFinite))) {
+    return {
+      buildings: [],
+      commercialSites: [],
+      skyline: [],
+      trees: [],
+      fields: [],
+      region,
+      boulders: [],
+      lighthouse: null,
+    }
+  }
   const center = polygonCentroid(boundary)
   const radius = Math.max(...boundary.map((p) => Math.hypot(p[0] - center[0], p[1] - center[1])))
   const buildings: DistantMass[] = [], trees: HorizonFoliagePlan[] = []
   const occupied: (readonly Point2[])[] = [...exclusions]
   const clearanceRoads = [...roads, ...nearRoads]
   const greens = region.palette.foliage
-  for (const candidate of collectRoadCandidates(roads, seed)) {
+  // Commercial lots claim their complete paved envelope before residences and landscape.
+  const roadCandidates = collectRoadCandidates(roads, seed)
+  const commercialSites = deriveCommercialSites(
+    roadCandidates,
+    boundary,
+    clearanceRoads,
+    heightAt,
+    occupied,
+    seed,
+  )
+  for (const candidate of roadCandidates) {
     if (buildings.length >= THIRD_RING_BUDGET.buildings) break
     const { key, point, tangent, side } = candidate
     const styleRoll = seededUnit(seed, `${key}:style`)
-    const style: DistantMass['style'] = styleRoll < 0.38
+    const style: DistantMass['style'] = styleRoll < 0.27
       ? 'bungalow'
-      : styleRoll < 0.73 ? 'cottage' : 'villa'
-    const storeys: 1 | 2 = style === 'villa' ? 2 : 1
-    const width = seededRange(seed, `${key}:width`,
-      style === 'bungalow' ? 9.2 : 7.8, style === 'bungalow' ? 12.2 : 10.8)
-    const depth = seededRange(seed, `${key}:depth`, 7.2, style === 'bungalow' ? 9.4 : 10.2)
+      : styleRoll < 0.51 ? 'cottage'
+        : styleRoll < 0.69 ? 'villa'
+          : styleRoll < 0.86 ? 'farmhouse' : 'barnhouse'
+    const storeys: 1 | 2 = style === 'villa' || style === 'farmhouse'
+      || (style === 'barnhouse' && seededUnit(seed, `${key}:barn-storeys`) < 0.55) ? 2 : 1
+    const wide = style === 'bungalow' || style === 'farmhouse'
+    const deep = style === 'barnhouse'
+    const width = seededRange(seed, `${key}:width`, wide ? 9.2 : 7.8, wide ? 12.4 : 10.9)
+    const depth = seededRange(seed, `${key}:depth`, deep ? 9.4 : 7.2, deep ? 12.2 : wide ? 9.6 : 10.2)
     const wallHeight = storeys === 2
-      ? seededRange(seed, `${key}:wall-height`, 5.25, 5.85)
-      : seededRange(seed, `${key}:wall-height`, 2.8, 3.35)
-    const roofKind: DistantMass['roof']['kind'] = style === 'bungalow'
-      || seededUnit(seed, `${key}:roof-kind`) < 0.26 ? 'hip' : 'gable'
+      ? seededRange(seed, `${key}:wall-height`, 5.25, style === 'barnhouse' ? 6.15 : 5.85)
+      : seededRange(seed, `${key}:wall-height`, style === 'barnhouse' ? 3.25 : 2.8, style === 'barnhouse' ? 3.8 : 3.35)
+    const roofKind: DistantMass['roof']['kind'] = style === 'barnhouse'
+      ? 'gambrel'
+      : style === 'bungalow' || seededUnit(seed, `${key}:roof-kind`) < 0.26 ? 'hip' : 'gable'
     const pitchDegrees = roofKind === 'hip'
       ? seededRange(seed, `${key}:roof-pitch`, 20, 29)
-      : seededRange(seed, `${key}:roof-pitch`, 27, 38)
+      : seededRange(seed, `${key}:roof-pitch`, roofKind === 'gambrel' ? 32 : 27, roofKind === 'gambrel' ? 41 : 38)
+    const roofOverhang = seededRange(seed, `${key}:roof-overhang`, 0.42, 0.72)
     const front: Point2 = [tangent[1] * side, -tangent[0] * side]
     const right: Point2 = [front[1], -front[0]]
     const awayFromRoad = scale(front, -1)
-    const setback = seededRange(seed, `${key}:setback`, 2.8, 5.6)
+    const setback = seededRange(seed, `${key}:setback`, style === 'farmhouse' ? 4.8 : 2.8, style === 'farmhouse' ? 7.8 : 5.6)
     const centerPoint = add(point, scale(
       awayFromRoad,
       alignmentClearance(candidate.road) + setback + depth / 2,
     ))
-    const body = rectangle(centerPoint, right, front, width, depth)
+    const body = rectangle(
+      centerPoint,
+      right,
+      front,
+      width + roofOverhang * 2,
+      depth + roofOverhang * 2,
+    )
+    let crossGable: DistantMass['crossGable']
+    const profileFootprints: FootprintRectangle[] = [body]
+    // Overhangs reserve space, but only the actual foundations need ground support.
+    const supportFootprints = [rectangle(centerPoint, right, front, width + 0.22, depth + 0.22)]
+    if (style === 'farmhouse') {
+      const projectionSide: -1 | 1 = seededUnit(seed, `${key}:cross-gable-side`) < 0.5 ? -1 : 1
+      const projectionWidth = seededRange(seed, `${key}:cross-gable-width`, 4.1, 5.4)
+      const projectionDepth = seededRange(seed, `${key}:cross-gable-depth`, 3.8, 5.2)
+      const projectionOverhang = seededRange(seed, `${key}:cross-gable-overhang`, 0.32, 0.48)
+      const projectionCenter: Point2 = [
+        projectionSide * (width / 2 - projectionWidth / 2 - 0.38),
+        depth / 2 + projectionDepth / 2 - 0.62,
+      ]
+      const worldCenter = add(add(
+        centerPoint,
+        scale(right, projectionCenter[0]),
+      ), scale(front, projectionCenter[1]))
+      crossGable = {
+        center: projectionCenter,
+        width: projectionWidth,
+        depth: projectionDepth,
+        wallHeight: wallHeight - seededRange(seed, `${key}:cross-gable-drop`, 0.15, 0.48),
+        roofPitchDegrees: seededRange(seed, `${key}:cross-gable-pitch`, 32, 41),
+        overhang: projectionOverhang,
+      }
+      profileFootprints.push(rectangle(
+        worldCenter,
+        right,
+        front,
+        projectionWidth + projectionOverhang * 2,
+        projectionDepth + projectionOverhang * 2,
+      ))
+      supportFootprints.push(rectangle(worldCenter, right, front, projectionWidth + 0.2, projectionDepth + 0.2))
+    }
     let wing: DistantMass['wing']
-    let footprints: FootprintRectangle[] = [body]
-    if (seededUnit(seed, `${key}:wing`) < 0.34) {
+    let wingSupport: FootprintRectangle | undefined
+    let footprints = profileFootprints
+    if (style !== 'farmhouse' && style !== 'barnhouse'
+      && seededUnit(seed, `${key}:wing`) < 0.34) {
       const wingSide: -1 | 1 = seededUnit(seed, `${key}:wing-side`) < 0.5 ? -1 : 1
       const wingWidth = seededRange(seed, `${key}:wing-width`, 3.1, 4.3)
       const wingDepth = seededRange(seed, `${key}:wing-depth`, 4.7, Math.min(6.5, depth - 0.45))
@@ -698,8 +1076,8 @@ export function deriveThirdRingPlan({ boundary, roads, heightAt, seed = 'pascal-
         centerPoint,
         scale(right, wingSide * (width / 2 + wingWidth / 2 - 0.32)),
       ), scale(front, depth / 2 - wingDepth / 2))
-      const proposedWing = rectangle(wingCenter, right, front, wingWidth, wingDepth)
-      const proposedFootprints = [body, proposedWing]
+      const proposedWing = rectangle(wingCenter, right, front, wingWidth + 0.72, wingDepth + 0.72)
+      const proposedFootprints = [...profileFootprints, proposedWing]
       if (clearOfRoads(proposedFootprints, clearanceRoads)
         && clearOfSiteAndHouses(proposedFootprints, boundary, occupied)) {
         wing = {
@@ -710,19 +1088,24 @@ export function deriveThirdRingPlan({ boundary, roads, heightAt, seed = 'pascal-
           roofKind: seededUnit(seed, `${key}:wing-roof-kind`) < 0.34 ? 'gable' : 'hip',
           roofPitchDegrees: seededRange(seed, `${key}:wing-roof-pitch`, 18, 27),
         }
+        wingSupport = rectangle(wingCenter, right, front, wingWidth + 0.2, wingDepth + 0.2)
         footprints = proposedFootprints
       }
     }
     if (!clearOfRoads(footprints, clearanceRoads)
       || !clearOfSiteAndHouses(footprints, boundary, occupied)) continue
-    let ground = footprintGround(footprints, heightAt)
+    let ground = footprintGround(wingSupport ? [...supportFootprints, wingSupport] : supportFootprints, heightAt)
     if (!ground && wing) {
       wing = undefined
-      footprints = [body]
-      ground = footprintGround(footprints, heightAt)
+      footprints = profileFootprints
+      ground = footprintGround(supportFootprints, heightAt)
     }
     if (!ground) continue
     const rotationY = Math.atan2(front[0], front[1])
+    const doorSide: -1 | 1 = crossGable
+      ? crossGable.center[0] > 0 ? -1 : 1
+      : wing ? (wing.side === 1 ? -1 : 1)
+        : seededUnit(seed, `${key}:door-side`) < 0.5 ? -1 : 1
     buildings.push({
       id: `third-ring-house-${key}`,
       position: [centerPoint[0], ground.base, centerPoint[1]],
@@ -730,17 +1113,14 @@ export function deriveThirdRingPlan({ boundary, roads, heightAt, seed = 'pascal-
       rotationY,
       style,
       storeys,
-      roof: {
-        kind: roofKind,
-        pitchDegrees,
-        overhang: seededRange(seed, `${key}:roof-overhang`, 0.42, 0.72),
-      },
+      roof: { kind: roofKind, pitchDegrees, overhang: roofOverhang },
       facade: {
-        doorSide: wing ? (wing.side === 1 ? -1 : 1) : seededUnit(seed, `${key}:door-side`) < 0.5 ? -1 : 1,
+        doorSide,
         frontWindowCount: seededUnit(seed, `${key}:window-count`) < 0.54 ? 2 : 3,
-        sideWindowSide: seededUnit(seed, `${key}:side-window`) < 0.5 ? -1 : 1,
+        sideWindowSide: crossGable ? doorSide : seededUnit(seed, `${key}:side-window`) < 0.5 ? -1 : 1,
       },
       ...(wing ? { wing } : {}),
+      ...(crossGable ? { crossGable } : {}),
       palette: paletteAt(seed, key, centerPoint[0], centerPoint[1]),
       foundationDepth: ground.foundationDepth,
     })
@@ -776,6 +1156,6 @@ export function deriveThirdRingPlan({ boundary, roads, heightAt, seed = 'pascal-
     trees.push({ id: `third-ring-tree-${i}`, clusterId: `third-ring-grove-${cluster}`, archetype: pine ? 'dense-pine' : 'dense-oak', species: pine ? 'pine' : 'oak', position: [x, y, z], rotationY: seededRange(seed, `tree-yaw:${i}`, -Math.PI, Math.PI), height: seededRange(seed, `tree-height:${i}`, 10, 18) * region.forestHeight, leafColor: greens[cluster % greens.length]! })
   }
   const boulders = deriveBoulders(center, radius, boundary, clearanceRoads, heightAt, occupied, seed, region)
-  const fields = deriveFields(center, radius, boundary, clearanceRoads, heightAt, occupied, trees, seed)
-  return { buildings, skyline, trees, fields, region, boulders, lighthouse }
+  const fields = deriveFields(center, radius, boundary, clearanceRoads, heightAt, occupied, trees, boulders, seed)
+  return { buildings, commercialSites, skyline, trees, fields, region, boulders, lighthouse }
 }

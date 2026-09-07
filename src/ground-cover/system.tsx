@@ -16,6 +16,7 @@ import {
 	updateGrassFieldUniforms,
 } from "./geometry";
 import { changedGrassObstacleSiteIds } from "./obstacle-adapter";
+import { updateGrassTileLod } from "./render/grass-tiles";
 import type { GrassFieldNode } from "./schema";
 
 const GRASS_FIELD_KIND = "environment:ground-cover";
@@ -200,7 +201,7 @@ export default function GrassFieldSystem() {
 		};
 	}, []);
 
-	useFrame(() => {
+	useFrame(({ camera, size, gl }) => {
 		const { clearDirty, dirtyNodes, nodes } = useScene.getState();
 		const previousNodes = previousNodesRef.current;
 		const registeredByType = sceneRegistry.byType as Record<
@@ -215,6 +216,8 @@ export default function GrassFieldSystem() {
 			if (!node || (node.type as string) !== GRASS_FIELD_KIND) continue;
 			const current = node as unknown as GrassFieldNode;
 			const previous = previousNodes.get(id);
+			const group = sceneRegistry.nodes.get(id);
+			if (group) updateGrassTileLod(group, camera, size.height * gl.getPixelRatio());
 
 			if (!previous) {
 				previousNodes.set(id, current);
@@ -223,7 +226,6 @@ export default function GrassFieldSystem() {
 			if (!dirtyNodes.has(id as AnyNodeId) || previous === current) continue;
 
 			previousNodes.set(id, current);
-			const group = sceneRegistry.nodes.get(id);
 			if (!group || !updateGrassFieldUniforms(group, current)) continue;
 			if (grassFieldGeometryInputsEqual(previous, current))
 				clearDirty(id as AnyNodeId);

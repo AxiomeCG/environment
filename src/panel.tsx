@@ -49,13 +49,19 @@ import {
   GrassFieldNode,
 } from "./ground-cover/schema"
 import {
+  activatePondTool,
   activateGroundCoverTool,
   activatePascalShortcut,
   activateSurfaceMaterialTool,
+  activateRiverTool,
   GROUND_COVER_TOOL,
+  POND_TOOL,
+  RIVER_TOOL,
   SURFACE_MATERIAL_TOOL,
   type GroundCoverToolActionTarget,
 } from "./pascal-tool-actions"
+import PondControls from "./pond/controls"
+import RiverControls from "./river/controls"
 import { type GroundCoverBrushTool, useEnvironmentStore } from "./store"
 import {
   createSurfaceMaterialField,
@@ -69,9 +75,63 @@ import {
   type SurfaceMaterialId,
 } from "./surface-material/material-types"
 
-const DISABLED_ENVIRONMENT_TOOLS = [
-  "water",
-] as const satisfies readonly EnvironmentTool[]
+
+function WaterTabs({
+  value,
+  onChange,
+  children,
+}: {
+  value: "pond" | "river"
+  onChange: (tab: "pond" | "river") => void
+  children: ReactNode
+}) {
+  const id = useId()
+  return (
+    <div className="flex flex-col gap-4">
+      <div
+        role="tablist"
+        aria-label="Water type"
+        className="grid grid-cols-2 gap-1 rounded-lg border border-sidebar-border p-1"
+        onKeyDown={(event) => {
+          let next: "pond" | "river"
+          if (event.key === "Home") next = "pond"
+          else if (event.key === "End") next = "river"
+          else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            next = value === "pond" ? "river" : "pond"
+          } else return
+          event.preventDefault()
+          onChange(next)
+          event.currentTarget.querySelector<HTMLButtonElement>(`[data-water-tab="${next}"]`)?.focus()
+        }}
+      >
+        {(["pond", "river"] as const).map((tab) => (
+          <button
+            key={tab}
+            id={`${id}-${tab}-tab`}
+            type="button"
+            role="tab"
+            data-water-tab={tab}
+            aria-selected={value === tab}
+            aria-controls={value === tab ? `${id}-panel` : undefined}
+            tabIndex={value === tab ? 0 : -1}
+            onClick={() => onChange(tab)}
+            className={`rounded-md px-3 py-2 font-medium text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
+              value === tab
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+            }`}
+          >
+            {tab === "pond" ? "Pond" : "River"}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${value}-tab`}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 const GROUND_COVER_INSTRUCTIONS: Record<GroundCoverBrushTool, string> = {
   "paint-density": "Drag on the ground to paint grass. Press Esc to stop.",
   "erase-density": "Drag on the ground to erase grass. Press Esc to stop.",
@@ -92,6 +152,8 @@ export default function EnvironmentPanel() {
   const setCatalogueView = useEnvironmentStore(
     (state) => state.setCatalogueView,
   )
+  const waterTab = useEnvironmentStore((state) => state.waterTab)
+  const setWaterTab = useEnvironmentStore((state) => state.setWaterTab)
   const nodes = useScene((state) => state.nodes)
   const selectedIds = useViewer((state) => state.selection.selectedIds)
   const layerCount = useScene(
@@ -114,6 +176,21 @@ export default function EnvironmentPanel() {
       (nodes[id as AnyNodeId]?.type as string | undefined) ===
       SURFACE_MATERIAL_TOOL,
   )
+  const pondActive = activeTool === POND_TOOL && editorMode === "build"
+  const pondSelected = selectedIds.some(
+    (id) => (nodes[id as AnyNodeId]?.type as string | undefined) === POND_TOOL,
+  )
+  const riverActive = activeTool === RIVER_TOOL && editorMode === "build"
+  const riverSelected = selectedIds.some(
+    (id) => (nodes[id as AnyNodeId]?.type as string | undefined) === RIVER_TOOL,
+  )
+  useEffect(() => {
+    if (activeTool === RIVER_TOOL || (!pondActive && riverSelected)) {
+      setWaterTab("river")
+    } else if (activeTool === POND_TOOL || (!riverActive && pondSelected)) {
+      setWaterTab("pond")
+    }
+  }, [activeTool, pondActive, pondSelected, riverActive, riverSelected, setWaterTab])
   const siteAvailable = Object.values(nodes).some(
     (node) => node.type === "site",
   )
@@ -135,6 +212,41 @@ export default function EnvironmentPanel() {
       useEditor.getState() as unknown as GroundCoverToolActionTarget,
     )
   }
+  const activatePond = () => {
+    activatePondTool(
+      useEditor.getState() as unknown as GroundCoverToolActionTarget,
+    )
+  }
+  const activateRiver = () => {
+    activateRiverTool(
+      useEditor.getState() as unknown as GroundCoverToolActionTarget,
+    )
+  }
+  const activateWater = () => {
+    if (waterTab === "river") activateRiver()
+    else activatePond()
+  }
+  const changeWaterTab = (tab: "pond" | "river") => {
+    if (tab === waterTab) return
+    setWaterTab(tab)
+    useViewer.getState().setSelection({ selectedIds: [] })
+    if (tab === "river") activateRiver()
+    else activatePond()
+  }
+  const leaveWater = () => {
+    const editor = useEditor.getState()
+    if ([POND_TOOL, RIVER_TOOL].includes(editor.tool as string)) {
+      editor.setTool(null)
+      editor.setMode("select")
+    }
+    useEnvironmentStore.getState().resetPondTool()
+    setActiveSection(undefined)
+  }
+  const sculptPondTerrain = () => {
+    useEnvironmentStore.getState().resetPondTool()
+    useEditor.getState().setTool(null)
+    activatePascalShortcut("terrain")
+  }
   const selectEnvironmentTool = (tool: EnvironmentTool) => {
     if (tool === "ground-cover") {
       setActiveSection(tool)
@@ -142,6 +254,9 @@ export default function EnvironmentPanel() {
     } else if (tool === "path") {
       setActiveSection(tool)
       activateSurface()
+    } else if (tool === "water") {
+      setActiveSection(tool)
+      activateWater()
     } else if (tool === "surroundings" || tool === "atmosphere") {
       setActiveSection(tool)
       const editor = useEditor.getState()
@@ -176,6 +291,31 @@ export default function EnvironmentPanel() {
         onResume={activateSurface}
       >
         <SurfacePaintControls />
+      </PaintPanel>
+    )
+  }
+  if (activeSection === "water") {
+    return (
+      <PaintPanel
+        title="Water"
+        description={waterTab === "pond"
+          ? "Fill terrain depressions in contour steps, then dress the water."
+          : "Draw a watercourse and carve its channel into the terrain."}
+        active={waterTab === "pond" ? pondActive : riverActive}
+        available={siteAvailable}
+        activeLabel={waterTab === "pond" ? "Pond tool active" : "River tool active"}
+        resumeLabel={waterTab === "pond"
+          ? (pondSelected ? "Resume selected pond" : "Resume pond tool")
+          : (riverSelected ? "Resume selected river" : "Resume river tool")}
+        unavailableMessage="Add a Site before creating water."
+        onBack={leaveWater}
+        onResume={activateWater}
+      >
+        <WaterTabs value={waterTab} onChange={changeWaterTab}>
+          {waterTab === "pond"
+            ? <PondControls onSculptTerrain={sculptPondTerrain} />
+            : <RiverControls />}
+        </WaterTabs>
       </PaintPanel>
     )
   }
@@ -246,13 +386,11 @@ export default function EnvironmentPanel() {
       {catalogueView === "catalogue" ? (
         <EnvironmentCatalogue
           className="min-h-0 flex-1 overflow-y-auto px-4 pb-4"
-          disabledTools={DISABLED_ENVIRONMENT_TOOLS}
           onSelect={selectEnvironmentTool}
         />
       ) : (
         <EnvironmentSelector
           className="flex min-h-0 w-full flex-1 flex-col justify-center"
-          disabledTools={DISABLED_ENVIRONMENT_TOOLS}
           onSelect={selectEnvironmentTool}
         />
       )}
@@ -300,6 +438,9 @@ function PaintPanel({
   available,
   onBack,
   onResume,
+  activeLabel = "Brush active",
+  resumeLabel = "Resume painting",
+  unavailableMessage = "Add a Site before painting the environment.",
   children,
 }: {
   title: string
@@ -308,6 +449,9 @@ function PaintPanel({
   available: boolean
   onBack: () => void
   onResume: () => void
+  activeLabel?: string
+  resumeLabel?: string
+  unavailableMessage?: string
   children: ReactNode
 }) {
   return (
@@ -319,14 +463,14 @@ function PaintPanel({
           <span
             className={`rounded-full px-2 py-1 font-medium text-[11px] ${active ? "bg-primary/15 text-primary" : "bg-sidebar-accent text-sidebar-foreground/70"}`}
           >
-            {active ? "Brush active" : "Paused"}
+            {active ? activeLabel : "Paused"}
           </span>
         </div>
         <p className="text-xs leading-relaxed text-sidebar-foreground/70">
           {description}
         </p>
         {available && !active && (
-          <ResumeButton label="Resume painting" onClick={onResume} />
+          <ResumeButton label={resumeLabel} onClick={onResume} />
         )}
       </header>
       <div
@@ -341,7 +485,7 @@ function PaintPanel({
             role="status"
             className="rounded-md border border-sidebar-border p-3 text-xs"
           >
-            Add a Site before painting the environment.
+            {unavailableMessage}
           </p>
         ) : (
           children
@@ -805,6 +949,10 @@ function SurroundingsControls() {
   )
   const seed = useEnvironmentStore((state) => state.surroundingsSeed)
   const setSeed = useEnvironmentStore((state) => state.setSurroundingsSeed)
+  const birdsEnabled = useEnvironmentStore((state) => state.birdsEnabled)
+  const setBirdsEnabled = useEnvironmentStore((state) => state.setBirdsEnabled)
+  const ambientMotion = useEnvironmentStore((state) => state.ambientMotion)
+  const setAmbientMotion = useEnvironmentStore((state) => state.setAmbientMotion)
 
   if (!site) {
     return (
@@ -822,6 +970,24 @@ function SurroundingsControls() {
           aria-label="Show neighborhood"
           checked={enabled}
           onChange={(event) => setEnabled(event.target.checked)}
+          type="checkbox"
+        />
+      </label>
+      <label className="flex items-center justify-between gap-3 rounded-md border border-sidebar-border px-3 py-2 text-xs">
+        <span>Show distant birds</span>
+        <input
+          checked={birdsEnabled}
+          disabled={!enabled}
+          onChange={(event) => setBirdsEnabled(event.target.checked)}
+          type="checkbox"
+        />
+      </label>
+      <label className="flex items-center justify-between gap-3 rounded-md border border-sidebar-border px-3 py-2 text-xs">
+        <span>Animate distant birds</span>
+        <input
+          checked={ambientMotion}
+          disabled={!enabled || !birdsEnabled}
+          onChange={(event) => setAmbientMotion(event.target.checked)}
           type="checkbox"
         />
       </label>
@@ -849,8 +1015,8 @@ function SurroundingsControls() {
         seed={seed}
       />
       <p className="text-sidebar-foreground/50 text-xs">
-        Runtime only — seed, visibility and frontage settings remain in memory
-        and are not saved yet.
+        Runtime only — seed, visibility, motion and frontage settings remain in
+        memory and are not saved yet.
       </p>
     </div>
   )

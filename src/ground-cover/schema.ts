@@ -4,6 +4,7 @@ import { GrassPaintFieldData } from './paint-field'
 
 export const DEFAULT_GRASS_BLADE_WIDTH = 0.035
 export const DEFAULT_GRASS_BLADE_HEIGHT = 0.15
+export const DEFAULT_GRASS_BLADE_REST_BEND = 0.22
 
 export const GrassFieldNode = BaseNode.extend({
   id: objectId('grass-field'),
@@ -14,6 +15,7 @@ export const GrassFieldNode = BaseNode.extend({
   bladeWidthVariation: z.number().min(0).max(100).default(20),
   bladeHeight: z.number().positive().default(DEFAULT_GRASS_BLADE_HEIGHT),
   bladeHeightVariation: z.number().min(0).max(100).default(20),
+  bladeRestBend: z.number().min(0).max(1).default(DEFAULT_GRASS_BLADE_REST_BEND),
   bladeTintVariation: z.number().min(0).max(100).default(20),
   bladeTipBrightness: z.number().min(0).max(500).default(300),
   density: z.number().min(0).max(100).default(100),
@@ -34,6 +36,7 @@ type GrassFieldDefaultsPatch = Pick<
   | 'bladeHeight'
   | 'bladeWidthVariation'
   | 'bladeHeightVariation'
+  | 'bladeRestBend'
   | 'bladeTintVariation'
   | 'bladeTipBrightness'
   | 'density'
@@ -62,6 +65,9 @@ export function getMissingGrassFieldDefaults(node: unknown): Partial<GrassFieldD
   }
   if (source.bladeHeightVariation === undefined) {
     patch.bladeHeightVariation = parsed.bladeHeightVariation
+  }
+  if (source.bladeRestBend === undefined) {
+    patch.bladeRestBend = parsed.bladeRestBend
   }
   if (source.bladeTintVariation === undefined) {
     patch.bladeTintVariation = parsed.bladeTintVariation

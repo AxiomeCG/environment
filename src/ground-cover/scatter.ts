@@ -9,6 +9,11 @@ import type { GrassFieldNode } from './schema'
 
 export const GRASS_CANDIDATE_CELL_SIZE = 0.08
 
+export type GrassBladeDimensions = Pick<
+  GrassFieldNode,
+  'bladeWidth' | 'bladeHeight' | 'bladeWidthVariation' | 'bladeHeightVariation'
+>
+
 export type GrassCandidateVisitor = (
   x: number,
   y: number,
@@ -31,7 +36,7 @@ export function grassCandidateCapacity(bounds: SiteBounds): number {
 }
 
 export function visitGrassCandidates(
-  node: GrassFieldNode,
+  node: GrassBladeDimensions,
   boundary: ReadonlyArray<readonly [number, number]>,
   bounds: SiteBounds,
   terrain: TerrainField | null,

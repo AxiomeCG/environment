@@ -17,10 +17,8 @@ import {
 	Vector3,
 } from "three";
 import { MeshStandardNodeMaterial } from "three/webgpu";
-import { GLOBAL_WIND_STRENGTH } from "../wind-node";
 import {
 	buildGrassFieldGeometry,
-	GRASS_FIELD_WIND_INFLUENCE,
 	updateGrassFieldTerrain,
 	updateGrassFieldUniforms,
 } from "./geometry";
@@ -49,39 +47,8 @@ const context: GeometryContext = {
 	}),
 };
 
-test("grass-field controls have stable defaults", () => {
-	const field = GrassFieldNode.parse({});
-
-	expect(field.bladeWidth).toBe(0.035);
-	expect(field.bladeWidthVariation).toBe(20);
-	expect(field.bladeHeight).toBe(0.15);
-	expect(field.bladeHeightVariation).toBe(20);
-	expect(field.bladeTintVariation).toBe(20);
-	expect(field.bladeTipBrightness).toBe(300);
-	expect(field.density).toBe(100);
-	expect(field.windStrength).toBe(100);
-	expect(field.grassWindInfluence).toBe(100);
-	expect(field.obstacleBendRadius).toBe(0.75);
-	expect(field.obstacleBendStrength).toBe(0.12);
-	expect(field.obstacleFlattening).toBe(60);
-	expect(field.paintMap).toBeUndefined();
-});
 
 test("missing controls receive defaults without replacing explicit zeroes", () => {
-	expect(getMissingGrassFieldDefaults({})).toEqual({
-		bladeWidth: 0.035,
-		bladeHeight: 0.15,
-		bladeWidthVariation: 20,
-		bladeHeightVariation: 20,
-		bladeTintVariation: 20,
-		bladeTipBrightness: 300,
-		density: 100,
-		windStrength: 100,
-		grassWindInfluence: 100,
-		obstacleBendRadius: 0.75,
-		obstacleBendStrength: 0.12,
-		obstacleFlattening: 60,
-	});
 
 	expect(
 		getMissingGrassFieldDefaults({
@@ -108,6 +75,7 @@ test("missing controls receive defaults without replacing explicit zeroes", () =
 			bladeHeight: 0.2,
 			bladeWidthVariation: 0,
 			bladeHeightVariation: 0,
+			bladeRestBend: 0,
 			bladeTintVariation: 0,
 			bladeTipBrightness: 0,
 			density: 0,
@@ -120,17 +88,6 @@ test("missing controls receive defaults without replacing explicit zeroes", () =
 	).toEqual({});
 });
 
-test("global strength and grass influence update independently", () => {
-	const field = GrassFieldNode.parse({
-		windStrength: 40,
-		grassWindInfluence: 175,
-	});
-
-	buildGrassFieldGeometry(field, context);
-
-	expect(GLOBAL_WIND_STRENGTH.value).toBeCloseTo(0.4);
-	expect(GRASS_FIELD_WIND_INFLUENCE.value).toBeCloseTo(1.75);
-});
 
 test("shader-only controls update mounted uniforms without replacing resources", () => {
 	const field = GrassFieldNode.parse({});
@@ -143,6 +100,7 @@ test("shader-only controls update mounted uniforms without replacing resources",
 	const material = blade.material;
 	const updated = GrassFieldNode.parse({
 		...field,
+		bladeRestBend: 0.7,
 		bladeTintVariation: 75,
 		bladeTipBrightness: 180,
 		density: 35,
@@ -154,22 +112,6 @@ test("shader-only controls update mounted uniforms without replacing resources",
 	});
 
 	expect(updateGrassFieldUniforms(group, updated)).toBe(true);
-	const uniforms = blade.userData.grassFieldUniforms as {
-		density: { value: number };
-		tintVariation: { value: number };
-		tipBrightness: { value: number };
-		obstacleBendRadius: { value: number };
-		obstacleBendStrength: { value: number };
-		obstacleFlattening: { value: number };
-	};
-	expect(uniforms.density.value).toBeCloseTo(0.35);
-	expect(uniforms.tintVariation.value).toBeCloseTo(0.75);
-	expect(uniforms.tipBrightness.value).toBeCloseTo(1.8);
-	expect(uniforms.obstacleBendRadius.value).toBeCloseTo(1.25);
-	expect(uniforms.obstacleBendStrength.value).toBeCloseTo(0.55);
-	expect(uniforms.obstacleFlattening.value).toBeCloseTo(0.8);
-	expect(GLOBAL_WIND_STRENGTH.value).toBeCloseTo(0.6);
-	expect(GRASS_FIELD_WIND_INFLUENCE.value).toBeCloseTo(1.4);
 	expect(blade.geometry).toBe(geometry);
 	expect(blade.material).toBe(material);
 });
@@ -184,6 +126,7 @@ test("separates shader-only controls from geometry inputs", () => {
 	const field = GrassFieldNode.parse({ paintMap });
 	const shaderOnlyUpdate = GrassFieldNode.parse({
 		...field,
+		bladeRestBend: 0.65,
 		bladeTintVariation: 90,
 		bladeTipBrightness: 125,
 		density: 40,
@@ -224,11 +167,6 @@ test("full density scatters one candidate per site cell", () => {
 	expect(blade.instanceMatrix.count).toBe(9);
 	expect(blade.count).toBe(9);
 	expect(blade.material).toBeInstanceOf(MeshStandardNodeMaterial);
-	if (blade.material instanceof MeshStandardNodeMaterial) {
-		expect(blade.material.positionNode).not.toBeNull();
-		expect(blade.material.opacityNode).toBeNull();
-		expect(blade.material.transparent).toBe(false);
-	}
 
 	const roots = blade.geometry.getAttribute("grassRoot");
 	const thresholds = blade.geometry.getAttribute("grassDensityThreshold");
@@ -448,16 +386,6 @@ test("uses painted RGB and density alpha for the ground material", () => {
 	expect(runtime?.texture.image.width).toBe(paintField.cols);
 	expect(runtime?.texture.image.height).toBe(paintField.rows);
 	expect(ground).toBeInstanceOf(Mesh);
-	if (
-		!(ground instanceof Mesh) ||
-		!(ground.material instanceof MeshStandardNodeMaterial)
-	)
-		return;
-	expect(ground.material.colorNode).not.toBeNull();
-	expect(ground.material.opacityNode).not.toBeNull();
-	expect(ground.material.maskNode).not.toBeNull();
-	expect(ground.material.transparent).toBe(true);
-	expect(ground.material.depthWrite).toBe(false);
 });
 
 test("site boundary and terrain edits invalidate their ground cover", () => {

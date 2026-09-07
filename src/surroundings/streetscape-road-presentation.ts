@@ -1275,9 +1275,18 @@ function edgeSurfaces(
   return surfaces
 }
 
-function markingSurfaces(network: RoadNetworkNode): RoadPresentationSurface[] {
+function markingSurfaces(
+  network: RoadNetworkNode,
+  junctions: readonly SolvedJunction[],
+): RoadPresentationSurface[] {
   const groups = new Map<string, RoadMarkingPolygon[]>()
-  for (const marking of buildRoadNetworkMarkings(network)) {
+  const junctionApproachCuts = Object.fromEntries(
+    junctions.map(({ graphNode, solution }) => [
+      graphNode.id,
+      solution.approachCuts,
+    ]),
+  )
+  for (const marking of buildRoadNetworkMarkings(network, junctionApproachCuts)) {
     const key = `${marking.kind}:${marking.color}`
     groups.set(key, [...(groups.get(key) ?? []), marking])
   }
@@ -1388,7 +1397,7 @@ export function buildRoadPresentationPlan(
     junctions: presentedJunctions.descriptors,
     surfaces: [
       ...edgeSurfaces(presentationNetwork, solvedJunctions),
-      ...markingSurfaces(presentationNetwork),
+      ...markingSurfaces(presentationNetwork, solvedJunctions),
       ...presentedJunctions.surfaces,
     ].filter(({ geometry }) => geometry.positions.length > 0),
   }

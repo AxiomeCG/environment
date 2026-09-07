@@ -46,15 +46,22 @@ export function deriveLandscapeRegion(seed = 'pascal-suburbs'): LandscapeRegion 
     phase: seededRange(seed, 'region:river-phase', -Math.PI, Math.PI),
     halfWidth: seededRange(seed, 'region:river-width', 12, 22),
   } : null
-  const peaks = Array.from({ length: mountainous ? 4 : 3 }, (_, index) => {
+  const peakCount = mountainous ? 4 : 3
+  const ridgeSpacing = mountainous ? 0.34 : 0.42
+  const peaks = Array.from({ length: peakCount }, (_, index) => {
     const width = seededRange(seed, `region:peak:${index}:width`, 85, 155)
     const depth = seededRange(seed, `region:peak:${index}:depth`, 100, 190)
     const height = seededRange(seed, `region:peak:${index}:height`, mountainous ? 65 : 20, mountainous ? 145 : kind === 'foothills' ? 90 : 58)
+    // Place peaks as one regional arc opposite the open side. Seeded jitter
+    // keeps identities distinct without scattering unrelated hill blobs.
+    const ridgeSlot = index - (peakCount - 1) / 2
+    const peakAngle = angle + Math.PI + ridgeSlot * ridgeSpacing
+      + seededRange(seed, `region:peak:${index}:angle`, -0.1, 0.1)
     // Tall, broad peaks need room for their near-facing slopes. Preserve their
     // heights and leave already-distant peaks and low hills in place.
     const minimumDistance = height * 2.4 + Math.max(width, depth) * 0.6
     return {
-      angle: angle + Math.PI + seededRange(seed, `region:peak:${index}:angle`, -1.35, 1.35),
+      angle: peakAngle,
       distance: Math.max(seededRange(seed, `region:peak:${index}:distance`, 285, 445), minimumDistance),
       width, depth, height,
     }

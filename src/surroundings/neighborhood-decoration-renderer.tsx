@@ -14,16 +14,19 @@ import {
   Euler,
   Group,
   IcosahedronGeometry,
+  InstancedBufferAttribute,
   InstancedMesh,
   Material,
   Matrix4,
   Mesh,
+  PlaneGeometry,
   Quaternion,
   Vector3,
 } from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { attribute } from 'three/tsl'
-import { MeshStandardNodeMaterial } from 'three/webgpu'
+import { array, attribute, cameraPosition, positionGeometry, positionLocal, positionWorld, smoothstep, vec3, vertexIndex } from 'three/tsl'
+import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
+import type { Node } from 'three/webgpu'
 import type {
   CatalogPropPlan,
   FencePlan,
@@ -35,6 +38,8 @@ import type {
   StreetLightPlan,
 } from './neighborhood-decoration'
 import { createContextInstances } from './primitive-instances'
+import { SURROUNDINGS_NIGHT_FACTOR } from './night-lighting'
+import { PresentationMaterial } from './presentation-material'
 import {
   buildFencePresentationMembers,
   createMailboxPresentationGeometry,
@@ -433,9 +438,73 @@ export function buildFenceInstances(
 }
 
 
+const STREET_LIGHT_HEAD_LOCAL_X = 1.65
+const STREET_LIGHT_POOL_LENGTH = 9
+const STREET_LIGHT_POOL_WIDTH = 5.8
+// Clear collector asphalt and paint, including the terrain drape offset.
+const STREET_LIGHT_POOL_GROUND_OFFSET = 0.28
 let streetLightGeometry: StreetscapeGeometryPair | undefined
+let streetLightPoolGeometry: PlaneGeometry | undefined
 let streetLightBodyMaterial: Material | undefined
-let streetLightLensMaterial: Material | undefined
+let streetLightLensMaterial: PresentationMaterial | undefined
+let streetLightPoolMaterial: MeshBasicNodeMaterial | undefined
+
+function getStreetLightLensMaterial(): PresentationMaterial {
+  if (streetLightLensMaterial) return streetLightLensMaterial
+  const material = new PresentationMaterial({
+    color: '#cbd2d4',
+    metalness: 0.08,
+    roughness: 0.2,
+  })
+  const light = new Color('#ffd088')
+  material.name = 'surroundings-street-light-lens'
+  material.emissiveNode = vec3(light.r, light.g, light.b)
+    .mul(SURROUNDINGS_NIGHT_FACTOR).mul(5)
+  streetLightLensMaterial = material
+  return material
+}
+
+function getStreetLightPoolGeometry(): PlaneGeometry {
+  streetLightPoolGeometry ??= new PlaneGeometry(1, 1, 2, 2).rotateX(-Math.PI / 2)
+  return streetLightPoolGeometry
+}
+
+function getStreetLightPoolMaterial(): MeshBasicNodeMaterial {
+  if (streetLightPoolMaterial) return streetLightPoolMaterial
+  const heights0 = attribute<'vec3'>('lightPoolHeights0', 'vec3')
+  const heights1 = attribute<'vec3'>('lightPoolHeights1', 'vec3')
+  const heights2 = attribute<'vec3'>('lightPoolHeights2', 'vec3')
+  const ground = array([
+    heights0.x, heights0.y, heights0.z,
+    heights1.x, heights1.y, heights1.z,
+    heights2.x, heights2.y, heights2.z,
+  ])
+  const radius = positionGeometry.xz.mul(2).length()
+  const feather = smoothstep(0.12, 1.12, radius).oneMinus()
+  const cameraFade = smoothstep(120, 240, positionWorld.sub(cameraPosition).length()).oneMinus()
+  const opacity = feather.mul(cameraFade).mul(SURROUNDINGS_NIGHT_FACTOR).mul(0.22)
+  const light = new Color('#ffc96f')
+  const material = new MeshBasicNodeMaterial({
+    transparent: true,
+    depthWrite: false,
+    fog: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -6,
+    polygonOffsetUnits: -2,
+  })
+  material.name = 'surroundings-street-light-ground-pools'
+  material.colorNode = vec3(light.r, light.g, light.b)
+  material.opacityNode = opacity
+  material.maskNode = opacity.greaterThan(0.002)
+  // NodeMaterial applies instancing before positionNode: retain that transform.
+  material.positionNode = positionLocal.add(vec3(
+    0,
+    ground.element(vertexIndex) as Node<'float'>,
+    0,
+  ))
+  streetLightPoolMaterial = material
+  return material
+}
 
 function updateStreetLightInstances(
   root: Group,
@@ -444,10 +513,10 @@ function updateStreetLightInstances(
 ): void {
   streetLightGeometry ??= createStreetLightPresentationGeometry()
   streetLightBodyMaterial ??= createMaterial(customMaterial('#30373b', 0.38, 0.68))
-  streetLightLensMaterial ??= createMaterial(customMaterial('#cbd2d4', 0.2, 0.08))
+  const lensMaterial = getStreetLightLensMaterial()
   let instances = root.children as InstancedMesh[]
   const capacity = instances[0]?.userData.capacity as number | undefined
-  if (instances.length !== 2 || (capacity ?? 0) < plans.length) {
+  if (instances.length !== 3 || (capacity ?? 0) < plans.length) {
     for (const mesh of instances) mesh.dispose()
     root.clear()
     const nextCapacity = Math.max(PRESENTATION_INSTANCE_CAPACITY, plans.length)
@@ -464,7 +533,7 @@ function updateStreetLightInstances(
     body.userData = { capacity: nextCapacity, part: 'body' }
     const lens = createContextInstances(
       streetLightGeometry.accent,
-      streetLightLensMaterial,
+      lensMaterial,
       nextCapacity,
     )
     lens.name = 'streetscape-roadway-led-optic-instances'
@@ -472,13 +541,39 @@ function updateStreetLightInstances(
     lens.raycast = NO_RAYCAST
     lens.frustumCulled = false
     lens.userData = { capacity: nextCapacity, part: 'optic' }
-    root.add(body, lens)
-    instances = [body, lens]
+    const pool = createContextInstances(
+      getStreetLightPoolGeometry(),
+      getStreetLightPoolMaterial(),
+      nextCapacity,
+    )
+    pool.name = 'streetscape-roadway-led-ground-pool-instances'
+    pool.renderOrder = 1
+    pool.raycast = NO_RAYCAST
+    pool.userData = { capacity: nextCapacity, part: 'ground-pool' }
+    for (const [name, size] of [
+      ['lightPoolHeights0', 3],
+      ['lightPoolHeights1', 3],
+      ['lightPoolHeights2', 3],
+    ] as const) {
+      pool.geometry.setAttribute(
+        name,
+        new InstancedBufferAttribute(new Float32Array(nextCapacity * size), size),
+      )
+    }
+    root.add(body, lens, pool)
+    instances = [body, lens, pool]
   }
 
+  const [body, lens, pool] = instances as [InstancedMesh, InstancedMesh, InstancedMesh]
   const matrix = new Matrix4()
   const translation = new Vector3()
   const quaternion = new Quaternion()
+  const poolScale = new Vector3(STREET_LIGHT_POOL_LENGTH, 1, STREET_LIGHT_POOL_WIDTH)
+  const poolVertices = getStreetLightPoolGeometry().getAttribute('position')
+  const samples = new Float32Array(poolVertices.count)
+  const heightRows = [0, 1, 2].map((row) =>
+    pool.geometry.getAttribute(`lightPoolHeights${row}`) as InstancedBufferAttribute)
+  let verticalMargin = 0
   plans.forEach((plan, index) => {
     setPlacementMatrix(
       matrix,
@@ -488,7 +583,37 @@ function updateStreetLightInstances(
       plan.rotationY,
       heightAt,
     )
-    for (const mesh of instances) mesh.setMatrixAt(index, matrix)
+    body.setMatrixAt(index, matrix)
+    lens.setMatrixAt(index, matrix)
+
+    const cosine = Math.cos(plan.rotationY)
+    const sine = Math.sin(plan.rotationY)
+    const centerX = plan.position[0] + cosine * STREET_LIGHT_HEAD_LOCAL_X
+    const centerZ = plan.position[1] - sine * STREET_LIGHT_HEAD_LOCAL_X
+    const baseY = groundHeight(heightAt, centerX, centerZ)
+    for (let vertex = 0; vertex < poolVertices.count; vertex += 1) {
+      const localX = poolVertices.getX(vertex) * STREET_LIGHT_POOL_LENGTH
+      const localZ = poolVertices.getZ(vertex) * STREET_LIGHT_POOL_WIDTH
+      const sampleX = centerX + cosine * localX + sine * localZ
+      const sampleZ = centerZ - sine * localX + cosine * localZ
+      samples[vertex] = groundHeight(heightAt, sampleX, sampleZ)
+        - baseY + STREET_LIGHT_POOL_GROUND_OFFSET
+      verticalMargin = Math.max(verticalMargin, Math.abs(samples[vertex]!))
+    }
+    quaternion.setFromAxisAngle(UP, plan.rotationY)
+    pool.setMatrixAt(index, matrix.compose(
+      translation.set(centerX, baseY, centerZ),
+      quaternion,
+      poolScale,
+    ))
+    for (let row = 0; row < 3; row += 1) {
+      heightRows[row]!.setXYZ(
+        index,
+        samples[row * 3]!,
+        samples[row * 3 + 1]!,
+        samples[row * 3 + 2]!,
+      )
+    }
   })
   for (const mesh of instances) {
     mesh.count = plans.length
@@ -499,13 +624,17 @@ function updateStreetLightInstances(
       part: mesh.userData.part,
     }
   }
+  for (const row of heightRows) row.needsUpdate = true
+  pool.computeBoundingSphere()
+  if (pool.boundingSphere) pool.boundingSphere.radius += verticalMargin
   root.userData = {
-    drawCallCount: plans.length === 0 ? 0 : 2,
+    drawCallCount: plans.length === 0 ? 0 : 3,
+    groundPoolCount: plans.length,
     streetLightCount: plans.length,
   }
 }
 
-function buildStreetLightInstances(
+export function buildStreetLightInstances(
   plans: readonly StreetLightPlan[],
   heightAt: HeightAt = FLAT_HEIGHT_AT,
 ): Group {

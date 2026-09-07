@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import {
   activateGroundCoverTool,
+  activatePondTool,
   applyPascalShortcut,
-  cancelGroundCoverToolFor2D,
+  cancelEnvironmentPaintToolFor2D,
   GROUND_COVER_TOOL,
   type GroundCoverToolActionTarget,
+  POND_TOOL,
   type PascalToolActionTarget,
 } from './pascal-tool-actions'
 
@@ -50,7 +52,7 @@ describe('Pascal environment shortcuts', () => {
   })
 })
 
-describe('Ground Cover tool view lifecycle', () => {
+describe('Environment canvas tool view lifecycle', () => {
   test('promotes a deliberate 2D view to Split when painting starts', () => {
     const calls: string[] = []
     const editor = groundCoverTarget(calls, {
@@ -76,7 +78,7 @@ describe('Ground Cover tool view lifecycle', () => {
       viewMode: '2d',
     })
 
-    expect(cancelGroundCoverToolFor2D(editor)).toBe(true)
+    expect(cancelEnvironmentPaintToolFor2D(editor)).toBe(true)
     expect(calls).toEqual(['mode:select'])
   })
 
@@ -88,7 +90,32 @@ describe('Ground Cover tool view lifecycle', () => {
       viewMode: 'split',
     })
 
-    expect(cancelGroundCoverToolFor2D(editor)).toBe(false)
+    expect(cancelEnvironmentPaintToolFor2D(editor)).toBe(false)
     expect(calls).toEqual([])
+  })
+
+  test('promotes 2D to Split when the Water tool starts', () => {
+    const calls: string[] = []
+    const editor = groundCoverTarget(calls, {
+      mode: 'select',
+      tool: null,
+      viewMode: '2d',
+    })
+
+    activatePondTool(editor)
+
+    expect(calls).toEqual(['view:split', `tool:${POND_TOOL}`, 'mode:build'])
+  })
+
+  test('leaving Split for 2D cancels Water and removes its contour overlay', () => {
+    const calls: string[] = []
+    const editor = groundCoverTarget(calls, {
+      mode: 'build',
+      tool: POND_TOOL,
+      viewMode: '2d',
+    })
+
+    expect(cancelEnvironmentPaintToolFor2D(editor)).toBe(true)
+    expect(calls).toEqual(['mode:select'])
   })
 })

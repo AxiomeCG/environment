@@ -9,8 +9,11 @@ import {
   deriveHousePlans,
   deriveNeighborCellClassifications,
   deriveRoadReservations,
+  houseBodyFrame,
   houseFacadeFrame,
   houseGarageFootprint,
+  type HousePlan,
+  type HouseStyle,
 } from './neighborhood'
 import { deriveRuntimeRoadNetwork } from './runtime-road-graph'
 
@@ -66,7 +69,7 @@ function pointInPolygon(point: Point2, polygon: readonly Point2[]): boolean {
 
 
 function assertOpeningsStayInsideFacades(
-  houses: ReturnType<typeof deriveHousePlans>,
+  houses: readonly HousePlan[],
 ): void {
   for (const house of houses) {
     expect(house.facades.flatMap(({ openings }) => openings).filter(({ kind }) => kind === 'door'))
@@ -197,26 +200,55 @@ describe('procedural surroundings neighborhood', () => {
         + (rightCell.kind === 'corner' ? 2 : rightCell.lotIndex)
       return leftPosition - rightPosition
     })
+    const expectedByStyle = {
+      cottage: { storeys: 1, roof: 'gable', pitches: [36, 40] },
+      farmhouse: { storeys: 2, roof: 'gambrel', pitches: [40, 44] },
+      pavilion: { storeys: 1, roof: 'hip', pitches: [22, 26] },
+      townhouse: { storeys: 2, roof: 'gable', pitches: [31, 35] },
+      bungalow: { storeys: 1, roof: 'hip', pitches: [14, 18] },
+    } as const satisfies Readonly<Record<HouseStyle, Readonly<{
+      storeys: 1 | 2
+      roof: HousePlan['roof']['kind']
+      pitches: readonly [number, number]
+    }>>>
 
     expect(styles.size).toBeGreaterThanOrEqual(2)
-    expect(styles.size).toBeLessThanOrEqual(3)
     expect(ringOrder.slice(1).some((house, index) => house.style === ringOrder[index]!.style))
       .toBe(true)
     for (const house of houses) {
-      const expected = house.style === 'farmhouse'
-        ? { storeys: 2, roof: 'gambrel', pitches: [40, 44] } as const
-        : house.style === 'pavilion'
-          ? { storeys: 1, roof: 'hip', pitches: [22, 26] } as const
-          : { storeys: 1, roof: 'gable', pitches: [36, 40] } as const
+      const expected = expectedByStyle[house.style]
       expect(house.storeys).toBe(expected.storeys)
       expect(house.roof.kind).toBe(expected.roof)
-      expect([...expected.pitches] as number[]).toContain(house.roof.pitchDegrees)
       expect(house.roof.pitchDegrees).toBe(expected.pitches[house.variant])
     }
     for (const house of houses) {
       expect(house.palette.foundation).toMatch(/^#[\da-f]{6}$/)
       expect(house.palette.glass).toMatch(/^#[\da-f]{6}$/)
     }
+
+    const sampledFrontageHouses = new Map<HouseStyle, HousePlan>()
+    for (let index = 0; index < 32; index += 1) {
+      const sample = neighborhood(CONNECTED, `archetype-frontage-sample-${index}`)
+      const sampleCellById = new Map(sample.cells.map((cell) => [cell.id, cell]))
+      assertOpeningsStayInsideFacades(sample.houses)
+      for (const house of sample.houses) {
+        if (sampleCellById.get(house.cellId)?.kind === 'frontage') {
+          sampledFrontageHouses.set(house.style, house)
+        }
+      }
+    }
+    expect([...sampledFrontageHouses.keys()].sort()).toEqual([
+      'bungalow',
+      'cottage',
+      'farmhouse',
+      'pavilion',
+      'townhouse',
+    ])
+    const townhouse = sampledFrontageHouses.get('townhouse')!
+    const bungalow = sampledFrontageHouses.get('bungalow')!
+    expect(houseBodyFrame(townhouse).width).toBeLessThan(houseBodyFrame(bungalow).width)
+    expect(townhouse.depth).toBeGreaterThan(bungalow.depth)
+    expect(townhouse.wallHeight).toBeGreaterThan(bungalow.wallHeight * 2)
   })
 
 

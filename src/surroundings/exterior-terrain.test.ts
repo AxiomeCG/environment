@@ -1,8 +1,4 @@
-import {
-  createTerrainField,
-  surfaceHeightAt,
-  type TerrainField,
-} from '@pascal-app/core'
+import { createTerrainField, surfaceHeightAt, type TerrainField } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
 import { BufferAttribute, BufferGeometry, Mesh, MeshBasicMaterial, Raycaster, Vector3 } from 'three'
 import {
@@ -15,6 +11,7 @@ import {
   buildExteriorTerrainSection,
   buildExteriorTerrainSections,
   createExteriorTerrainSampler,
+  createRenderedTerrainSampler,
   deriveExteriorTerrainSectionAddresses,
   EXTERIOR_TERRAIN_SECTION_SEGMENTS,
   exteriorTerrainSectionAddressAt,
@@ -143,15 +140,15 @@ describe('exterior Terrain sampling', () => {
   test('produces bit-identical positions and normals on a shared section edge', () => {
     const sampler = createExteriorTerrainSampler({ boundary: DEFAULT_SITE, terrain: null })
     const left = buildExteriorTerrainSection(
-          exteriorTerrainSectionAddressAt(-1, 10),
-          sampler,
-          DEFAULT_SITE,
-        )
+      exteriorTerrainSectionAddressAt(-1, 10),
+      sampler,
+      DEFAULT_SITE,
+    )
     const right = buildExteriorTerrainSection(
-          exteriorTerrainSectionAddressAt(0, 10),
-          sampler,
-          DEFAULT_SITE,
-        )
+      exteriorTerrainSectionAddressAt(0, 10),
+      sampler,
+      DEFAULT_SITE,
+    )
     const verticesPerSide = EXTERIOR_TERRAIN_SECTION_SEGMENTS + 1
 
     for (let row = 0; row < verticesPerSide; row += 1) {
@@ -192,22 +189,43 @@ describe('exterior Terrain sampling', () => {
   test('cuts precisely to rectangular, concave, and sub-cell Site edges', () => {
     const boundaries: readonly (readonly Point2[])[] = [
       DEFAULT_SITE,
-      [[63.3, -7.1], [76.9, -6.2], [76.9, 3.6], [69.1, 3.6], [69.1, 8.4], [62.6, 7.1]],
-      [[1, 1], [2, 1], [1, 2]],
+      [
+        [63.3, -7.1],
+        [76.9, -6.2],
+        [76.9, 3.6],
+        [69.1, 3.6],
+        [69.1, 8.4],
+        [62.6, 7.1],
+      ],
+      [
+        [1, 1],
+        [2, 1],
+        [1, 2],
+      ],
     ]
     for (const boundary of boundaries) {
       const addresses = deriveExteriorTerrainSectionAddresses(boundary, 0)
-      const terrain = mergeExteriorTerrainSections(addresses.map((address) =>
-        buildExteriorTerrainSection(address, { heightAt: () => 0, normalAt: () => [0, 1, 0] }, boundary)))
+      const terrain = mergeExteriorTerrainSections(
+        addresses.map((address) =>
+          buildExteriorTerrainSection(
+            address,
+            { heightAt: () => 0, normalAt: () => [0, 1, 0] },
+            boundary,
+          ),
+        ),
+      )
       let area = 0
       for (let offset = 0; offset < terrain.indices.length; offset += 3) {
         const a = terrain.indices[offset]! * 3
         const b = terrain.indices[offset + 1]! * 3
         const c = terrain.indices[offset + 2]! * 3
-        area += Math.abs(
-          (terrain.positions[b]! - terrain.positions[a]!) * (terrain.positions[c + 2]! - terrain.positions[a + 2]!)
-          - (terrain.positions[b + 2]! - terrain.positions[a + 2]!) * (terrain.positions[c]! - terrain.positions[a]!),
-        ) / 2
+        area +=
+          Math.abs(
+            (terrain.positions[b]! - terrain.positions[a]!) *
+              (terrain.positions[c + 2]! - terrain.positions[a + 2]!) -
+              (terrain.positions[b + 2]! - terrain.positions[a + 2]!) *
+                (terrain.positions[c]! - terrain.positions[a]!),
+          ) / 2
       }
       let siteArea = 0
       for (let index = 0; index < boundary.length; index += 1) {
@@ -226,19 +244,26 @@ describe('exterior Terrain sampling', () => {
         for (let index = 0; index < boundary.length; index += 1) {
           const start = boundary[index]!
           const end = boundary[(index + 1) % boundary.length]!
-          const dx = end[0] - start[0], dz = end[1] - start[1]
-          const outward = Math.sign(siteArea) * 0.01 / Math.hypot(dx, dz)
-          const ray = new Raycaster(new Vector3(
-            (start[0] + end[0]) / 2 + dz * outward,
-            1,
-            (start[1] + end[1]) / 2 - dx * outward,
-          ), new Vector3(0, -1, 0))
+          const dx = end[0] - start[0],
+            dz = end[1] - start[1]
+          const outward = (Math.sign(siteArea) * 0.01) / Math.hypot(dx, dz)
+          const ray = new Raycaster(
+            new Vector3(
+              (start[0] + end[0]) / 2 + dz * outward,
+              1,
+              (start[1] + end[1]) / 2 - dx * outward,
+            ),
+            new Vector3(0, -1, 0),
+          )
           expect(ray.intersectObject(mesh)[0]?.point.y).toBeCloseTo(0, 6)
-          const skirtRay = new Raycaster(new Vector3(
-            (start[0] + end[0]) / 2 - dz * outward,
-            0.01,
-            (start[1] + end[1]) / 2 + dx * outward,
-          ), new Vector3(dz, 0, -dx).multiplyScalar(Math.sign(siteArea)).normalize())
+          const skirtRay = new Raycaster(
+            new Vector3(
+              (start[0] + end[0]) / 2 - dz * outward,
+              0.01,
+              (start[1] + end[1]) / 2 + dx * outward,
+            ),
+            new Vector3(dz, 0, -dx).multiplyScalar(Math.sign(siteArea)).normalize(),
+          )
           expect(skirtRay.intersectObject(mesh)[0]?.distance).toBeCloseTo(0.01, 4)
         }
       } finally {
@@ -258,11 +283,13 @@ describe('exterior Terrain sampling', () => {
       expect(Array.from(section.positions).every(Number.isFinite)).toBeTrue()
       expect(Array.from(section.normals).every(Number.isFinite)).toBeTrue()
       for (let offset = 0; offset < section.normals.length; offset += 3) {
-        expect(Math.hypot(
-          section.normals[offset]!,
-          section.normals[offset + 1]!,
-          section.normals[offset + 2]!,
-        )).toBeCloseTo(1, 5)
+        expect(
+          Math.hypot(
+            section.normals[offset]!,
+            section.normals[offset + 1]!,
+            section.normals[offset + 2]!,
+          ),
+        ).toBeCloseTo(1, 5)
       }
     }
   })
@@ -277,7 +304,6 @@ describe('exterior Terrain sampling', () => {
 
     expect(sampler.heightAt(x, z)).toBe(surfaceHeightAt(terrain, x, z))
   })
-
 
   test('keeps every Ring 2 road surface above the exterior Terrain', () => {
     const layout = deriveSurroundingsLayout(
@@ -305,15 +331,45 @@ describe('exterior Terrain sampling', () => {
         const x = surface.geometry.positions[offset]!
         const y = surface.geometry.positions[offset + 1]!
         const z = surface.geometry.positions[offset + 2]!
-        minimumClearance = Math.min(
-          minimumClearance,
-          y - (sampler.heightAt(x, z) - 0.02),
-        )
+        minimumClearance = Math.min(minimumClearance, y - (sampler.heightAt(x, z) - 0.02))
       }
     }
 
     expect(road.surfaces.length).toBeGreaterThan(0)
     expect(minimumClearance).toBeGreaterThanOrEqual(0.01)
+  })
+  test('uses bounded adaptive sections and stitches them to coarser neighbors', () => {
+    const adaptiveAddress = exteriorTerrainSectionAddressAt(1, 1)
+    const neighborAddress = exteriorTerrainSectionAddressAt(65, 1)
+    const source = {
+      heightAt: (x: number, z: number) => x * 0.1 + z * z * 0.01,
+      normalAt: () => [0, 1, 0] as const,
+      sectionSegments: (address: typeof adaptiveAddress) =>
+        address.key === adaptiveAddress.key ? 32 : 10,
+    }
+    const rendered = createRenderedTerrainSampler(source, [adaptiveAddress, neighborAddress])
+    const distantBoundary = [
+      [800, 800],
+      [820, 800],
+      [820, 820],
+      [800, 820],
+    ] as const
+    const section = buildExteriorTerrainSection(adaptiveAddress, rendered, distantBoundary)
+
+    const edge = []
+    for (let offset = 0; offset < section.positions.length; offset += 3) {
+      if (section.positions[offset] === 64) {
+        edge.push([section.positions[offset + 2]!, section.positions[offset + 1]!] as const)
+      }
+    }
+    edge.sort((a, b) => a[0] - b[0])
+    for (let index = 1; index < edge.length; index += 1) {
+      const first = edge[index - 1]!,
+        second = edge[index]!
+      const z = (first[0] + second[0]) / 2
+      const y = (first[1] + second[1]) / 2
+      expect(y).toBeCloseTo(rendered.heightAt(64, z), 5)
+    }
   })
 })
 
