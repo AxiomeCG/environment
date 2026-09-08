@@ -32,6 +32,7 @@ import {
   createExteriorTerrainSampler,
   createRenderedTerrainSampler,
   deriveExteriorTerrainSectionAddresses,
+  createTerrainSubdivisionSampler,
   type ExteriorTerrainSectionAddress,
   type ExteriorTerrainSampler,
   mergeExteriorTerrainSections,
@@ -67,7 +68,7 @@ import { DistantBirds } from './distant-birds'
 const NeighborhoodTrees = lazy(() =>
   import('./neighborhood-trees').then((module) => ({ default: module.NeighborhoodTrees })),
 )
-import { deriveThirdRingPlan, type FieldPatch } from './third-ring'
+import { deriveThirdRingPlan, type FieldPatch, type ThirdRingPlan } from './third-ring'
 import { ThirdRing } from './third-ring-renderer'
 import {
   applyRoadSurfaceDetail,
@@ -89,6 +90,8 @@ import { Boulders } from './boulders'
 import { buildFieldCoverageTexture } from './field-coverage'
 import { createPropertySurfaceTransition } from './property-surface'
 import type { PropertySurfaceTransition } from './property-surface'
+import { NaturalSurroundingsVegetation } from './natural-vegetation'
+import { isNaturalSurroundingsPreset, SURROUNDINGS_PRESET_POLICIES } from './presets'
 
 type PresentedLayout = Readonly<{
   neighborCells: readonly ClassifiedNeighborCell[]
@@ -365,6 +368,14 @@ export default function SurroundingsLayer({
   const active = useEnvironmentStore((state) => state.surroundingsEnabled)
   const frontageContexts = useEnvironmentStore((state) => state.frontageContexts)
   const seed = useEnvironmentStore((state) => state.surroundingsSeed)
+  const presetId = useEnvironmentStore((state) => state.surroundingsPreset)
+  const preset = SURROUNDINGS_PRESET_POLICIES[presetId]
+  const region = useMemo(() => {
+    const regional = deriveLandscapeRegion(seed)
+    return preset.regionalFeatures === 'inland'
+      ? { ...regional, kind: 'foothills' as const, coast: null, river: null }
+      : regional
+  }, [seed, preset])
   const birdsEnabled = useEnvironmentStore((state) => state.birdsEnabled)
   const ambientMotion = useEnvironmentStore((state) => state.ambientMotion)
   const walkthroughMode = useViewer((state) => state.walkthroughMode)
@@ -427,11 +438,27 @@ export default function SurroundingsLayer({
     invalidate()
   }, [propertyTransition, boundary, surfaceField, surfaceMaterial?.textureSize, invalidate])
   const exteriorTerrainSections = useMemo(
-    () => (active && site ? deriveExteriorTerrainSectionAddresses(site.polygon.points) : []),
-    [active, site],
+    () => (active && boundary ? deriveExteriorTerrainSectionAddresses(boundary) : []),
+    [active, boundary],
   )
   const presentedLayout = useMemo(() => {
     if (!active || !boundary || !site) return EMPTY_PRESENTED_LAYOUT
+    if (preset.suppressBuiltContext) {
+      const levelTerrainDistance = preset.levelTerrainDistance ?? 0
+      const terrain = createExteriorTerrainSampler({
+        boundary,
+        levelTerrainDistance,
+        terrain: riverTerrainBaseline(site),
+        seed,
+        region,
+        reliefAmplitudeScale: preset.reliefAmplitudeScale,
+      })
+      return {
+        ...EMPTY_PRESENTED_LAYOUT,
+        levelTerrainDistance,
+        landscape: createRiverLandscape(site, rivers, terrain, region),
+      }
+    }
 
     let segments: BoundarySegment[]
     let layout: SurroundingsLayoutDescriptor
@@ -460,8 +487,9 @@ export default function SurroundingsLayer({
         levelTerrainDistance,
         terrain: riverTerrainBaseline(site),
         seed,
+        region,
       })
-      const landscape = createRiverLandscape(site, rivers, terrain, deriveLandscapeRegion(seed))
+      const landscape = createRiverLandscape(site, rivers, terrain, region)
       const outerRoads = deriveOuterRoads(layout, { seed, heightAt: terrain.heightAt })
       const network = deriveRuntimeRoadNetwork(layout, outerRoads)
       const neighborCells = deriveNeighborCellClassifications(layout, network, seed).filter(
@@ -536,7 +564,19 @@ export default function SurroundingsLayer({
         landscape: null,
       }
     }
-  }, [active, frontageContexts, boundary, seed, site, rivers])
+    // Child membership and Site labels do not change the exterior terrain or street topology.
+  }, [
+    active,
+    frontageContexts,
+    boundary,
+    seed,
+    site?.id,
+    site?.terrain,
+    site?.metadata,
+    rivers,
+    preset,
+    region,
+  ])
   const distantLandscape = useMemo(() => {
     if (!active || !site) return null
     const landscape = presentedLayout.landscape
@@ -547,18 +587,23 @@ export default function SurroundingsLayer({
         levelTerrainDistance: presentedLayout.levelTerrainDistance,
         terrain: terrainFieldOf(site),
         seed,
+        region,
+        reliefAmplitudeScale: preset.reliefAmplitudeScale,
       })
     const waterLevelAt = (x: number, z: number) =>
       landscape?.waterLevelAt(x, z) ?? (terrain.heightAt(x, z) < SEA_LEVEL ? SEA_LEVEL : null)
     const sampler = createRenderedTerrainSampler(
-      presentedLayout.network
-        ? createRoadGradedTerrain(
-            presentedLayout.network,
-            terrain,
-            site.polygon.points,
-            waterLevelAt,
-          )
-        : terrain,
+      createTerrainSubdivisionSampler(
+        presentedLayout.network
+          ? createRoadGradedTerrain(
+              presentedLayout.network,
+              terrain,
+              site.polygon.points,
+              waterLevelAt,
+            )
+          : terrain,
+        site.polygon.points,
+      ),
       exteriorTerrainSections,
     )
     const bridges = presentedLayout.network
@@ -577,12 +622,35 @@ export default function SurroundingsLayer({
       levelTerrainDistance: presentedLayout.levelTerrainDistance,
       seed,
     }
-    const thirdRing = deriveThirdRingPlan(context)
-    const foliage = deriveHorizonFoliagePlan(context).filter(
-      ({ position }) => waterLevelAt(position[0], position[2]) === null,
-    )
+    const thirdRing: ThirdRingPlan = preset.suppressBuiltContext
+      ? {
+          buildings: [],
+          commercialSites: [],
+          skyline: [],
+          trees: [],
+          fields: [],
+          region,
+          boulders: [],
+          lighthouse: null,
+        }
+      : deriveThirdRingPlan(context)
+    const foliage = preset.suppressBuiltContext
+      ? []
+      : deriveHorizonFoliagePlan(context).filter(
+          ({ position }) => waterLevelAt(position[0], position[2]) === null,
+        )
     return { thirdRing, sampler, bridges, foliage }
-  }, [active, site, presentedLayout, seed, exteriorTerrainSections])
+  }, [
+    active,
+    boundary,
+    site?.id,
+    site?.terrain,
+    presentedLayout,
+    seed,
+    exteriorTerrainSections,
+    preset,
+    region,
+  ])
   const roadSurfaceBatches = useMemo(
     () => buildRoadSurfaceBatches(presentedLayout.road.surfaces),
     [presentedLayout.road.surfaces],
@@ -596,7 +664,7 @@ export default function SurroundingsLayer({
   if (!hasPresentation || !site || !distantLandscape || !propertyTransition) return null
 
   return (
-    <group name="environment-surroundings-root">
+    <group name="environment-surroundings-root" userData={{ presetId }}>
       <SurroundingsNightLighting />
       <GroundReplacement />
       <group name="exterior-terrain-chunks">
@@ -610,6 +678,16 @@ export default function SurroundingsLayer({
           propertyTransition={propertyTransition}
         />
       </group>
+      {isNaturalSurroundingsPreset(presetId) ? (
+        <NaturalSurroundingsVegetation
+          boundary={site.polygon.points}
+          seed={seed}
+          presetId={presetId}
+          heightAt={distantLandscape.sampler.heightAt}
+          foliageColors={region.palette.foliage}
+          waterLevelAt={presentedLayout.landscape?.waterLevelAt}
+        />
+      ) : null}
 
       <HouseNeighborhood
         plans={presentedLayout.houses}

@@ -3,6 +3,7 @@ import { ShapeUtils, Vector2 } from 'three'
 import type { Point2 } from './frontages'
 import { createLandscapeHeight, LANDSCAPE_EXTENT } from './landscape-noise'
 import { clipConvexPolygon } from './neighborhood'
+import type { LandscapeRegion } from './landscape-region'
 
 export const EXTERIOR_TERRAIN_SECTION_SIZE = 64
 export const EXTERIOR_TERRAIN_SECTION_SEGMENTS = 10
@@ -25,6 +26,8 @@ export type ExteriorTerrainContext = Readonly<{
   levelTerrainDistance?: number
   terrain: TerrainField | null
   seed?: string
+  reliefAmplitudeScale?: number
+  region?: LandscapeRegion
 }>
 
 export type ExteriorTerrainSampler = Readonly<{
@@ -93,6 +96,8 @@ export function createExteriorTerrainSampler({
   levelTerrainDistance,
   terrain,
   seed,
+  reliefAmplitudeScale = 1,
+  region,
 }: ExteriorTerrainContext): ExteriorTerrainSampler {
   if (!hasUsableBoundary(boundary)) {
     return {
@@ -106,21 +111,35 @@ export function createExteriorTerrainSampler({
     : MINIMUM_RELIEF_START_DISTANCE
   const reliefFullDistance = reliefStartDistance + RELIEF_TRANSITION_DISTANCE
   const reference = polygonCentroid(boundary)
+  const bounds = boundaryBounds(boundary)
   const landscapeHeight = createLandscapeHeight(
     reference,
     Math.max(
       ...boundary.map((point) => Math.hypot(point[0] - reference[0], point[1] - reference[1])),
     ),
     seed,
+    region,
   )
   const heightAt = (x: number, z: number): number => {
     if (!Number.isFinite(x) || !Number.isFinite(z)) return 0
 
-    const exteriorDistance = exteriorDistanceToBoundary(boundary, x, z)
-    const transfer = smoothstep(reliefStartDistance, reliefFullDistance, exteriorDistance)
+    const beyondTransition =
+      x < bounds.minX - reliefFullDistance ||
+      x > bounds.maxX + reliefFullDistance ||
+      z < bounds.minZ - reliefFullDistance ||
+      z > bounds.maxZ + reliefFullDistance
+    const transfer = beyondTransition
+      ? 1
+      : smoothstep(
+          reliefStartDistance,
+          reliefFullDistance,
+          exteriorDistanceToBoundary(boundary, x, z),
+        )
     const siteHeight = terrain && transfer < 1 ? surfaceHeightAt(terrain, x, z) : 0
     const height =
-      transfer === 0 ? siteHeight : siteHeight * (1 - transfer) + landscapeHeight(x, z) * transfer
+      transfer === 0
+        ? siteHeight
+        : siteHeight * (1 - transfer) + landscapeHeight(x, z) * transfer * reliefAmplitudeScale
     return Number.isFinite(height) ? height : 0
   }
   const normalAt = (x: number, z: number): readonly [number, number, number] => {
@@ -146,53 +165,68 @@ export function createRenderedTerrainSampler(
   addresses: readonly ExteriorTerrainSectionAddress[],
 ): ExteriorTerrainSampler {
   if (!addresses.length) return source
-  const addressKeys = new Set(addresses.map(({ x, z }) => exteriorTerrainSectionKey(x, z)))
-  const sections = new Map<string, Float32Array>()
-  const vertexHeight = (
-    address: ExteriorTerrainSectionAddress,
-    segments: number,
-    column: number,
-    row: number,
-  ): number => {
-    let heights = sections.get(address.key)
-    if (!heights || heights.length !== (segments + 1) ** 2) {
-      heights = new Float32Array((segments + 1) ** 2).fill(NaN)
-      sections.set(address.key, heights)
+  type Grid = {
+    address: ExteriorTerrainSectionAddress
+    segments: number
+    inverseSpacing: number
+    heights: Float32Array
+  }
+  const rows = new Map<number, Map<number, Grid>>()
+  for (const address of addresses) {
+    let row = rows.get(address.z)
+    if (!row) {
+      row = new Map()
+      rows.set(address.z, row)
     }
-    const index = row * (segments + 1) + column
-    if (Number.isNaN(heights[index]!)) {
-      heights[index] = stitchedTerrainVertexHeight(source, address, segments, column, row)
+    const segments = terrainSectionSegments(source, address)
+    row.set(address.x, {
+      address,
+      segments,
+      inverseSpacing: segments / EXTERIOR_TERRAIN_SECTION_SIZE,
+      heights: new Float32Array((segments + 1) ** 2).fill(NaN),
+    })
+  }
+  const vertexHeight = (grid: Grid, column: number, row: number): number => {
+    const index = row * (grid.segments + 1) + column
+    let height = grid.heights[index]!
+    if (Number.isNaN(height)) {
+      height = Math.fround(
+        stitchedTerrainVertexHeight(source, grid.address, grid.segments, column, row),
+      )
+      grid.heights[index] = height
     }
-    return heights[index]!
+    return height
   }
   const heightAt = (x: number, z: number): number => {
-    if (!Number.isFinite(x) || !Number.isFinite(z)) return source.heightAt(x, z)
-    const address = exteriorTerrainSectionAddressAt(x, z)
-    if (!addressKeys.has(address.key)) return source.heightAt(x, z)
-    const segments = terrainSectionSegments(source, address)
-    const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / segments
-    const originX = address.x * EXTERIOR_TERRAIN_SECTION_SIZE
-    const originZ = address.z * EXTERIOR_TERRAIN_SECTION_SIZE
-    const localX = Math.max(0, Math.min(segments, (x - originX) / spacing))
-    const localZ = Math.max(0, Math.min(segments, (z - originZ) / spacing))
-    const column = Math.min(segments - 1, Math.floor(localX))
-    const row = Math.min(segments - 1, Math.floor(localZ))
+    const sectionX = Math.floor(x / EXTERIOR_TERRAIN_SECTION_SIZE)
+    const sectionZ = Math.floor(z / EXTERIOR_TERRAIN_SECTION_SIZE)
+    const grid = rows.get(sectionZ)?.get(sectionX)
+    if (!grid) return source.heightAt(x, z)
+    const localX = (x - sectionX * EXTERIOR_TERRAIN_SECTION_SIZE) * grid.inverseSpacing
+    const localZ = (z - sectionZ * EXTERIOR_TERRAIN_SECTION_SIZE) * grid.inverseSpacing
+    const roundedX = Math.round(localX)
+    const roundedZ = Math.round(localZ)
+    if (
+      Math.abs(localX - roundedX) < GEOMETRY_EPSILON &&
+      Math.abs(localZ - roundedZ) < GEOMETRY_EPSILON
+    ) {
+      return vertexHeight(grid, roundedX, roundedZ)
+    }
+    const column = Math.min(grid.segments - 1, Math.floor(localX))
+    const row = Math.min(grid.segments - 1, Math.floor(localZ))
     const u = localX - column
     const v = localZ - row
-    const east = vertexHeight(address, segments, column + 1, row)
-    const north = vertexHeight(address, segments, column, row + 1)
-    if (u + v <= 1) {
-      return vertexHeight(address, segments, column, row) * (1 - u - v) + east * u + north * v
-    }
-    return (
-      vertexHeight(address, segments, column + 1, row + 1) * (u + v - 1) +
-      east * (1 - v) +
-      north * (1 - u)
-    )
+    const east = vertexHeight(grid, column + 1, row)
+    const north = vertexHeight(grid, column, row + 1)
+    return u + v <= 1
+      ? vertexHeight(grid, column, row) * (1 - u - v) + east * u + north * v
+      : vertexHeight(grid, column + 1, row + 1) * (u + v - 1) + east * (1 - v) + north * (1 - u)
   }
   const normalAt = (x: number, z: number): readonly [number, number, number] => {
-    const address = exteriorTerrainSectionAddressAt(x, z)
-    const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / terrainSectionSegments(source, address)
+    const grid = rows
+      .get(Math.floor(z / EXTERIOR_TERRAIN_SECTION_SIZE))
+      ?.get(Math.floor(x / EXTERIOR_TERRAIN_SECTION_SIZE))
+    const spacing = grid ? 1 / grid.inverseSpacing : NORMAL_SAMPLE_DISTANCE
     const dx = heightAt(x - spacing, z) - heightAt(x + spacing, z)
     const dz = heightAt(x, z - spacing) - heightAt(x, z + spacing)
     const dy = spacing * 2
@@ -202,6 +236,32 @@ export function createRenderedTerrainSampler(
       : [0, 1, 0]
   }
   return { ...source, heightAt, normalAt }
+}
+
+export function createTerrainSubdivisionSampler(
+  source: ExteriorTerrainSampler,
+  boundary: readonly Point2[],
+): ExteriorTerrainSampler {
+  const bounds = boundaryBounds(boundary)
+  const resolutions = new Map<string, number>()
+  return {
+    ...source,
+    sectionSegments: (address) => {
+      const minX = address.x * EXTERIOR_TERRAIN_SECTION_SIZE
+      const cached = resolutions.get(address.key)
+      if (cached !== undefined) return cached
+      const minZ = address.z * EXTERIOR_TERRAIN_SECTION_SIZE
+      const dx = Math.max(bounds.minX - minX - EXTERIOR_TERRAIN_SECTION_SIZE, minX - bounds.maxX, 0)
+      const dz = Math.max(bounds.minZ - minZ - EXTERIOR_TERRAIN_SECTION_SIZE, minZ - bounds.maxZ, 0)
+      const distance = Math.hypot(dx, dz)
+      const segments = Math.max(
+        terrainSectionSegments(source, address),
+        distance < 16 ? 40 : distance < 80 ? 20 : 10,
+      )
+      resolutions.set(address.key, segments)
+      return segments
+    },
+  }
 }
 
 export function buildExteriorTerrainSection(
@@ -324,7 +384,9 @@ export function buildExteriorTerrainSection(
       const offset = (row * verticesPerSide + column) * 3
       const height = stitchedTerrainVertexHeight(sampler, address, segments, column, row)
       const normal = stitchedTerrainVertexNormal(sampler, address, segments, column, row)
-      positions.set([x, height, z], offset)
+      positions[offset] = x
+      positions[offset + 1] = height
+      positions[offset + 2] = z
       normals.set(normal, offset)
     }
   }
@@ -337,7 +399,13 @@ export function buildExteriorTerrainSection(
       const nextColumn = first + 1
       const nextRow = first + verticesPerSide
       const diagonal = nextRow + 1
-      if (!needsBoundaryClip) {
+      if (
+        !needsBoundaryClip ||
+        x + spacing < bounds.minX ||
+        x > bounds.maxX ||
+        z + spacing < bounds.minZ ||
+        z > bounds.maxZ
+      ) {
         indexValues.push(first, nextRow, nextColumn, nextColumn, nextRow, diagonal)
         continue
       }

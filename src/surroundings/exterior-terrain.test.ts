@@ -12,6 +12,7 @@ import {
   buildExteriorTerrainSections,
   createExteriorTerrainSampler,
   createRenderedTerrainSampler,
+  createTerrainSubdivisionSampler,
   deriveExteriorTerrainSectionAddresses,
   EXTERIOR_TERRAIN_SECTION_SEGMENTS,
   exteriorTerrainSectionAddressAt,
@@ -338,6 +339,34 @@ describe('exterior Terrain sampling', () => {
     expect(road.surfaces.length).toBeGreaterThan(0)
     expect(minimumClearance).toBeGreaterThanOrEqual(0.01)
   })
+
+  test('resolves nearby curvature more accurately without refining distant terrain', () => {
+    const source = {
+      heightAt: (x: number, z: number) => Math.sin(x * 0.2) + Math.cos(z * 0.2),
+      normalAt: () => [0, 1, 0] as const,
+    }
+    const addresses = deriveExteriorTerrainSectionAddresses(DEFAULT_SITE)
+    const refined = createTerrainSubdivisionSampler(source, DEFAULT_SITE)
+    const coarseGrid = createRenderedTerrainSampler(source, addresses)
+    const refinedGrid = createRenderedTerrainSampler(refined, addresses)
+    let coarseError = 0
+    let refinedError = 0
+    for (const [x, z] of [
+      [19.3, 8.7],
+      [-18.6, 3.2],
+      [7.7, -23.1],
+      [25.7, 18.5],
+    ]) {
+      const expected = source.heightAt(x!, z!)
+      coarseError += Math.abs(coarseGrid.heightAt(x!, z!) - expected)
+      refinedError += Math.abs(refinedGrid.heightAt(x!, z!) - expected)
+    }
+    expect(refinedError).toBeLessThan(coarseError * 0.15)
+    const distant = exteriorTerrainSectionAddressAt(480, 480)
+    expect(buildExteriorTerrainSection(distant, refinedGrid, DEFAULT_SITE).indices.length).toBe(
+      buildExteriorTerrainSection(distant, coarseGrid, DEFAULT_SITE).indices.length,
+    )
+  })
   test('uses bounded adaptive sections and stitches them to coarser neighbors', () => {
     const adaptiveAddress = exteriorTerrainSectionAddressAt(1, 1)
     const neighborAddress = exteriorTerrainSectionAddressAt(65, 1)
@@ -376,8 +405,15 @@ describe('exterior Terrain sampling', () => {
 describe('exterior Terrain geometry budget', () => {
   test('merges the default section window into one bounded geometry', () => {
     const addresses = deriveExteriorTerrainSectionAddresses(DEFAULT_SITE)
+    const sampler = createRenderedTerrainSampler(
+      createTerrainSubdivisionSampler(
+        createExteriorTerrainSampler({ boundary: DEFAULT_SITE, terrain: null }),
+        DEFAULT_SITE,
+      ),
+      addresses,
+    )
     const geometry = mergeExteriorTerrainSections(
-      buildExteriorTerrainSections(addresses, { boundary: DEFAULT_SITE, terrain: null }),
+      addresses.map((address) => buildExteriorTerrainSection(address, sampler, DEFAULT_SITE)),
     )
 
     expect(geometry.sectionCount).toBe(addresses.length)

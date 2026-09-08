@@ -1,11 +1,11 @@
 import {
   Color,
   TempNode,
+  Vector3,
   type CubeTexture,
   type Node,
   type NodeBuilder,
   type UniformNode,
-  type Vector3,
 } from 'three/webgpu'
 import * as TSL from 'three/tsl'
 
@@ -16,6 +16,12 @@ import {
   type SkySettings,
   type SolarState,
 } from './settings'
+import {
+  createEffectiveSkyWeather,
+  updateEffectiveSkyWeather,
+  type EffectiveSkyWeather,
+  type SkyWeatherInput,
+} from './weather-sky'
 
 const { float: tslFloat } = TSL
 
@@ -29,6 +35,7 @@ type EnvironmentContext = {
 }
 type ScalarUniform = UniformNode<'float', number>
 type DirectionUniform = UniformNode<'vec3', Vector3>
+type ColorVectorUniform = UniformNode<'vec3', Vector3>
 type ShaderUniforms = {
   sunDirection: DirectionUniform
   moonDirection: DirectionUniform
@@ -47,6 +54,10 @@ type ShaderUniforms = {
   cloudSoftness: ScalarUniform
   cloudScale: ScalarUniform
   cloudPhase: ScalarUniform
+  cloudOpticalDensity: ScalarUniform
+  cloudTint: ColorVectorUniform
+  weatherOvercast: ScalarUniform
+  weatherFlash: ScalarUniform
   moonPhase: ScalarUniform
   debugMode: ScalarUniform
 }
@@ -58,6 +69,7 @@ export type SkyProvider = {
   sunDirection: Vector3
   sunColor: Color
   sunIntensity: number
+  sunVisibility: number
   moonDirection: Vector3
   moonColor: Color
   moonIntensity: number
@@ -68,7 +80,10 @@ export type SkyProvider = {
   exposure: number
   fogStart: number
   fogEnd: number
-  update(settings: SkySettings, cloudTime: number): void
+  cloudCoverage: number
+  cloudOpticalDensity: number
+  cloudColor: Color
+  update(settings: Readonly<SkySettings>, cloudTime: number, weather?: SkyWeatherInput): void
   dispose?(): void
 }
 type SkyLightingState = Omit<
@@ -86,6 +101,17 @@ const DEBUG_INDEX: Record<SkyDebug, number> = {
   clouds: 6,
   luminance: 7,
 }
+const RAIN_SKY_COLOR = new Color().setRGB(0.055, 0.085, 0.14)
+const RAIN_GROUND_COLOR = new Color().setRGB(0.045, 0.055, 0.065)
+const RAIN_CLOUD_COLOR = new Color().setRGB(0.12, 0.16, 0.22)
+const SNOW_SKY_COLOR = new Color().setRGB(0.32, 0.41, 0.55)
+const SNOW_GROUND_COLOR = new Color().setRGB(0.22, 0.25, 0.29)
+const SNOW_CLOUD_COLOR = new Color().setRGB(0.44, 0.5, 0.58)
+const STORM_SKY_COLOR = new Color().setRGB(0.022, 0.035, 0.065)
+const STORM_GROUND_COLOR = new Color().setRGB(0.018, 0.022, 0.03)
+const STORM_CLOUD_COLOR = new Color().setRGB(0.055, 0.075, 0.12)
+const WINTER_SUN_COLOR = new Color().setRGB(0.72, 0.82, 1)
+const FLASH_COLOR = new Color().setRGB(0.68, 0.82, 1)
 
 const TWO_PI = Math.PI * 2
 
@@ -156,7 +182,7 @@ class AnalyticEnvironmentNode extends TempNode<'vec3'> {
   }
 }
 
-function createLightingState(settings: SkySettings): {
+function createLightingState(settings: Readonly<SkySettings>): {
   lighting: SkyLightingState
   solar: SolarState
 } {
@@ -165,6 +191,7 @@ function createLightingState(settings: SkySettings): {
     sunDirection: solar.sunDirection,
     sunColor: new Color(),
     sunIntensity: 0,
+    sunVisibility: 0,
     moonDirection: solar.moonDirection,
     moonColor: new Color(),
     moonIntensity: 0,
@@ -175,6 +202,9 @@ function createLightingState(settings: SkySettings): {
     exposure: 1,
     fogStart: settings.fogStart,
     fogEnd: settings.fogEnd,
+    cloudCoverage: settings.cloudCoverage,
+    cloudOpticalDensity: 1,
+    cloudColor: new Color(),
   }
   return { lighting, solar }
 }
@@ -186,9 +216,11 @@ function cpuChapmanColumn(cosZenith: number, scaleHeight: number, horizonFactor:
 function updateLighting(
   lighting: SkyLightingState,
   solar: SolarState,
-  settings: SkySettings,
+  settings: Readonly<SkySettings>,
+  weather: EffectiveSkyWeather,
 ): void {
   updateSolarState(settings, solar)
+  lighting.sunVisibility = bounded(solar.sunVisibility, 0, 1, 0)
 
   const daylight = bounded(solar.daylight, 0, 1, 0)
   const twilight = bounded(solar.twilight, 0, 1, 0)
@@ -228,14 +260,47 @@ function updateLighting(
     0.12 * daylight + 0.02 * twilight + 0.005 * night,
     0.1 * daylight + 0.03 * twilight + 0.009 * night,
   )
-  lighting.hemisphereIntensity = 0.12 + daylight * 0.58 + twilight * 0.08 + night * 0.03
-  lighting.ambientIntensity = 0.025 + daylight * 0.12 + twilight * 0.035 + night * 0.018
-  lighting.exposure = bounded(solar.exposure, 0.05, 16, 1)
-  lighting.fogStart = bounded(settings.fogStart, 0, 2000, 180)
-  lighting.fogEnd = Math.max(lighting.fogStart + 20, bounded(settings.fogEnd, 20, 5000, 1200))
+  lighting.cloudColor.setRGB(
+    0.34 * daylight + 0.22 * twilight + 0.014 * night,
+    0.38 * daylight + 0.11 * twilight + 0.019 * night,
+    0.46 * daylight + 0.08 * twilight + 0.042 * night,
+  )
+
+  lighting.sunColor.lerp(WINTER_SUN_COLOR, weather.cooling * 0.18)
+  lighting.sunIntensity *= weather.sunlightScale
+  lighting.moonIntensity *= weather.sunlightScale
+  lighting.skyColor
+    .lerp(RAIN_SKY_COLOR, weather.rain * 0.62)
+    .lerp(SNOW_SKY_COLOR, weather.snow * 0.42)
+    .lerp(STORM_SKY_COLOR, weather.storm * 0.78)
+  lighting.groundColor
+    .lerp(RAIN_GROUND_COLOR, weather.rain * 0.58)
+    .lerp(SNOW_GROUND_COLOR, weather.snow * 0.34)
+    .lerp(STORM_GROUND_COLOR, weather.storm * 0.72)
+  lighting.cloudColor
+    .lerp(RAIN_CLOUD_COLOR, weather.rain * 0.76)
+    .lerp(SNOW_CLOUD_COLOR, weather.snow * 0.68)
+    .lerp(STORM_CLOUD_COLOR, weather.storm * 0.86)
+    .lerp(FLASH_COLOR, weather.flash * 0.9)
+
+  lighting.hemisphereIntensity =
+    (0.12 + daylight * 0.58 + twilight * 0.08 + night * 0.03) * weather.hemisphereScale +
+    weather.flash * 0.42
+  lighting.ambientIntensity =
+    (0.025 + daylight * 0.12 + twilight * 0.035 + night * 0.018) * weather.ambientScale +
+    weather.flash * 0.55
+  lighting.exposure =
+    bounded(solar.exposure, 0.05, 16, 1) * (1 - weather.overcast * 0.12) + weather.flash * 0.22
+  lighting.fogStart = bounded(settings.fogStart, 0, 2000, 180) * weather.fogDistanceScale
+  lighting.fogEnd = Math.max(
+    lighting.fogStart + 20,
+    bounded(settings.fogEnd, 20, 5000, 1200) * weather.fogDistanceScale,
+  )
+  lighting.cloudCoverage = weather.cloudCoverage
+  lighting.cloudOpticalDensity = weather.cloudOpticalDensity
 }
 
-function createShaderUniforms(solar: SolarState, settings: SkySettings): ShaderUniforms {
+function createShaderUniforms(solar: SolarState, settings: Readonly<SkySettings>): ShaderUniforms {
   return {
     sunDirection: TSL.uniform(solar.sunDirection),
     moonDirection: TSL.uniform(solar.moonDirection),
@@ -254,6 +319,10 @@ function createShaderUniforms(solar: SolarState, settings: SkySettings): ShaderU
     cloudSoftness: TSL.uniform(settings.cloudSoftness),
     cloudScale: TSL.uniform(settings.cloudScale),
     cloudPhase: TSL.uniform(0),
+    cloudOpticalDensity: TSL.uniform(1),
+    cloudTint: TSL.uniform(new Vector3()),
+    weatherOvercast: TSL.uniform(0),
+    weatherFlash: TSL.uniform(0),
     moonPhase: TSL.uniform(settings.moonPhase),
     debugMode: TSL.uniform(DEBUG_INDEX[settings.debug]),
   }
@@ -262,8 +331,10 @@ function createShaderUniforms(solar: SolarState, settings: SkySettings): ShaderU
 function updateShaderUniforms(
   uniforms: ShaderUniforms,
   solar: SolarState,
-  settings: SkySettings,
+  settings: Readonly<SkySettings>,
   cloudTime: number,
+  weather: EffectiveSkyWeather,
+  cloudColor: Color,
 ): void {
   uniforms.daylight.value = bounded(solar.daylight, 0, 1, 0)
   uniforms.twilight.value = bounded(solar.twilight, 0, 1, 0)
@@ -276,10 +347,14 @@ function updateShaderUniforms(
   uniforms.turbidity.value = bounded(settings.turbidity, 1, 10, 2)
   uniforms.sunRadius.value = bounded(settings.sunRadius, 0.00465, 0.03, 0.01)
   uniforms.sunRadiance.value = bounded(settings.sunRadiance, 1, 100, 40)
-  uniforms.cloudCoverage.value = bounded(settings.cloudCoverage, 0, 1, 0.45)
+  uniforms.cloudCoverage.value = weather.cloudCoverage
   uniforms.cloudSoftness.value = bounded(settings.cloudSoftness, 0.02, 0.4, 0.16)
   uniforms.cloudScale.value = bounded(settings.cloudScale, 0.25, 4, 1)
   uniforms.moonPhase.value = bounded(settings.moonPhase, 0, 1, 1)
+  uniforms.cloudOpticalDensity.value = weather.cloudOpticalDensity
+  uniforms.cloudTint.value.set(cloudColor.r, cloudColor.g, cloudColor.b)
+  uniforms.weatherOvercast.value = weather.overcast
+  uniforms.weatherFlash.value = weather.flash
   uniforms.debugMode.value = DEBUG_INDEX[settings.debug]
 
   const seconds = Number.isFinite(cloudTime) ? cloudTime : 0
@@ -409,7 +484,14 @@ function createAtmosphereSamplers(uniforms: ShaderUniforms) {
     })()
 
   const fogRadiance: SkySampler = (direction) => atmosphereRadiance(direction, false)
-  return { atmosphereRadiance, fogRadiance, rayleighDiagnostic, mieDiagnostic, hazeDiagnostic, sunTransmittance }
+  return {
+    atmosphereRadiance,
+    fogRadiance,
+    rayleighDiagnostic,
+    mieDiagnostic,
+    hazeDiagnostic,
+    sunTransmittance,
+  }
 }
 
 function createCelestialSamplers(uniforms: ShaderUniforms, sunTransmittance?: SkySignal) {
@@ -425,7 +507,10 @@ function createCelestialSamplers(uniforms: ShaderUniforms, sunTransmittance?: Sk
     const domain = transportedDirection.mul(uniforms.cloudScale.mul(2.65))
     const fbm = TSL.clamp(TSL.mx_fractal_noise_float(domain, 3, 2.03, 0.52).mul(0.5).add(0.5), 0, 1)
     const threshold = tslFloat(1).sub(uniforms.cloudCoverage)
-    const density = TSL.smoothstep(threshold, threshold.add(uniforms.cloudSoftness), fbm)
+    const baseDensity = TSL.smoothstep(threshold, threshold.add(uniforms.cloudSoftness), fbm)
+    const density = tslFloat(1).sub(
+      TSL.pow(tslFloat(1).sub(baseDensity), uniforms.cloudOpticalDensity),
+    )
     const layer = TSL.smoothstep(-0.08, 0.13, direction.y)
     return density.mul(layer)
   }
@@ -448,7 +533,9 @@ function createCelestialSamplers(uniforms: ShaderUniforms, sunTransmittance?: Sk
         .mul(phase)
         .mul(1.4)
         .mul(uniforms.daylight.add(uniforms.twilight.mul(0.45)))
-      return ambient.add(direct)
+      const physical = ambient.add(direct)
+      const overcast = TSL.mix(physical, uniforms.cloudTint, uniforms.weatherOvercast)
+      return overcast.add(TSL.vec3(0.68, 0.82, 1).mul(uniforms.weatherFlash).mul(0.62))
     })()
 
   const celestialRadiance = (rawDirection: Vec3Node, rawCloudOpacity: FloatNode): Vec3Node => {
@@ -534,6 +621,19 @@ function createCelestialSamplers(uniforms: ShaderUniforms, sunTransmittance?: Sk
   return { cloudOpacity, cloudRadiance, celestialRadiance }
 }
 
+function createWeatheredRadianceSampler(source: SkySampler, uniforms: ShaderUniforms): SkySampler {
+  return (direction) =>
+    TSL.Fn<Vec3Node>(() => {
+      const physical = source(direction)
+      const overcast = TSL.mix(
+        physical,
+        uniforms.cloudTint.mul(0.72),
+        uniforms.weatherOvercast.mul(0.48),
+      )
+      return overcast.add(TSL.vec3(0.68, 0.82, 1).mul(uniforms.weatherFlash).mul(0.3))
+    })()
+}
+
 function debugLuminance(color: Vec3Node): Vec3Node {
   const encoded = TSL.clamp(
     TSL.log2(TSL.max(TSL.luminance(color), 0.00001))
@@ -580,12 +680,17 @@ function selectDebug(
   return result as Vec3Node
 }
 
-function createProceduralProvider(settings: SkySettings): SkyProvider {
+function createProceduralProvider(
+  settings: Readonly<SkySettings>,
+  initialWeather?: SkyWeatherInput,
+): SkyProvider {
   const { lighting, solar } = createLightingState(settings)
+  const weather = createEffectiveSkyWeather()
   const uniforms = createShaderUniforms(solar, settings)
   const atmosphere = createAtmosphereSamplers(uniforms)
   const celestial = createCelestialSamplers(uniforms, atmosphere.sunTransmittance)
-
+  const diffuseRadiance = createWeatheredRadianceSampler(atmosphere.atmosphereRadiance, uniforms)
+  const fogRadiance = createWeatheredRadianceSampler(atmosphere.fogRadiance, uniforms)
   const reflectionRadiance: SkySampler = (rawDirection) =>
     TSL.Fn<Vec3Node>(() => {
       const direction = TSL.normalize(rawDirection)
@@ -633,25 +738,26 @@ function createProceduralProvider(settings: SkySettings): SkyProvider {
     ...lighting,
     skyRadiance,
     reflectionRadiance,
-    fogRadiance: atmosphere.fogRadiance,
-    environmentNode: new AnalyticEnvironmentNode(
-      reflectionRadiance,
-      atmosphere.atmosphereRadiance,
-    ) as Vec3Node,
-    update(next, cloudTime) {
-      updateLighting(provider, solar, next)
-      updateShaderUniforms(uniforms, solar, next, cloudTime)
+    fogRadiance,
+    environmentNode: new AnalyticEnvironmentNode(reflectionRadiance, diffuseRadiance) as Vec3Node,
+    update(next, cloudTime, nextWeather) {
+      updateEffectiveSkyWeather(next, nextWeather, weather)
+      updateLighting(provider, solar, next, weather)
+      updateShaderUniforms(uniforms, solar, next, cloudTime, weather, provider.cloudColor)
     },
   }
-  provider.update(settings, 0)
+  provider.update(settings, 0, initialWeather)
   return provider
 }
 
-function createGradientProvider(settings: SkySettings): SkyProvider {
+function createGradientProvider(
+  settings: Readonly<SkySettings>,
+  initialWeather?: SkyWeatherInput,
+): SkyProvider {
   const { lighting, solar } = createLightingState(settings)
+  const weather = createEffectiveSkyWeather()
   const uniforms = createShaderUniforms(solar, settings)
   const celestial = createCelestialSamplers(uniforms)
-
   const gradientRadiance = (rawDirection: Vec3Node, includeGround = true): Vec3Node =>
     TSL.Fn<Vec3Node>(() => {
       const direction = TSL.normalize(rawDirection)
@@ -674,15 +780,23 @@ function createGradientProvider(settings: SkySettings): SkyProvider {
   const reflectionRadiance: SkySampler = (rawDirection) =>
     TSL.Fn<Vec3Node>(() => {
       const direction = TSL.normalize(rawDirection) as Vec3Node
-      return gradientRadiance(direction).add(
-        celestial.celestialRadiance(direction, tslFloat(0) as FloatNode),
-      )
+      const opacity = celestial.cloudOpacity(direction) as FloatNode
+      const transmission = tslFloat(1).sub(opacity)
+      return gradientRadiance(direction)
+        .mul(transmission)
+        .add(celestial.cloudRadiance(direction).mul(opacity))
+        .add(celestial.celestialRadiance(direction, opacity))
     })()
 
   const skyRadiance: SkySampler = (rawDirection) =>
     TSL.Fn<Vec3Node>(() => {
       const direction = TSL.normalize(rawDirection) as Vec3Node
-      const physical = reflectionRadiance(direction)
+      const opacity = celestial.cloudOpacity(direction) as FloatNode
+      const transmission = tslFloat(1).sub(opacity)
+      const physical = gradientRadiance(direction)
+        .mul(transmission)
+        .add(celestial.cloudRadiance(direction).mul(opacity))
+        .add(celestial.celestialRadiance(direction, opacity)) as Vec3Node
       const sunMask = TSL.smoothstep(
         TSL.cos(uniforms.sunRadius.mul(1.12)),
         TSL.cos(uniforms.sunRadius.mul(0.88)),
@@ -696,34 +810,48 @@ function createGradientProvider(settings: SkySettings): SkyProvider {
         TSL.vec3(0) as Vec3Node,
         TSL.vec3(0) as Vec3Node,
         TSL.vec3(sunMask) as Vec3Node,
-        TSL.vec3(0) as Vec3Node,
+        TSL.vec3(opacity) as Vec3Node,
       )
     })()
 
+  const diffuseRadiance = createWeatheredRadianceSampler(gradientRadiance, uniforms)
+  const fogRadiance = createWeatheredRadianceSampler(
+    (direction) => gradientRadiance(direction, false),
+    uniforms,
+  )
   const provider: SkyProvider = {
     ...lighting,
     skyRadiance,
     reflectionRadiance,
-    fogRadiance: (direction) => gradientRadiance(direction, false),
-    environmentNode: new AnalyticEnvironmentNode(reflectionRadiance, gradientRadiance) as Vec3Node,
-    update(next, cloudTime) {
-      updateLighting(provider, solar, next)
-      updateShaderUniforms(uniforms, solar, next, cloudTime)
+    fogRadiance,
+    environmentNode: new AnalyticEnvironmentNode(reflectionRadiance, diffuseRadiance) as Vec3Node,
+    update(next, cloudTime, nextWeather) {
+      updateEffectiveSkyWeather(next, nextWeather, weather)
+      updateLighting(provider, solar, next, weather)
+      updateShaderUniforms(uniforms, solar, next, cloudTime, weather, provider.cloudColor)
     },
   }
-  provider.update(settings, 0)
+  provider.update(settings, 0, initialWeather)
   return provider
 }
 
-export function createSkyProvider(settings: SkySettings): SkyProvider {
+export function createSkyProvider(
+  settings: Readonly<SkySettings>,
+  weather?: SkyWeatherInput,
+): SkyProvider {
   return settings.provider === 'gradient'
-    ? createGradientProvider(settings)
-    : createProceduralProvider(settings)
+    ? createGradientProvider(settings, weather)
+    : createProceduralProvider(settings, weather)
 }
 
 /** The caller retains ownership of texture; this provider never disposes it. */
-export function createCubemapSkyProvider(texture: CubeTexture, settings: SkySettings): SkyProvider {
+export function createCubemapSkyProvider(
+  texture: CubeTexture,
+  settings: Readonly<SkySettings>,
+  initialWeather?: SkyWeatherInput,
+): SkyProvider {
   const { lighting, solar } = createLightingState(settings)
+  const weather = createEffectiveSkyWeather()
   const debugMode = TSL.uniform(DEBUG_INDEX[settings.debug])
   const sample: SkySampler = (rawDirection) =>
     TSL.Fn<Vec3Node>(() => {
@@ -751,16 +879,18 @@ export function createCubemapSkyProvider(texture: CubeTexture, settings: SkySett
     ...lighting,
     skyRadiance,
     reflectionRadiance: sample,
-    // A cubemap has no separable baked sun/cloud layers; fog uses the same linear source.
+    // HDR pixels and reflections remain authored: a baked cubemap has no separable
+    // cloud layer. Weather still adjusts scene lights and fog distance explicitly.
     fogRadiance: sample,
     // Passing the texture node directly lets Three's EnvironmentNode own PMREM caching
     // and provide the correct radiance/irradiance directions and roughness levels.
     environmentNode: TSL.cubeTexture(texture) as unknown as Vec3Node,
-    update(next) {
-      updateLighting(provider, solar, next)
+    update(next, _cloudTime, nextWeather) {
+      updateEffectiveSkyWeather(next, nextWeather, weather)
+      updateLighting(provider, solar, next, weather)
       debugMode.value = DEBUG_INDEX[next.debug]
     },
   }
-  provider.update(settings, 0)
+  provider.update(settings, 0, initialWeather)
   return provider
 }

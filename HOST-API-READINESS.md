@@ -11,34 +11,34 @@ This living register records every Environment feature that cannot be implemente
 
 ## Open gaps
 
-### ENV-HOST-001 — Opening Terrain is reset when the Build panel mounts
+### ENV-HOST-001 — Build panel must preserve an already-active Terrain mode
 
 | Field | Value |
 |---|---|
-| Status | **Host change required — deployment blocker while the Terrain zone is enabled** |
-| Observed | 2026-09-01 |
+| Status | **Host change required — implemented locally; release blocker while the Terrain zone is enabled** |
+| Observed | 2026-09-01; source rechecked 2026-09-08 |
 | Host repository | `pascalorg/editor` |
-| Local implementation | `pascalorg/editor@2a260502` |
+| Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
-| Required Pascal version | TBD after release |
+| Required Pascal version | First published Pascal release containing the `BuildTab` preservation fix; version not assigned |
 | Plugin evidence | `src/pascal-tool-actions.ts` |
 | Host evidence | `apps/editor/components/build-tab.tsx` |
 
-Environment can call the published editor store methods:
+Environment opens the native Terrain surface through the published editor store:
 
 ```ts
 editor.setMode('terrain-sculpt')
 editor.setActiveSidebarPanel('build')
 ```
 
-The mode transition itself succeeds. The standalone Editor's `BuildTab` then mounts and initializes its first construction tool whenever the current state is not an already-armed `build` tool. That initialization replaces `terrain-sculpt`, so the user lands on the default Build tool instead of the native Terrain controls.
+The current local `BuildTab` mount initializer now returns early for
+`terrain-sculpt` and `material-paint`, so it no longer replaces the requested
+mode with the first construction tool. This is implemented source behavior,
+not published-package evidence. Environment must not add a timer, duplicate
+Terrain controls, or import Editor internals.
 
-The plugin must not solve this with `setTimeout`, duplicated Terrain controls, or imports from Editor internals. The minimum host evolution is for `BuildTab` initialization to preserve Build-owned special modes that are already active, including `terrain-sculpt` and `material-paint`. A stronger long-term API would expose one atomic public action for opening a built-in editor tool and its owning panel.
-
-Until resolved, deployment must do one of the following:
-
-1. ship against a Pascal release containing the host fix; or
-2. keep the Terrain hotspot disabled.
+Deployment must use the first Pascal release containing this fix or keep the
+Terrain hotspot disabled.
 
 Acceptance checks:
 
@@ -48,42 +48,51 @@ Acceptance checks:
 - The Terrain tile is active and the default construction tool is not armed.
 - The flow works after a cold load and after switching from Ground Cover.
 
-### ENV-HOST-002 — Plugin-owned tool identifiers require an unchecked cast
+### ENV-HOST-002 — Plugin-owned tool identifiers need an extensible public type
 
 | Field | Value |
 |---|---|
-| Status | **Host change required — API design debt** |
-| Observed | 2026-09-01 |
+| Status | **Host change required — open-string typing implemented locally; release prerequisite, with unknown-id validation still open** |
+| Observed | 2026-09-01; source rechecked 2026-09-08 |
 | Host repository | `pascalorg/editor` |
+| Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
-| Required Pascal version | TBD after release |
-| Plugin evidence | `src/panel.tsx` (`setPluginTool`) |
+| Required Pascal version | First published Pascal release whose public `Tool` type includes plugin-owned string identifiers; version not assigned |
+| Plugin evidence | `src/pascal-tool-actions.ts` |
+| Host evidence | `packages/editor/src/store/use-editor.tsx` |
 
-Ground Cover is registered by a plugin as `environment:ground-cover`, but the public `setTool` function is typed with Editor's closed built-in `Tool` union. Runtime registration supports the plugin tool, while TypeScript requires Environment to widen the setter manually:
+The current local public type is no longer a closed built-in union:
 
 ```ts
-const setTool = useEditor.getState().setTool as (value: string) => void
+export type KnownTool = SiteTool | StructureTool | FurnishTool
+export type Tool = KnownTool | (string & {})
 ```
 
-The public contract should support registry-owned plugin tool identifiers without a cast. This can be an extensible tool identifier type or a dedicated plugin-tool activation action that validates the identifier against the loaded registry.
+`setTool('environment:ground-cover')` therefore compiles without widening the
+setter and mounts through the normal registry-backed `ToolManager` lifecycle.
+This satisfies Environment's typing requirement. It is not yet released, and
+the host still accepts an unknown string without validating it against the
+loaded registry. Explicit unknown-id failure remains desirable API hardening,
+but Environment only supplies registered identifiers.
 
 Acceptance checks:
 
-- Environment activates `environment:ground-cover` without `as` or an internal import.
+- Environment activates `environment:ground-cover` without casting `setTool` or importing internals.
 - The registered plugin tool mounts through the normal `ToolManager` lifecycle.
 - Escape/cancel behavior remains identical to built-in tools.
-- An unknown plugin tool identifier fails explicitly rather than silently arming invalid state.
+- The published host declaration contains the open `Tool` identifier type.
+- Follow-up hardening makes an unknown plugin tool identifier fail explicitly.
 
 ### ENV-HOST-003 — Floorplan discovery has no Site scope
 
 | Field | Value |
 |---|---|
 | Status | **Host change required — implemented locally; release blocker for Ground Cover display in Editor 2D** |
-| Observed | 2026-09-02 |
+| Observed | 2026-09-02; source rechecked 2026-09-08 |
 | Host repository | `pascalorg/editor` |
-| Local implementation | `pascalorg/editor@2a260502` |
+| Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
-| Required Pascal version | TBD after release |
+| Required Pascal version | First published Pascal release containing `floorplanScope: 'site'`, even-odd floorplan fills, and inline PDF image support; version not assigned |
 | Plugin evidence | `src/ground-cover/definition.ts`, `src/ground-cover/floorplan.ts`, `src/ground-cover/floorplan.test.ts` |
 | Host evidence | `packages/core/src/registry/types.ts`, `packages/core/src/registry/registry.ts`, `packages/core/src/registry/registry.test.ts`, `packages/editor/src/components/editor-2d/renderers/floorplan-registry-layer.tsx`, `packages/editor/src/components/editor-2d/renderers/floorplan-registry-layer.test.ts`, `packages/editor/src/components/editor-2d/renderers/floorplan-geometry-renderer.tsx`, `packages/editor/src/lib/floorplan/floorplan-pdfkit-renderer.ts` |
 
@@ -111,11 +120,11 @@ Acceptance checks:
 | Field | Value |
 |---|---|
 | Status | **Host change required — implemented locally; release blocker for faithful generic-GLB output** |
-| Observed | 2026-09-02 |
+| Observed | 2026-09-02; source rechecked 2026-09-08 |
 | Host repository | `pascalorg/editor` |
-| Local implementation | `pascalorg/editor@2a260502` |
+| Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
-| Required Pascal version | TBD after release |
+| Required Pascal version | First published Pascal release containing the `bakeGeometry` node-definition hook and replace-bake viewer path; version not assigned |
 | Plugin evidence | `src/ground-cover/definition.ts`, `src/ground-cover/bake-geometry.ts`, `src/ground-cover/bake-geometry.test.ts`, `src/ground-cover/static-renderer.tsx` |
 | Host evidence | `packages/core/src/registry/types.ts`, `packages/editor/src/lib/glb-export.ts`, `packages/editor/src/lib/glb-export.test.ts`, `wiki/architecture/node-definitions.md` |
 
@@ -141,15 +150,15 @@ Acceptance checks:
 | Field | Value |
 |---|---|
 | Status | **Host change required — implemented locally; release blocker for faithful Ground Cover and Surface editing** |
-| Observed | 2026-09-02 |
+| Observed | 2026-09-02; source rechecked 2026-09-08 |
 | Host repository | `pascalorg/editor` |
-| Local implementation | `pascalorg/editor@2a260502` |
+| Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
-| Required Pascal version | TBD after release |
+| Required Pascal version | First published Pascal release containing `capabilities.selectionHighlight`; version not assigned |
 | Plugin evidence | `src/ground-cover/definition.ts`, `src/surface-material/definition.ts` |
 | Host evidence | `packages/core/src/registry/types.ts`, `packages/core/src/registry/registry.ts`, `packages/core/src/registry/registry.test.ts`, `packages/editor/src/components/editor/selection-manager.tsx` |
 
-The Editor currently highlights selection and hover by replacing materials in a registered node's rendered subtree. That is unsafe for Environment paint layers: Ground Cover and Surface use authored NodeMaterial graphs, textures, masks and opacity whose meaning is lost when the host substitutes a generic selection material. The node must remain selected so its panel and tool lifecycle work, but its rendered material must remain owned by the plugin.
+The published beta.5 Editor highlights selection and hover by replacing materials in a registered node's rendered subtree. That is unsafe for Environment paint layers: Ground Cover and Surface use authored NodeMaterial graphs, textures, masks and opacity whose meaning is lost when the host substitutes a generic selection material. The node must remain selected so its panel and tool lifecycle work, but its rendered material must remain owned by the plugin.
 
 The local host adds `capabilities.selectionHighlight?: boolean`, defaulting to `true` for compatibility. The registry exposes a generic query and the selection manager honors it for both committed selection and hover/outliner synchronization. Environment sets the capability to `false`; no Environment kind is named by the host.
 
@@ -163,50 +172,152 @@ Acceptance checks:
 - Existing and unregistered kinds retain selection highlighting by default.
 - Loading or unloading a plugin refreshes the registry-driven behavior without a hardcoded kind check.
 
-### ENV-HOST-006 — Plugins cannot register presentation-only viewer scene layers
+### ENV-HOST-006 — Public viewer presentation contributions
 
 | Field | Value |
 |---|---|
-| Status | **Host change required — local direct mounts only; release blocker for Surroundings and Atmosphere** |
-| Observed | 2026-09-02 |
+| Status | **Host change required — implemented locally; release blocker for published Surroundings, Atmosphere, and Weather presentation** |
+| Observed | 2026-09-02; source rechecked 2026-09-08 |
 | Host repository | `pascalorg/editor` |
-| Local implementation | Not implemented; the direct app mount is an uncommitted validation harness |
+| Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
-| Required Pascal version | TBD after release |
-| Plugin evidence | `src/surroundings/layer.tsx`, `src/atmosphere/layer.tsx`, `src/index.ts` |
-| Host evidence | `packages/editor/src/components/editor/index.tsx` (`viewerSceneSlot`), `apps/editor/app/page.tsx`, `apps/editor/components/scene-loader.tsx` |
+| Required Pascal version | First published Pascal release containing the viewer presentation interface and Editor mount described below; version not assigned |
+| Plugin evidence | `src/presentation.tsx`, `src/surroundings/layer.tsx`, `src/atmosphere/layer.tsx`, `src/index.ts` |
+| Host evidence | `packages/viewer/src/components/viewer/viewer-presentations.tsx`, `packages/viewer/src/index.ts`, `packages/editor/src/components/editor/index.tsx`, `apps/editor/lib/bootstrap.ts` |
 
-`Editor` already accepts a host-owned `viewerSceneSlot`, which proves that a presentation subtree can be mounted inside the React Three Fiber scene but outside the semantic `scene-renderer`. The plugin discovery contract cannot contribute to that slot. The local tracer bullet therefore imports `SurroundingsLayer` directly from Environment in both Editor application entry points. That validates isolation, but it is not a publishable plugin integration: the host application now knows one plugin package and must remember every route that mounts an Editor.
+The current local viewer now owns this rendering interface:
 
-The local Sky tool follows the same boundary: both application routes mount
-`AtmosphereLayer` and pass the viewer's `SceneAtmosphere` adapter. The viewer owns
-environment/fog installation, lighting, exposure, and restoration; Environment owns
-the radiance provider and controls. Sky creates no semantic node and its settings
-remain runtime-only. This adapter does not add registry-driven plugin presentation
-or project-scoped persistence.
+```ts
+type ViewerPresentationContribution = {
+  id: string
+  pluginId?: string
+  component: LazyComponent
+}
 
-Surroundings also receives the viewer's scene-scoped `SceneGroundReplacement`
-adapter from both application routes. It suppresses the Site's fallback horizon
-disc while exterior ground is present and extends only the perspective camera's
-far plane for coastal water. Multiple owners are reference-counted per scene;
-removing the last one restores the fallback and normal camera range. This local
-viewer/Nodes cooperation is necessary because the higher fallback disc otherwise
-occludes water. It remains part of this unreleased presentation boundary.
+registerViewerPresentation(contribution)
+```
 
-The minimum host evolution is a registry-driven presentation contribution mounted once by every Editor entry point after plugin discovery. Its lifecycle must follow plugin load/unload, and it must remain outside the semantic node registry, authoring root, selection, queries and geometry export. A later persisted Environment preset also needs an explicit project-scoped presentation-state contract; until that contract is designed, the tracer bullet remains runtime-only and must not hide state in node metadata.
+Hosts mount `<ViewerPresentations />` once inside each `<Viewer>` that should
+show registered presentation. The reusable Editor does this in its normal and
+preview compositions. `apps/editor/lib/bootstrap.ts` registers
+`environmentPresentation` beside Environment's plugin and host panel; the
+blank and saved-scene routes no longer import or mount Environment layers.
+A host composing raw Viewer opts in with the same public mount.
 
-Until resolved, Surroundings and Atmosphere must not be offered by a shipped plugin without a supported presentation contribution. The enabled local selectors and direct application imports are validation harnesses, not production integration or evidence that this release blocker is resolved.
+`pluginId` is gated by the project `installedPlugins` list. Uninstall releases
+the subtree, reinstall remounts it, and two Viewer scenes receive independent
+instances. Each lazy contribution has its own Suspense and error boundary.
+Plugin code remains session-loaded because core plugin loading is add-only.
+
+Environment's contribution composes `AtmosphereLayer` and `SurroundingsLayer`
+with the viewer's `SceneAtmosphere` and `SceneGroundReplacement` adapters.
+Those adapters retain ownership per R3F Scene, so releasing one viewer cannot
+change another viewer's fog, environment, fallback ground, or camera range.
+
+The mount is a sibling of `scene-renderer`. Editor model export is rooted at
+`scene-renderer`, so presentation is not authored or exported and cannot gain
+a `pascalId`, selection target, query result, history entry, or serialized
+scene node. Raw Viewer snapshots include it only when the host explicitly
+mounts `<ViewerPresentations />`.
+
+This source implementation does not make the gap released. Environment's
+published peer range must move to the first Pascal release that contains the
+interface and reusable Editor mount; no release number has been assigned.
 
 Acceptance checks:
 
-- Loading Environment registers its presentation contribution without importing the plugin from an Editor application route.
-- Blank-scene and saved-scene Editor entry points mount the contribution exactly once.
-- Unloading or omitting the plugin removes the layer and releases its Three.js resources.
-- Scene-scoped ground replacements suppress the fallback only while owned, restore it after the final unmount, and do not affect other viewers or orthographic depth precision.
-- The contribution creates no semantic node, `pascalId`, selection target, query result, history entry or serialized scene data.
-- Geometry/GLB export is byte-for-byte unchanged with the presentation layer enabled or disabled.
-- Viewer snapshots may include the layer only through an explicit presentation policy.
-- Unknown or failing contributions are isolated without preventing the authored scene from rendering.
+- Bootstrap registration is the only application-level Environment presentation integration.
+- Blank-scene and saved-scene routes contain no direct Environment layer mount.
+- Project uninstall removes the contribution; reinstall remounts it without re-registering code.
+- Two simultaneous viewer scenes keep atmosphere and ground ownership independent.
+- The contribution creates no authored node or scene persistence entry.
+- Geometry export stays rooted at `scene-renderer` and excludes the contribution.
+- A failing lazy contribution leaves authored rendering and healthy contributions mounted.
+
+### ENV-HOST-007 — Project persistence for Environment configuration
+
+| Field | Value |
+|---|---|
+| Status | **Host change required — local per-project persistence implemented; cloud/share sync and host release remain unassigned** |
+| Observed | 2026-09-08 |
+| Host repository | `pascalorg/editor` |
+| Local implementation | Current local checkout (unreleased), local browser sidecar only |
+| Host issue / PR | TBD |
+| Required Pascal version | First published host release containing presentation configuration contributions and Editor sidecar ownership; version not assigned |
+| Plugin evidence | `src/presentation.tsx`, `src/store.ts` |
+| Host evidence | `packages/viewer/src/components/viewer/viewer-presentations.tsx`, `packages/editor/src/components/editor/index.tsx`, `packages/editor/src/lib/local-project-presentation-persistence.ts` |
+
+Environment still exposes the explicit, standalone handoff:
+`EnvironmentConfigurationSchema`, `exportEnvironmentConfiguration()`, and
+`importEnvironmentConfiguration(unknown)`. Version 1 is strict and contains
+preset, seed, complete frontage contexts, complete sky settings (including god
+rays and time of day), surroundings and sky visibility, and rain, snow, wind,
+and storm state. Import validates the complete snapshot before mutation.
+
+The public viewer contribution now optionally exposes:
+
+```ts
+type ViewerPresentationConfiguration = {
+  getSnapshot(): unknown
+  restore(snapshot: unknown): void
+  reset(): void
+  subscribe(onChange: () => void): () => void
+}
+```
+
+Environment implements that interface with its validated export/import
+functions. Missing or invalid configuration resets from
+`useEnvironmentStore.getInitialState()` rather than cloning the current
+project. Restore and reset explicitly disable thunder audio consent, sky
+playback, and sky motion, so loading a project never autoplays project-authored
+time animation or audio. Ambient surroundings motion is not part of the
+project sidecar and retains its current host preference.
+
+The reusable Editor owns one persistence manager outside all React Three Fiber
+scenes. Normal, split, 2D, preview, and capture compositions therefore share one
+writer. Registered presentation configuration is stored under the exact key
+`pascal:project-presentation:v1:${encodeURIComponent(projectId)}` in this
+versioned local sidecar:
+
+```ts
+{
+  version: 1,
+  projectId,
+  contributions: {
+    "pascal:environment:presentation": EnvironmentConfigurationV1
+  }
+}
+```
+
+On a project change the manager flushes the old key before reading the new key,
+then restores that project's snapshot or resets to initial defaults before
+revealing registered presentation. Writes from sliders are coalesced and
+pending state is flushed on `pagehide`, Editor unmount, and project switch.
+Malformed JSON, an unknown sidecar version, invalid plugin configuration,
+unavailable storage, or quota failure cannot affect semantic scene storage or
+crash the Editor. Registry changes preserve detached snapshots, so HMR and
+plugin unregister/re-register cycles retain the saved configuration.
+
+This is deliberately local browser persistence, not cloud or share
+persistence. The Editor's `onLoad`/`onSave` scene contract and `SceneGraph`
+remain unchanged, and no server project field has been assigned. A cloud host
+must continue to call `exportEnvironmentConfiguration()` and
+`importEnvironmentConfiguration(unknown)` through its own versioned project
+sidecar. No published Pascal release containing this interface has been
+assigned.
+
+Acceptance checks:
+
+- A new project starts with atmosphere enabled.
+- Version 1 round-trips preset, seed, frontages, sky/time/god rays, visibility, rain, snow, wind, and storm.
+- Reload restores the matching local project; another project restores its own value or initial defaults.
+- A project switch flushes the old project before resetting or restoring the next project.
+- Corrupted presentation storage recovers without changing scene JSON.
+- HMR and plugin unregister/re-register retain the saved project configuration.
+- One Editor owns persistence even when it mounts multiple Viewer scenes.
+- Restore disables thunder audio consent, sky playback, and sky motion.
+- Standalone hosts retain the explicit validated export/import handoff.
+- Scene graph JSON, authored nodes, history, and geometry export remain unchanged.
 
 ## Deployment gate
 
@@ -217,6 +328,7 @@ Before publishing or deploying Environment:
 - [ ] Every required Editor change has a linked issue/PR and released Pascal version.
 - [ ] `peerDependencies` reflects the first Pascal version containing all required host changes.
 - [ ] Validation runs against installed `@pascal-app/*` packages, not only a locally patched Editor checkout.
+- [ ] Hosts claiming saved Environment presentation persist the versioned configuration in a project sidecar and restore it through the public import.
 - [ ] No Environment source imports Editor internals or coordinates host behavior with timers.
 - [ ] Unsupported selector zones remain visibly marked **Coming soon** and cannot activate.
 - [ ] Build, Terrain, keyboard focus, hover, and panel transitions pass an end-to-end smoke test.

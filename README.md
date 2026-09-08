@@ -141,6 +141,10 @@ material on the Site; dragging its slider commits on release.
 **Ground Cover** separates coverage painting from local height adjustment.
 **Target coverage** controls where grass grows; the Grass Field inspector
 groups global appearance, natural variation, wind, and obstacle interaction.
+Ground Cover excludes building interiors, colliding props, and the resolved wet
+surfaces of authored ponds and rivers. Dry banks and islands remain paintable.
+Water edits and live terrain changes refresh the exclusion without erasing saved
+grass paint, so grass returns where water is drained or removed.
 
 Live Surface shading uses sRGB base colors and linear-data normal/ARM maps.
 Packed red supplies ambient occlusion and green supplies roughness; these
@@ -183,10 +187,16 @@ not the excavated bed.
 
 ### Local neighborhood preview
 
-In the development host, open **Environment → Surroundings**. Select a numbered
-property edge directly on the 2D map, then choose **No road**, **Secondary**, or
-**Primary** in the map card. Edge markers and road choices support keyboard
-navigation and activation.
+In the development host, open **Environment → Surroundings**. Road controls appear
+first: select a numbered property edge on the map, then choose **No road**,
+**Secondary**, or **Primary** above it. Edge markers and road choices support
+keyboard navigation and activation. The heading stays visible while settings
+scroll within the panel.
+
+Use **Landscape preset** to switch between Regional, Open Meadow, and Woodland
+Edge. Natural presets omit roads and homes; **Use Regional roads** restores the
+road controls without losing edge assignments. **Variation & birds** contains the
+landscape seed, bird visibility, and bird animation settings.
 
 The map follows the live camera bearing while keeping labels upright. Its framing
 stays centered on the Site when road types change. Neighborhood visibility and
@@ -241,6 +251,14 @@ paint is light-reactive rather than unlit, so arrows and crossings darken at nig
 Lamp heads emit light visually, while a single instanced batch adds soft,
 terrain-draped ground pools. These are inexpensive lighting approximations: no
 per-pole lights, shadow maps, interior lighting, or illumination of nearby walls.
+
+Coastal lighthouses add a rotating spotlight and a soft visible beam at night.
+The beacon completes one sweep every 20 seconds, follows the same solar fade,
+and stops rotating while the viewer is paused. It remains presentation-only.
+
+Distant birds are visible and animated by default, including after restoring an
+environment configuration. **Animate distant birds** pauses their flight; the
+viewer-wide rendering pause freezes both birds and the lighthouse beacon.
 
 Parked cars use one shared 486-triangle sedan with chamfered bodywork, wheel arches,
 outward-facing inset glazing, rims, and unlit head/tail lamps. All cars remain two

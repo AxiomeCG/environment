@@ -5,6 +5,7 @@ import {
   getFloorPlacedFootprints,
   getLevelElevations,
   getWallThickness,
+  type GeometryContext,
   nodeRegistry,
   sampleWallCenterline,
   type LevelNode,
@@ -13,6 +14,10 @@ import {
   type WallNode,
   type ZoneNode,
 } from '@pascal-app/core'
+import { resolvePond } from '../pond/geometry'
+import { POND_KIND, type PondNode } from '../pond/schema'
+import { resolveRiver } from '../river/geometry'
+import { RIVER_KIND, type RiverNode } from '../river/schema'
 import type { GrassPaintField } from './paint-field'
 import {
   createGrassObstacleField,
@@ -56,8 +61,7 @@ export function collectGrassObstacleShapes(
     const levels = Object.values(nodes).filter(
       (node): node is LevelNode =>
         node.type === 'level' &&
-        (node.parentId === building.id ||
-          building.children.some((childId) => childId === node.id)),
+        (node.parentId === building.id || building.children.some((childId) => childId === node.id)),
     )
     const gradeLevel = levels.reduce<LevelNode | null>((best, level) => {
       if (!best) return level
@@ -93,7 +97,26 @@ export function collectGrassObstacleShapes(
     collectLevelShapes(node, coreNodes, IDENTITY_TRANSFORM, shapes)
   }
 
-  collectFloorPlacedShapes(directChildren(site, nodes), coreNodes, IDENTITY_TRANSFORM, shapes)
+  const children = directChildren(site, nodes)
+  collectFloorPlacedShapes(children, coreNodes, IDENTITY_TRANSFORM, shapes)
+  const context: GeometryContext = {
+    parent: site,
+    children: [],
+    siblings: children,
+    resolve: <N = AnyNode>(id: AnyNodeId) => nodes[id] as N | undefined,
+  }
+  for (const child of children) {
+    if (child.parentId !== site.id) continue
+    const surface =
+      (child.type as string) === POND_KIND
+        ? resolvePond(child as unknown as PondNode, context)?.surface
+        : (child.type as string) === RIVER_KIND
+          ? resolveRiver(child as unknown as RiverNode, context)?.surface
+          : null
+    if (surface?.positions.length) {
+      shapes.push({ kind: 'triangles', positions: surface.positions })
+    }
+  }
   return shapes
 }
 
@@ -113,6 +136,21 @@ export function collectSiteNodes(
     for (const childId of children) pending.push(childId)
   }
   return collected
+}
+
+export function siteHasWaterObstacles(
+  siteId: string,
+  nodes: Readonly<Record<string, AnyNode>>,
+): boolean {
+  for (const id in nodes) {
+    const node = nodes[id]
+    if (node?.parentId === siteId && isWaterObstacleNode(node)) return true
+  }
+  return false
+}
+
+function isWaterObstacleNode(node: AnyNode): boolean {
+  return (node.type as string) === POND_KIND || (node.type as string) === RIVER_KIND
 }
 
 function collectLevelShapes(
@@ -199,10 +237,7 @@ function collectFloorPlacedShapes(
   }
 }
 
-function directChildren(
-  parent: AnyNode,
-  nodes: Readonly<Record<string, AnyNode>>,
-): AnyNode[] {
+function directChildren(parent: AnyNode, nodes: Readonly<Record<string, AnyNode>>): AnyNode[] {
   const children = nodeChildren(parent)
     .map((id) => nodes[id])
     .filter((node): node is AnyNode => Boolean(node))
@@ -235,6 +270,14 @@ export function changedGrassObstacleSiteIds(
     ) {
       changedSiteIds.add(previous.id)
     }
+    if (
+      current?.type === 'site' &&
+      previous?.type === 'site' &&
+      (current.terrain !== previous.terrain || current.polygon !== previous.polygon) &&
+      siteHasWaterObstacles(current.id, currentNodes)
+    ) {
+      changedSiteIds.add(current.id)
+    }
     if (!isGrassObstacleNode(current) && !isGrassObstacleNode(previous)) continue
 
     const currentSiteId = current ? siteAncestorId(current, currentNodes) : null
@@ -248,7 +291,6 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index])
 }
 
-
 function isGrassObstacleNode(node: AnyNode | undefined): boolean {
   if (!node) return false
   if (
@@ -256,17 +298,15 @@ function isGrassObstacleNode(node: AnyNode | undefined): boolean {
     node.type === 'level' ||
     node.type === 'slab' ||
     node.type === 'zone' ||
-    node.type === 'wall'
+    node.type === 'wall' ||
+    isWaterObstacleNode(node)
   ) {
     return true
   }
   return nodeRegistry.get(node.type)?.capabilities?.floorPlaced?.collides === true
 }
 
-function siteAncestorId(
-  node: AnyNode,
-  nodes: Readonly<Record<string, AnyNode>>,
-): string | null {
+function siteAncestorId(node: AnyNode, nodes: Readonly<Record<string, AnyNode>>): string | null {
   let current: AnyNode | undefined = node
   const visited = new Set<string>()
   while (current && !visited.has(current.id)) {
@@ -276,7 +316,6 @@ function siteAncestorId(
   }
   return null
 }
-
 
 function nodeBelongsToSite(
   node: AnyNode,

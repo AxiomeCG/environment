@@ -19,6 +19,7 @@ export const GrassFieldNode = BaseNode.extend({
   bladeTintVariation: z.number().min(0).max(100).default(20),
   bladeTipBrightness: z.number().min(0).max(500).default(300),
   density: z.number().min(0).max(100).default(100),
+  flowerDensity: z.number().min(0).max(100).default(0),
   windStrength: z.number().min(0).max(200).default(100),
   grassWindInfluence: z.number().min(0).max(300).default(100),
   obstacleBendRadius: z.number().min(0).max(3).default(0.75),
@@ -40,6 +41,7 @@ type GrassFieldDefaultsPatch = Pick<
   | 'bladeTintVariation'
   | 'bladeTipBrightness'
   | 'density'
+  | 'flowerDensity'
   | 'windStrength'
   | 'grassWindInfluence'
   | 'obstacleBendRadius'
@@ -76,6 +78,9 @@ export function getMissingGrassFieldDefaults(node: unknown): Partial<GrassFieldD
     patch.bladeTipBrightness = parsed.bladeTipBrightness
   }
   if (source.density === undefined) patch.density = parsed.density
+  if (source.flowerDensity === undefined) {
+    patch.flowerDensity = parsed.flowerDensity
+  }
   if (source.windStrength === undefined) patch.windStrength = parsed.windStrength
   if (source.grassWindInfluence === undefined) {
     patch.grassWindInfluence = parsed.grassWindInfluence

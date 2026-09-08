@@ -8,13 +8,14 @@ import {
   surfaceHeightAt,
 } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
-import { Box3, Color, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three'
+import { Box3, Color, InstancedMesh, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { buildGrassFieldBakeGeometry } from './bake-geometry'
-import {
-  createGrassPaintField,
-  encodeGrassPaintField,
-} from './paint-field'
+import { resolveGroundCoverFields } from './field-context'
+import { collectFlowerPlacements } from './flower-scatter'
+import { buildGrassFieldGeometry } from './geometry'
+import { createGrassPaintField, encodeGrassPaintField } from './paint-field'
+import { createFlowerGeometry } from './render/flower-geometry'
 import { GrassFieldNode } from './schema'
 
 describe('Ground Cover static bake geometry', () => {
@@ -46,19 +47,64 @@ describe('Ground Cover static bake geometry', () => {
       blades.geometry.getAttribute('position').count,
     )
     expect(
-      Array.from(
-        blades.geometry.getAttribute('color').array as ArrayLike<number>,
-      ).every((component) => component >= 0 && component <= 1),
+      Array.from(blades.geometry.getAttribute('color').array as ArrayLike<number>).every(
+        (component) => component >= 0 && component <= 1,
+      ),
     ).toBe(true)
 
     const exported = await exportGltf(root)
     expect(exported.extensionsUsed ?? []).not.toContain('EXT_mesh_gpu_instancing')
-    const positionAccessor =
-      exported.meshes?.[0]?.primitives[0]?.attributes.POSITION
+    const positionAccessor = exported.meshes?.[0]?.primitives[0]?.attributes.POSITION
     expect(typeof positionAccessor).toBe('number')
     expect(exported.accessors?.[positionAccessor ?? -1]?.count).toBe(126)
     expect(exported.materials).toHaveLength(1)
     expect(exported.meshes).toHaveLength(1)
+  })
+
+  test('uses the same deterministic roots for live flower batches and portable bake meshes', async () => {
+    const site = smallSite()
+    const node = GrassFieldNode.parse({
+      id: 'grass-field_flower_bake',
+      parentId: site.id,
+      bladeWidthVariation: 0,
+      bladeHeightVariation: 0,
+      flowerDensity: 100,
+    })
+    const context = contextFor(site, [site])
+    const fields = resolveGroundCoverFields(node, context)
+    expect(fields).not.toBeNull()
+    if (!fields) return
+    const placements = collectFlowerPlacements(node, fields)
+    expect(placements).toHaveLength(1)
+    const placement = placements[0]!
+
+    const live = buildGrassFieldGeometry(node, context)
+    const liveFlowers = live.getObjectByName(`grass-field-flower-${placement.kind}`)
+    expect(liveFlowers).toBeInstanceOf(InstancedMesh)
+    if (!(liveFlowers instanceof InstancedMesh)) return
+    const roots = liveFlowers.geometry.getAttribute('flowerRoot')
+    expect(roots.count).toBe(1)
+    expect(roots.getX(0)).toBeCloseTo(placement.position[0], 6)
+    expect(roots.getY(0)).toBeCloseTo(placement.position[1], 6)
+    expect(roots.getZ(0)).toBeCloseTo(placement.position[2], 6)
+
+    const baked = buildGrassFieldBakeGeometry(node, context)
+    const bakedFlowers = baked.getObjectByName(`grass-field-static-flowers-${placement.kind}`)
+    expect(bakedFlowers).toBeInstanceOf(Mesh)
+    if (!(bakedFlowers instanceof Mesh)) return
+    expect(bakedFlowers.material).toBeInstanceOf(MeshStandardMaterial)
+    expect(bakedFlowers.geometry.getIndex()?.array).toBeInstanceOf(Uint16Array)
+    expect(bakedFlowers.geometry.boundingBox?.min.y).toBeCloseTo(placement.position[1], 8)
+    const prototype = createFlowerGeometry(placement.kind)
+    expect(bakedFlowers.geometry.getAttribute('position').count).toBe(
+      prototype.getAttribute('position').count,
+    )
+    prototype.dispose()
+
+    const exported = await exportGltf(baked)
+    expect(exported.extensionsUsed ?? []).not.toContain('EXT_mesh_gpu_instancing')
+    expect(exported.meshes).toHaveLength(2)
+    expect(exported.materials).toHaveLength(2)
   })
 
   test('bakes the independent local height texture', () => {
@@ -73,10 +119,7 @@ describe('Ground Cover static bake geometry', () => {
       ...baseline,
       id: 'grass-field_height_raised',
       heightMap: encodeGrassPaintField(
-        createGrassPaintField(
-          { minX: 0, maxX: 0.2, minZ: 0, maxZ: 0.2 },
-          '#ffffff',
-        ),
+        createGrassPaintField({ minX: 0, maxX: 0.2, minZ: 0, maxZ: 0.2 }, '#ffffff'),
       ),
     })
 
@@ -113,10 +156,7 @@ describe('Ground Cover static bake geometry', () => {
     )
 
     expect(straightBounds.min.y).toBeCloseTo(curvedBounds.min.y, 8)
-    expect(curvedBounds.max.y).toBeCloseTo(
-      (straight.bladeHeight * Math.sin(0.5)) / 0.5,
-      5,
-    )
+    expect(curvedBounds.max.y).toBeCloseTo((straight.bladeHeight * Math.sin(0.5)) / 0.5, 5)
     expect(curvedBounds.max.y).toBeLessThan(straightBounds.max.y)
   })
 
@@ -130,10 +170,7 @@ describe('Ground Cover static bake geometry', () => {
       bladeTipBrightness: 500,
       bladeWidthVariation: 0,
       paintMap: encodeGrassPaintField(
-        createGrassPaintField(
-          { minX: 0, maxX: 0.2, minZ: 0, maxZ: 0.2 },
-          '#204060',
-        ),
+        createGrassPaintField({ minX: 0, maxX: 0.2, minZ: 0, maxZ: 0.2 }, '#204060'),
       ),
     })
 
@@ -239,10 +276,7 @@ describe('Ground Cover static bake geometry', () => {
       (positions.getY(0) + positions.getY(1)) / 2,
       (positions.getZ(0) + positions.getZ(1)) / 2,
     )
-    expect(bladeRoot.y).toBeCloseTo(
-      surfaceHeightAt(terrain, bladeRoot.x, bladeRoot.z),
-      6,
-    )
+    expect(bladeRoot.y).toBeCloseTo(surfaceHeightAt(terrain, bladeRoot.x, bladeRoot.z), 6)
   })
 })
 

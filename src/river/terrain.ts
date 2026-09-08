@@ -97,7 +97,7 @@ export function rebuildRiverTerrain(
   const siteMetadata = site.metadata
   const metadataIsObject =
     siteMetadata !== null && typeof siteMetadata === 'object' && !Array.isArray(siteMetadata)
-  const metadata: Record<string, SiteNode['metadata']> = metadataIsObject ? { ...siteMetadata } : {}
+  const metadata: Record<string, unknown> = metadataIsObject ? { ...siteMetadata } : {}
   const originalMetadata =
     tracked?.originalMetadata !== undefined
       ? tracked.originalMetadata
@@ -535,7 +535,7 @@ function readRiverTerrainMetadata(metadata: SiteNode['metadata']): RiverTerrainM
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null
   const value = metadata[RIVER_TERRAIN_METADATA_KEY]
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const record = value
+  const record = value as Partial<RiverTerrainMetadata>
   if (record.version !== RIVER_TERRAIN_METADATA_VERSION) return null
   const baseline = decodeTerrainField(record.baseline)
   const applied = decodeTerrainField(record.applied)

@@ -59,6 +59,15 @@ export {
   type RiverPoint,
   type RiverSource,
 } from './river/schema'
+export {
+  ENVIRONMENT_CONFIGURATION_VERSION,
+  EnvironmentConfigurationSchema,
+  type EnvironmentConfiguration,
+  type EnvironmentConfigurationV1,
+  environmentPresentation,
+  exportEnvironmentConfiguration,
+  importEnvironmentConfiguration,
+} from './presentation'
 export { SurfaceMaterialNode } from './surface-material/schema'
 export { default as SurroundingsLayer } from './surroundings/layer'
 export { default as AtmosphereLayer } from './atmosphere/layer'

@@ -24,7 +24,7 @@ type GrassFieldDefinition = Omit<
 
 export const grassFieldDefinition: GrassFieldDefinition = {
   kind: 'environment:ground-cover',
-  schemaVersion: 2,
+  schemaVersion: 3,
   schema: GrassFieldNode,
   category: 'furnish',
 
@@ -43,6 +43,7 @@ export const grassFieldDefinition: GrassFieldDefinition = {
     bladeTintVariation: 20,
     bladeTipBrightness: 300,
     density: 100,
+    flowerDensity: 0,
     windStrength: 100,
     grassWindInfluence: 100,
     obstacleBendRadius: 0.75,

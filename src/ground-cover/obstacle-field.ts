@@ -23,6 +23,10 @@ export type GrassObstacleSample = {
 
 export type GrassObstacleShape =
   | {
+      kind: 'triangles'
+      positions: Float32Array
+    }
+  | {
       kind: 'polygon'
       points: ReadonlyArray<readonly [number, number]>
       holes?: ReadonlyArray<ReadonlyArray<readonly [number, number]>>
@@ -40,10 +44,8 @@ export type GrassObstacleShape =
       rotation: number
     }
 
-export type GrassObstacleTopology = Pick<
-  GrassObstacleField,
-  'origin' | 'spacing' | 'cols' | 'rows'
->
+type PlanObstacleShape = Exclude<GrassObstacleShape, { kind: 'triangles' }>
+export type GrassObstacleTopology = Pick<GrassObstacleField, 'origin' | 'spacing' | 'cols' | 'rows'>
 
 export function createGrassObstacleTopology(bounds: SiteBounds): GrassObstacleTopology {
   const width = Math.max(0, bounds.maxX - bounds.minX)
@@ -66,7 +68,26 @@ export function createGrassObstacleField(
   shapes: readonly GrassObstacleShape[],
 ): GrassObstacleField {
   const occupied = new Uint8Array(topology.cols * topology.rows)
-  for (const shape of shapes) rasterizeShape(topology, occupied, shape)
+  for (const shape of shapes) {
+    if (shape.kind === 'triangles') {
+      // Reuse one polygon rather than allocating a shape for every water triangle.
+      const points: [[number, number], [number, number], [number, number]] = [
+        [0, 0],
+        [0, 0],
+        [0, 0],
+      ]
+      const triangle: PlanObstacleShape = { kind: 'polygon', points }
+      for (let offset = 0; offset + 8 < shape.positions.length; offset += 9) {
+        for (let vertex = 0; vertex < 3; vertex += 1) {
+          points[vertex]![0] = shape.positions[offset + vertex * 3]!
+          points[vertex]![1] = shape.positions[offset + vertex * 3 + 2]!
+        }
+        rasterizeShape(topology, occupied, triangle)
+      }
+    } else {
+      rasterizeShape(topology, occupied, shape)
+    }
+  }
 
   const values = encodeObstacleField(topology, occupied)
   return {
@@ -90,14 +111,8 @@ export function sampleGrassObstacle(
   x: number,
   z: number,
 ): GrassObstacleSample {
-  const u = Math.max(
-    0,
-    Math.min(field.cols - 1, (x - field.origin[0]) / field.spacing),
-  )
-  const v = Math.max(
-    0,
-    Math.min(field.rows - 1, (z - field.origin[1]) / field.spacing),
-  )
+  const u = Math.max(0, Math.min(field.cols - 1, (x - field.origin[0]) / field.spacing))
+  const v = Math.max(0, Math.min(field.rows - 1, (z - field.origin[1]) / field.spacing))
   const col0 = Math.floor(u)
   const row0 = Math.floor(v)
   const col1 = Math.min(field.cols - 1, col0 + 1)
@@ -109,14 +124,9 @@ export function sampleGrassObstacle(
     distance:
       (bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 0) / 255) *
       MAX_GRASS_OBSTACLE_DISTANCE,
-    directionX:
-      (bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 1) / 255) * 2 -
-      1,
-    directionZ:
-      (bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 2) / 255) * 2 -
-      1,
-    allowed:
-      bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 3) / 255,
+    directionX: (bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 1) / 255) * 2 - 1,
+    directionZ: (bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 2) / 255) * 2 - 1,
+    allowed: bilinearObstacleChannel(field, col0, row0, col1, row1, tx, tz, 3) / 255,
   }
 }
 
@@ -142,7 +152,7 @@ function bilinearObstacleChannel(
 function rasterizeShape(
   topology: GrassObstacleTopology,
   occupied: Uint8Array,
-  shape: GrassObstacleShape,
+  shape: PlanObstacleShape,
 ): void {
   const padding = topology.spacing * Math.SQRT1_2
   const bounds = shapeBounds(shape)
@@ -173,7 +183,7 @@ function rasterizeShape(
   }
 }
 
-function shapeBounds(shape: GrassObstacleShape): {
+function shapeBounds(shape: PlanObstacleShape): {
   minX: number
   minZ: number
   maxX: number
@@ -213,12 +223,7 @@ function shapeBounds(shape: GrassObstacleShape): {
   return { minX, minZ, maxX, maxZ }
 }
 
-function shapeContains(
-  shape: GrassObstacleShape,
-  x: number,
-  z: number,
-  padding: number,
-): boolean {
+function shapeContains(shape: PlanObstacleShape, x: number, z: number, padding: number): boolean {
   if (shape.kind === 'polygon') {
     if (shape.points.length < 3) return false
     if (!pointInsidePolygon(x, z, shape.points)) return false
@@ -250,7 +255,6 @@ function pointInsidePolygon(
   return pointInPolygon2D([x, z], corePoints, { includeBoundary: true })
 }
 
-
 function squaredDistanceToSegment(
   x: number,
   z: number,
@@ -272,10 +276,7 @@ function squaredDistanceToSegment(
   return (x - nearestX) ** 2 + (z - nearestZ) ** 2
 }
 
-function encodeObstacleField(
-  topology: GrassObstacleTopology,
-  occupied: Uint8Array,
-): Uint8Array {
+function encodeObstacleField(topology: GrassObstacleTopology, occupied: Uint8Array): Uint8Array {
   const size = topology.cols * topology.rows
   const nearestColumns = new Int32Array(size)
   const nearestRows = new Int32Array(size)
@@ -312,9 +313,7 @@ function encodeObstacleField(
       const dz = row - nearestRow
       const gridDistance = Math.hypot(dx, dz)
       const distance = gridDistance * topology.spacing
-      values[offset] = Math.round(
-        Math.min(distance / MAX_GRASS_OBSTACLE_DISTANCE, 1) * 255,
-      )
+      values[offset] = Math.round(Math.min(distance / MAX_GRASS_OBSTACLE_DISTANCE, 1) * 255)
       values[offset + 1] = encodeDirection(gridDistance > 0 ? dx / gridDistance : 0)
       values[offset + 2] = encodeDirection(gridDistance > 0 ? dz / gridDistance : 0)
       values[offset + 3] = 255

@@ -228,7 +228,35 @@ export default function FrontageSelector({
         <span className="font-medium">Road layout</span>
         <span className="text-sidebar-foreground/60">Camera aligned</span>
       </div>
-      <div className="relative aspect-square overflow-hidden">
+      <div className="flex flex-col gap-2 px-3 py-3">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="font-medium">Edge {activeSegment.index + 1}</span>
+          <span className="text-sidebar-foreground/60">Select an edge below</span>
+        </div>
+        <div
+          aria-label={`Edge ${activeSegment.index + 1} road type`}
+          className="grid grid-cols-3 gap-1 rounded-md bg-sidebar-accent/40 p-1"
+          role="group"
+        >
+          {SEPARATOR_OPTIONS.map((option) => (
+            <button
+              aria-label={option.label}
+              aria-pressed={activeSegment.context.separator === option.value}
+              className={`min-h-10 rounded px-1 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${activeSegment.context.separator === option.value ? 'bg-sidebar font-medium text-sidebar-foreground shadow-sm' : 'text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground'}`}
+              key={option.value}
+              onClick={() => onSeparatorChange(activeSegment.index, option.value)}
+              type="button"
+            >
+              {option.value === 'none'
+                ? 'No road'
+                : option.value === 'secondary-road'
+                  ? 'Secondary'
+                  : 'Primary'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="relative mx-auto aspect-square w-full max-w-56 overflow-hidden">
         <svg
           aria-hidden="true"
           className="absolute inset-0 h-full w-full"
@@ -440,34 +468,6 @@ export default function FrontageSelector({
               </button>
             )
           })}
-        </div>
-      </div>
-      <div className="flex flex-col gap-2 border-t border-sidebar-border bg-sidebar px-3 py-3">
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-medium">Edge {activeSegment.index + 1}</span>
-          <span className="text-sidebar-foreground/60">Select an edge on the map</span>
-        </div>
-        <div
-          aria-label={`Edge ${activeSegment.index + 1} road type`}
-          className="grid grid-cols-3 gap-1 rounded-md bg-sidebar-accent/40 p-1"
-          role="group"
-        >
-          {SEPARATOR_OPTIONS.map((option) => (
-            <button
-              aria-label={option.label}
-              aria-pressed={activeSegment.context.separator === option.value}
-              className={`min-h-10 rounded px-1 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${activeSegment.context.separator === option.value ? 'bg-sidebar font-medium text-sidebar-foreground shadow-sm' : 'text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground'}`}
-              key={option.value}
-              onClick={() => onSeparatorChange(activeSegment.index, option.value)}
-              type="button"
-            >
-              {option.value === 'none'
-                ? 'No road'
-                : option.value === 'secondary-road'
-                  ? 'Secondary'
-                  : 'Primary'}
-            </button>
-          ))}
         </div>
       </div>
     </div>

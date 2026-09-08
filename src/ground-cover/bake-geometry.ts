@@ -10,6 +10,7 @@ import {
   Vector3,
 } from 'three'
 import { resolveGroundCoverFields, type GroundCoverFields } from './field-context'
+import { collectFlowerPlacements } from './flower-scatter'
 import { localGrassHeightScaleAt } from './height-field'
 import { sampleGrassObstacle } from './obstacle-field'
 import { paintAt } from './paint-field'
@@ -20,6 +21,7 @@ import {
   shapeGrassCoverageValue,
   type GrassBladeCurvePoint,
 } from './render/blade-shape'
+import { createBakedFlowerBatches } from './render/flower-geometry'
 import { visitGrassCandidates } from './scatter'
 import type { GrassFieldNode } from './schema'
 
@@ -43,14 +45,12 @@ type AcceptedGrassSample = {
   blue: number
 }
 
-export function buildGrassFieldBakeGeometry(
-  node: GrassFieldNode,
-  context: GeometryContext,
-): Group {
+export function buildGrassFieldBakeGeometry(node: GrassFieldNode, context: GeometryContext): Group {
   const group = new Group()
   group.name = 'grass-field-static'
   const fields = resolveGroundCoverFields(node, context)
   if (!fields) return group
+  const flowerPlacements = collectFlowerPlacements(node, fields)
 
   const evaluation = emptyAcceptedSample()
   let acceptedCount = 0
@@ -68,7 +68,12 @@ export function buildGrassFieldBakeGeometry(
       }
     },
   )
-  if (acceptedCount === 0) return group
+  if (acceptedCount === 0) {
+    if (flowerPlacements.length > 0) {
+      group.add(createBakedFlowerBatches(flowerPlacements))
+    }
+    return group
+  }
 
   const bladeGeometry = buildBladeGeometry({
     width: node.bladeWidth,
@@ -96,10 +101,7 @@ export function buildGrassFieldBakeGeometry(
   const chunks: BakedGrassChunk[] = []
 
   for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-    const bladeCount = Math.min(
-      bladesPerChunk,
-      acceptedCount - chunkIndex * bladesPerChunk,
-    )
+    const bladeCount = Math.min(bladesPerChunk, acceptedCount - chunkIndex * bladesPerChunk)
     const positions = new Float32Array(bladeCount * verticesPerBlade * 3)
     const normals = new Float32Array(bladeCount * verticesPerBlade * 3)
     const colors = new Float32Array(bladeCount * verticesPerBlade * 3)
@@ -120,9 +122,7 @@ export function buildGrassFieldBakeGeometry(
     geometry.setIndex(new BufferAttribute(indices, 1))
     const blades = new Mesh(geometry, material)
     blades.name =
-      chunkIndex === 0
-        ? 'grass-field-static-blades'
-        : `grass-field-static-blades-${chunkIndex + 1}`
+      chunkIndex === 0 ? 'grass-field-static-blades' : `grass-field-static-blades-${chunkIndex + 1}`
     group.add(blades)
     chunks.push({ colors, geometry, normals, positions })
   }
@@ -147,10 +147,7 @@ export function buildGrassFieldBakeGeometry(
       if (bladeHeight <= 0) return
 
       yawRotation.setFromAxisAngle(up, yaw)
-      normalVariationRotation.setFromAxisAngle(
-        up,
-        tint * MAX_GRASS_NORMAL_YAW,
-      )
+      normalVariationRotation.setFromAxisAngle(up, tint * MAX_GRASS_NORMAL_YAW)
       const width = node.bladeWidth * widthFactor
       const obstacleOffset =
         (node.obstacleBendStrength ?? 0.12) *
@@ -184,12 +181,10 @@ export function buildGrassFieldBakeGeometry(
           .applyQuaternion(yawRotation)
         const contactHeightMask = bladeProgress * bladeProgress
         transformedPosition.x +=
-          x +
-          evaluation.obstacleDirectionX * obstacleOffset * contactHeightMask
+          x + evaluation.obstacleDirectionX * obstacleOffset * contactHeightMask
         transformedPosition.y += y
         transformedPosition.z +=
-          z +
-          evaluation.obstacleDirectionZ * obstacleOffset * contactHeightMask
+          z + evaluation.obstacleDirectionZ * obstacleOffset * contactHeightMask
         transformedPosition.toArray(chunk.positions, outputOffset)
 
         transformedNormal
@@ -217,6 +212,9 @@ export function buildGrassFieldBakeGeometry(
     chunk.geometry.computeBoundingBox()
     chunk.geometry.computeBoundingSphere()
   }
+  if (flowerPlacements.length > 0) {
+    group.add(createBakedFlowerBatches(flowerPlacements))
+  }
   return group
 }
 
@@ -230,9 +228,7 @@ function evaluateCandidate(
   includeColor: boolean,
 ): boolean {
   const painted = paintAt(fields.paint, x, z)
-  const density = shapeGrassCoverageValue(
-    painted.a * ((node.density ?? 100) / 100),
-  )
+  const density = shapeGrassCoverageValue(painted.a * ((node.density ?? 100) / 100))
   if (density <= 0 || threshold > density) return false
 
   const obstacle = sampleGrassObstacle(fields.obstacles, x, z)
@@ -242,14 +238,10 @@ function evaluateCandidate(
   output.density = density
   output.localHeightScale = localGrassHeightScaleAt(fields.height, x, z)
   output.obstacleInfluence =
-    bendRadius > 0
-      ? 1 - smoothstep(0, Math.max(bendRadius, 0.001), obstacle.distance)
-      : 0
+    bendRadius > 0 ? 1 - smoothstep(0, Math.max(bendRadius, 0.001), obstacle.distance) : 0
   const directionLength = Math.hypot(obstacle.directionX, obstacle.directionZ)
-  output.obstacleDirectionX =
-    directionLength > 1e-6 ? obstacle.directionX / directionLength : 0
-  output.obstacleDirectionZ =
-    directionLength > 1e-6 ? obstacle.directionZ / directionLength : 0
+  output.obstacleDirectionX = directionLength > 1e-6 ? obstacle.directionX / directionLength : 0
+  output.obstacleDirectionZ = directionLength > 1e-6 ? obstacle.directionZ / directionLength : 0
 
   if (includeColor) {
     output.red = srgbToLinear(painted.r)
@@ -267,27 +259,18 @@ function resolvedBladeHeight(
   return node.bladeHeight * heightFactor * resolvedBladeHeightScale(node, sample)
 }
 
-function resolvedBladeHeightScale(
-  node: GrassFieldNode,
-  sample: AcceptedGrassSample,
-): number {
+function resolvedBladeHeightScale(node: GrassFieldNode, sample: AcceptedGrassSample): number {
   const densityScale = sample.density * sample.density
   const flattening = clamp01(
-    1 -
-      sample.obstacleInfluence *
-        clamp01((node.obstacleFlattening ?? 60) / 100),
+    1 - sample.obstacleInfluence * clamp01((node.obstacleFlattening ?? 60) / 100),
   )
   return Math.max(0, sample.localHeightScale * densityScale * flattening)
 }
 
-
 function srgbToLinear(value: number): number {
   const channel = clamp01(value)
-  return channel <= 0.04045
-    ? channel / 12.92
-    : ((channel + 0.055) / 1.055) ** 2.4
+  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
 }
-
 
 function emptyAcceptedSample(): AcceptedGrassSample {
   return {

@@ -28,6 +28,66 @@ describe('Surroundings visibility', () => {
   })
 })
 
+describe('Surroundings presets', () => {
+  beforeEach(() => {
+    useEnvironmentStore.setState(useEnvironmentStore.getInitialState(), true)
+  })
+
+  test('defaults to Regional and retains frontage settings across natural presets', () => {
+    const state = useEnvironmentStore.getState()
+    state.setFrontageSeparator(2, 'primary-road')
+
+    expect(useEnvironmentStore.getState().surroundingsPreset).toBe('regional')
+    state.setSurroundingsPreset('open-meadow')
+    state.setSurroundingsPreset('woodland-edge')
+
+    expect(useEnvironmentStore.getState().frontageContexts).toEqual({
+      2: { separator: 'primary-road', access: 'none' },
+    })
+  })
+
+  test('copies restored frontage configuration at the store boundary', () => {
+    const context: {
+      separator: 'secondary-road'
+      access: 'driveway'
+      roadStyleId: string
+    } = {
+      separator: 'secondary-road',
+      access: 'driveway',
+      roadStyleId: 'country-lane',
+    }
+
+    useEnvironmentStore.getState().setFrontageContexts({ 1: context })
+    context.roadStyleId = 'changed-outside-store'
+
+    expect(useEnvironmentStore.getState().frontageContexts[1]).toEqual({
+      separator: 'secondary-road',
+      access: 'driveway',
+      roadStyleId: 'country-lane',
+    })
+  })
+})
+
+describe('Weather settings', () => {
+  beforeEach(() => {
+    useEnvironmentStore.setState(useEnvironmentStore.getInitialState(), true)
+  })
+
+  test('clamps intensity inputs without resetting independent settings', () => {
+    const state = useEnvironmentStore.getState()
+    state.setWeatherSettings({ storm: true, rain: 2, snow: 1.3 })
+    state.setWeatherSettings({ wind: -1 })
+
+    expect(useEnvironmentStore.getState().weatherSettings).toEqual({
+      rain: 1,
+      snow: 1,
+      wind: 0,
+      storm: true,
+      thunderAudio: false,
+    })
+  })
+})
+
 describe('Pond tool state', () => {
   beforeEach(() => {
     useEnvironmentStore.setState(useEnvironmentStore.getInitialState(), true)

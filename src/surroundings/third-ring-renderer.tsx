@@ -6,6 +6,7 @@ import type { HousePrimitive } from './primitive-instances'
 import type { PresentationSurface } from './presentation-material'
 import type { DistantMass, ThirdRingPlan } from './third-ring'
 import { windowSurface } from './night-lighting'
+import { LighthouseBeacon } from './lighthouse-beacon'
 
 const FOUNDATION_REVEAL = 0.16
 
@@ -410,7 +411,7 @@ export function buildThirdRingInstances(plan: ThirdRingPlan, root = new Group())
     const bandWidth = width * 0.89
     add('cylinder', 'paint', lighthouse.stripe, 0, height * 0.52, 0, bandWidth, 2.2, bandWidth)
     add('cylinder', 'paint', '#474e4e', 0, height + 0.6, 0, 5.6, 0.5, 5.6)
-    add('cylinder', 'paint', '#a5c2bd', 0, height + 2, 0, 3.9, 2.4, 3.9)
+    add('cylinder', 'window-lit', '#a5c2bd', 0, height + 2, 0, 3.9, 2.4, 3.9)
     for (let index = 0; index < 8; index += 1) {
       const angle = index * Math.PI / 4
       add('box', 'paint', '#404a4b', Math.cos(angle) * 1.9, height + 2, Math.sin(angle) * 1.9, 0.18, 2.5, 0.18)
@@ -442,5 +443,10 @@ export function ThirdRing({ plan }: { plan: ThirdRingPlan }) {
     invalidate()
   }, [root, plan, invalidate])
   useEffect(() => () => { disposePrimitiveInstances(root) }, [root])
-  return <primitive object={root} dispose={null} />
+  return (
+    <>
+      <primitive object={root} dispose={null} />
+      {plan.lighthouse ? <LighthouseBeacon plan={plan.lighthouse} /> : null}
+    </>
+  )
 }

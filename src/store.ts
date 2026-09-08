@@ -7,10 +7,12 @@ import {
 } from './ground-cover/paint-stroke'
 import type { EnvironmentTool } from './environment-selector'
 import {
+  type FrontageContext,
   type FrontageContexts,
   type FrontageSeparator,
   withFrontageSeparator,
 } from './surroundings/frontages'
+import type { SurroundingsPresetId } from './surroundings/presets'
 import {
   DEFAULT_SURFACE_MATERIAL,
   SURFACE_MATERIAL_PAINT_COLOR,
@@ -27,6 +29,24 @@ export type GroundCoverBrushTool =
   | 'smooth-height'
 type SurfaceBrushPatch = Partial<Omit<PaintStrokeSettings, 'color' | 'targetDensity'>>
 
+function cloneFrontageContexts(contexts: FrontageContexts): FrontageContexts {
+  const clone: Partial<Record<number, FrontageContext>> = {}
+  for (const key of Object.keys(contexts)) {
+    const index = Number(key)
+    const context = contexts[index]
+    if (context) clone[index] = { ...context }
+  }
+  return clone
+}
+
+export type WeatherSettings = Readonly<{
+  rain: number
+  snow: number
+  wind: number
+  storm: boolean
+  thunderAudio: boolean
+}>
+
 export type PondToolMode = 'select-basin' | PondProp['kind'] | 'remove-prop'
 
 export type PondToolTarget = {
@@ -35,11 +55,12 @@ export type PondToolTarget = {
   pondId: string | null
 }
 
-type EnvironmentStore = {
+export type EnvironmentStore = {
   activeSection?: EnvironmentTool
   catalogueView: 'catalogue' | 'site'
   waterTab: 'pond' | 'river'
   frontageContexts: FrontageContexts
+  weatherSettings: WeatherSettings
   ambientMotion: boolean
   birdsEnabled: boolean
   groundCoverBrush: PaintStrokeSettings
@@ -50,6 +71,7 @@ type EnvironmentStore = {
   surroundingsEnabled: boolean
   surroundingsSeed: string
   skyEnabled: boolean
+  surroundingsPreset: SurroundingsPresetId
   skySettings: SkySettings
   skyPlaying: boolean
   skyMotion: boolean
@@ -57,6 +79,7 @@ type EnvironmentStore = {
   pondTarget: PondToolTarget | null
   pondQuality: WaterQuality
   pondFeedback: string
+  setWeatherSettings: (patch: Partial<WeatherSettings>) => void
   setAmbientMotion: (motion: boolean) => void
   setBirdsEnabled: (enabled: boolean) => void
   setSkyEnabled: (enabled: boolean) => void
@@ -67,6 +90,7 @@ type EnvironmentStore = {
   setCatalogueView: (view: EnvironmentStore['catalogueView']) => void
   setWaterTab: (tab: EnvironmentStore['waterTab']) => void
   setFrontageSeparator: (index: number, separator: FrontageSeparator) => void
+  setFrontageContexts: (contexts: FrontageContexts) => void
   setGroundCoverBrush: (patch: Partial<PaintStrokeSettings>) => void
   setGroundCoverTool: (tool: GroundCoverBrushTool) => void
   setGroundCoverHeightAmount: (amount: number) => void
@@ -74,6 +98,7 @@ type EnvironmentStore = {
   setSurfaceMaterial: (material: SurfaceMaterialId) => void
   setSurroundingsEnabled: (enabled: boolean) => void
   setSurroundingsSeed: (seed: string) => void
+  setSurroundingsPreset: (preset: SurroundingsPresetId) => void
   setPondToolMode: (mode: PondToolMode) => void
   setPondTarget: (target: PondToolTarget | null) => void
   setPondQuality: (quality: WaterQuality) => void
@@ -86,7 +111,14 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
   catalogueView: 'site',
   waterTab: 'pond',
   frontageContexts: {},
-  ambientMotion: false,
+  weatherSettings: {
+    rain: 0,
+    snow: 0,
+    wind: 0.35,
+    storm: false,
+    thunderAudio: false,
+  },
+  ambientMotion: true,
   birdsEnabled: true,
   groundCoverBrush: {
     ...DEFAULT_PAINT_STROKE_SETTINGS,
@@ -104,7 +136,8 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
   surfaceMaterial: DEFAULT_SURFACE_MATERIAL,
   surroundingsEnabled: true,
   surroundingsSeed: 'pascal-suburbs',
-  skyEnabled: false,
+  surroundingsPreset: 'regional',
+  skyEnabled: true,
   skySettings: { ...DEFAULT_SKY_SETTINGS },
   skyPlaying: false,
   skyMotion: false,
@@ -125,6 +158,16 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
     })),
   setSkyMotion: (skyMotion) => set({ skyMotion }),
   setAmbientMotion: (ambientMotion) => set({ ambientMotion }),
+  setWeatherSettings: (patch) =>
+    set((state) => ({
+      weatherSettings: {
+        ...state.weatherSettings,
+        ...patch,
+        rain: Math.max(0, Math.min(1, patch.rain ?? state.weatherSettings.rain)),
+        snow: Math.max(0, Math.min(1, patch.snow ?? state.weatherSettings.snow)),
+        wind: Math.max(0, Math.min(1, patch.wind ?? state.weatherSettings.wind)),
+      },
+    })),
   setBirdsEnabled: (birdsEnabled) => set({ birdsEnabled }),
   setActiveSection: (activeSection) => set({ activeSection }),
   setCatalogueView: (catalogueView) => set({ catalogueView }),
@@ -133,6 +176,8 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
     set((state) => ({
       frontageContexts: withFrontageSeparator(state.frontageContexts, index, separator),
     })),
+  setFrontageContexts: (frontageContexts) =>
+    set({ frontageContexts: cloneFrontageContexts(frontageContexts) }),
   setGroundCoverBrush: (patch) =>
     set((state) => ({ groundCoverBrush: { ...state.groundCoverBrush, ...patch } })),
   setGroundCoverTool: (groundCoverTool) => set({ groundCoverTool }),
@@ -160,4 +205,5 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
     }),
   setSurroundingsEnabled: (surroundingsEnabled) => set({ surroundingsEnabled }),
   setSurroundingsSeed: (surroundingsSeed) => set({ surroundingsSeed }),
+  setSurroundingsPreset: (surroundingsPreset) => set({ surroundingsPreset }),
 }))
