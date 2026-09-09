@@ -4,7 +4,6 @@ import { useScene } from '@pascal-app/core'
 import { useFrame, useThree } from '@react-three/fiber'
 import { type ComponentType, useEffect, useMemo, useRef } from 'react'
 import { useEnvironmentStore } from '../store'
-import { GodRaysLayer } from './god-rays'
 import { registerActiveSolar, type ActiveSolarRegistration } from './active-solar'
 import { wrap } from './settings'
 import { createSkyProvider, type SkyProvider } from './sky-provider'
@@ -108,10 +107,5 @@ function ActiveAtmosphere({ atmosphereComponent: SceneAtmosphere }: AtmosphereLa
     wasPlaying.current = state.skyPlaying
   }, -2)
 
-  return (
-    <>
-      <SceneAtmosphere source={source} />
-      <GodRaysLayer source={source} />
-    </>
-  )
+  return <SceneAtmosphere source={source} />
 }

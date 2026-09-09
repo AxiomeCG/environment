@@ -72,6 +72,7 @@ export function createFlowerGeometry(kind: FlowerKind): BufferGeometry {
 
 export function createAnimatedFlowerBatches(
   placements: readonly FlowerPlacement[],
+  windStrength: Node<'float'>,
   windInfluence: Node<'float'>,
 ): Group {
   const group = new Group()
@@ -87,7 +88,7 @@ export function createAnimatedFlowerBatches(
   const flowerRoot = TSL.attribute<'vec3'>('flowerRoot', 'vec3')
   const flowerProgress = TSL.attribute<'float'>('flowerProgress', 'float')
   const rootRelativePosition = TSL.positionLocal.sub(flowerRoot)
-  const displacement = grassWindBend(flowerRoot, windInfluence)
+  const displacement = grassWindBend(flowerRoot, windStrength, windInfluence)
     .mul(rootRelativePosition.y)
     .mul(flowerProgress.mul(flowerProgress))
   material.positionNode = flowerRoot.add(rootRelativePosition.add(displacement))

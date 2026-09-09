@@ -41,7 +41,7 @@ const FIRST_FLASH_MIN_SECONDS = 0.12
 const FIRST_FLASH_SPAN_SECONDS = 0.08
 const REPEAT_FLASH_MIN_SECONDS = 16
 const REPEAT_FLASH_SPAN_SECONDS = 18
-const FLASH_SECONDS = 0.48
+const FLASH_SECONDS = 0.72
 const NO_RAYCAST = () => undefined
 
 type RainUniforms = {

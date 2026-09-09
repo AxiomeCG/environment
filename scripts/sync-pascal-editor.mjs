@@ -1,4 +1,5 @@
-import { cp, lstat, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { cp, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -18,7 +19,52 @@ const packageDirectory = path.join(
 const targetDirectory = path.join(packageDirectory, 'src')
 const stagingDirectory = path.join(packageDirectory, '.environment-src-next')
 const previousDirectory = path.join(packageDirectory, '.environment-src-previous')
-const watchMode = process.argv.includes('--watch')
+const [mode, ...testPaths] = process.argv.slice(2)
+const watchMode = mode === '--watch'
+
+if (mode === '--help') {
+  console.log(`Mirror Environment into an installed Pascal editor, or pack the integration candidate.
+
+Usage: bun scripts/sync-pascal-editor.mjs [--watch | --check-types | --test [paths...] | --pack]
+Set PASCAL_EDITOR_ROOT for a non-sibling editor checkout.
+
+Examples:
+  bun run sync:pascal
+  bun run dev:pascal
+  bun run check-types:pascal
+  bun run test:pascal src/ground-cover/geometry.test.ts
+  bun run pack:pascal
+
+Only --pack writes a tracked candidate archive; source mirroring leaves tracked files unchanged.`)
+  process.exit(0)
+}
+if (
+  (mode && !['--watch', '--check-types', '--test', '--pack'].includes(mode)) ||
+  (testPaths.length > 0 && mode !== '--test')
+) {
+  throw new Error('Unexpected arguments. Run "bun scripts/sync-pascal-editor.mjs --help".')
+}
+
+if (mode === '--pack') {
+  const appRoot = path.join(editorRoot, 'apps', 'editor')
+  const app = JSON.parse(await readFile(path.join(appRoot, 'package.json'), 'utf8'))
+  const dependency = app.dependencies?.['@pascal-app/plugin-environment']
+  if (typeof dependency !== 'string' || !dependency.startsWith('file:vendor/') || !dependency.endsWith('.tgz')) {
+    throw new Error('Editor must declare an Environment candidate under file:vendor/*.tgz before packing.')
+  }
+  const archive = path.resolve(appRoot, dependency.slice('file:'.length))
+  if (!archive.startsWith(`${path.join(appRoot, 'vendor')}${path.sep}`)) {
+    throw new Error('The candidate archive must stay inside the editor app vendor directory.')
+  }
+  await mkdir(path.dirname(archive), { recursive: true })
+  const result = spawnSync(
+    process.execPath,
+    ['pm', 'pack', '--ignore-scripts', '--quiet', '--filename', archive],
+    { cwd: environmentRoot, stdio: 'inherit' },
+  )
+  if (result.error) throw result.error
+  process.exit(result.status ?? 1)
+}
 
 async function pathExists(candidate) {
   try {
@@ -105,6 +151,39 @@ async function sourceFingerprint(directory = sourceDirectory) {
 
 await assertInstalledHostPackage()
 await syncSource()
+
+if (mode === '--check-types' || mode === '--test') {
+  const configPath = path.join(packageDirectory, '.tsconfig.local.json')
+  const args =
+    mode === '--test'
+      ? ['test', ...(testPaths.length > 0 ? testPaths : ['src'])]
+      : [
+          path.join(environmentRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+          '--project',
+          configPath,
+        ]
+  try {
+    if (mode === '--check-types') {
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          extends: path.join(environmentRoot, 'tsconfig.json'),
+          compilerOptions: { rootDir: editorRoot },
+          include: ['./src'],
+          exclude: ['node_modules'],
+        }),
+      )
+    }
+    const result = spawnSync(process.execPath, args, {
+      cwd: packageDirectory,
+      stdio: 'inherit',
+    })
+    if (result.error) throw result.error
+    process.exitCode = result.status ?? 1
+  } finally {
+    await rm(configPath, { force: true })
+  }
+}
 
 if (watchMode) {
   console.log(`Watching ${sourceDirectory}`)

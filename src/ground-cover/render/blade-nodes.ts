@@ -9,6 +9,7 @@ import { MAX_GRASS_NORMAL_YAW } from './blade-shape'
 type GrassBladePositionOptions = {
   readonly heightScale: Node<'float'>
   readonly restBend: Node<'float'>
+  readonly windStrength: Node<'float'>
   readonly windInfluence: Node<'float'>
   readonly obstacleInfluence?: Node<'float'>
   readonly obstacleDirection?: Node<'vec3'>
@@ -37,7 +38,11 @@ export function createGrassBladePosition(
     TSL.vec3(surfaceSampleBasis.y.add(1e-6), 0, surfaceSampleBasis.x),
   )
 
-  const windBend = grassWindBend(grassRoot, options.windInfluence).mul(2)
+  const windBend = grassWindBend(
+    grassRoot,
+    options.windStrength,
+    options.windInfluence,
+  ).mul(2)
   const obstacleInfluence = options.obstacleInfluence
   const effectiveWindBend = obstacleInfluence
     ? windBend.mul(TSL.sub(1, obstacleInfluence.mul(0.75)))

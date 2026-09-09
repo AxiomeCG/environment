@@ -1,6 +1,6 @@
 'use client'
 
-import { nodeRegistry, sceneRegistry, useScene } from '@pascal-app/core'
+import { nodeRegistry, sceneRegistry, useScene, type AnyNodeId } from '@pascal-app/core'
 import { useFrame, useThree } from '@react-three/fiber'
 import { BATCHED_LAYER, SCENE_LAYER, useViewer } from '@pascal-app/viewer'
 import { useEffect, useLayoutEffect, useMemo } from 'react'
@@ -9,7 +9,7 @@ import {
   Group,
   InstancedMesh,
   Mesh,
-  MeshPhysicalNodeMaterial,
+  MeshStandardNodeMaterial,
   type Material,
   type Object3D,
   type UniformNode,
@@ -40,7 +40,7 @@ type SurfaceOverlay = Mesh | InstancedMesh
 
 type WeatherSurfaceResources = {
   root: Group
-  material: MeshPhysicalNodeMaterial
+  material: MeshStandardNodeMaterial
   rain: UniformNode<'float', number>
   snow: UniformNode<'float', number>
   overlays: Map<SurfaceMesh, SurfaceOverlay>
@@ -49,7 +49,7 @@ type WeatherSurfaceResources = {
 function createWeatherSurfaceMaterial(
   rain: UniformNode<'float', number>,
   snow: UniformNode<'float', number>,
-): MeshPhysicalNodeMaterial {
+): MeshStandardNodeMaterial {
   const upward = TSL.smoothstep(0.22, 0.68, TSL.normalWorldGeometry.y)
   const snowSurface = TSL.Fn(() => {
     const result = TSL.vec4(0.95, 0.98, 1, 0).toVar()
@@ -82,7 +82,7 @@ function createWeatherSurfaceMaterial(
   const opacity = snowCoverage.mul(0.98).add(rainCoverage.mul(0.34)).clamp(0, 0.98)
   const snowTone = snowSurface.rgb
 
-  const material = new MeshPhysicalNodeMaterial({
+  const material = new MeshStandardNodeMaterial({
     depthWrite: false,
     fog: true,
     polygonOffset: true,
@@ -97,8 +97,6 @@ function createWeatherSurfaceMaterial(
   material.maskNode = opacity.greaterThan(0.003)
   material.metalnessNode = TSL.float(0)
   material.roughnessNode = TSL.mix(0.14, 0.94, snowDominance)
-  material.clearcoatNode = rainCoverage
-  material.clearcoatRoughnessNode = TSL.float(0.07)
   material.envMapIntensity = 1.35
   return material
 }
@@ -168,7 +166,7 @@ function collectSemanticSurfaces(result: Set<SurfaceMesh>): Set<Object3D> {
 
   const nodes = useScene.getState().nodes
   for (const [id, object] of sceneRegistry.nodes) {
-    const node = nodes[id]
+    const node = nodes[id as AnyNodeId]
     if (!node) continue
     const definition = nodeRegistry.get(node.type)
     const eligible =
@@ -207,7 +205,7 @@ function collectPresentationSurfaces(
 
 function createSurfaceOverlay(
   source: SurfaceMesh,
-  material: MeshPhysicalNodeMaterial,
+  material: MeshStandardNodeMaterial,
 ): SurfaceOverlay {
   let overlay: SurfaceOverlay
   if (source instanceof InstancedMesh) {

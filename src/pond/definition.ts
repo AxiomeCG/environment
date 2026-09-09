@@ -1,14 +1,12 @@
 import type { NodeDefinition } from '@pascal-app/core'
 import { buildPondFloorplan } from './floorplan'
-import { buildPondBakeGeometry, buildPondGeometry } from './geometry'
+import { buildPondBakeGeometry, buildPondBakeGeometryAsync, buildPondGeometry } from './geometry'
 import { POND_KIND, PondNode } from './schema'
 
-type PondDefinition = Omit<
-  NodeDefinition<typeof PondNode>,
-  'capabilities' | 'floorplanScope'
-> &
+type PondDefinition = Omit<NodeDefinition<typeof PondNode>, 'capabilities' | 'floorplanScope'> &
   Record<string, unknown> & {
     bakeGeometry: typeof buildPondBakeGeometry
+    bakeGeometryAsync: typeof buildPondBakeGeometryAsync
     capabilities: NodeDefinition<typeof PondNode>['capabilities'] & {
       selectionHighlight?: boolean
     }
@@ -44,6 +42,7 @@ export const pondDefinition: PondDefinition = {
   geometry: buildPondGeometry,
   bake: 'replace',
   bakeGeometry: buildPondBakeGeometry,
+  bakeGeometryAsync: buildPondBakeGeometryAsync,
   bakeReplaceRenderer: { module: () => import('./static-renderer') },
   floorplan: buildPondFloorplan,
   floorplanScope: 'site',

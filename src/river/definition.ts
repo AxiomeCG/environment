@@ -6,13 +6,14 @@ import {
   type ParametricDescriptor,
 } from '@pascal-app/core'
 import { buildRiverFloorplan } from './floorplan'
-import { buildRiverBakeGeometry, buildRiverGeometry } from './geometry'
+import { buildRiverBakeGeometry, buildRiverBakeGeometryAsync, buildRiverGeometry } from './geometry'
 import { RIVER_KIND, RiverNode, type RiverNode as RiverNodeType } from './schema'
 import { rebuildRiverTerrain, riverTerrainRiverIds } from './terrain'
 
 type RiverDefinition = Omit<NodeDefinition<typeof RiverNode>, 'capabilities' | 'floorplanScope'> &
   Record<string, unknown> & {
     bakeGeometry: typeof buildRiverBakeGeometry
+    bakeGeometryAsync: typeof buildRiverBakeGeometryAsync
     capabilities: NodeDefinition<typeof RiverNode>['capabilities'] & {
       selectionHighlight?: boolean
     }
@@ -142,6 +143,7 @@ export const riverDefinition: RiverDefinition = {
   geometry: buildRiverGeometry,
   bake: 'replace',
   bakeGeometry: buildRiverBakeGeometry,
+  bakeGeometryAsync: buildRiverBakeGeometryAsync,
   bakeReplaceRenderer: { module: () => import('./static-renderer') },
   floorplan: buildRiverFloorplan,
   floorplanScope: 'site',

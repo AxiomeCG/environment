@@ -13,14 +13,15 @@ not a claim that every path is validated or available in a published Pascal rele
 | Ground Cover | `environment:ground-cover`: saved paint/height maps and blade parameters; reads Site Terrain and obstacles | GPU grass, a floorplan projection, and a static bake builder with Pascal live replacement |
 | Surface | `environment:surface-material`: saved material-blend paint map and texture size; reads Site Terrain | Terrain-draped PBR ground, a floorplan projection, and a bake builder with Pascal live replacement |
 | Water | `environment:pond` and `environment:river`: saved water parameters and Site terrain; rivers also grade the authored field | Terrain-clipped water, optional shore rocks, pond koi, floorplan projections, and portable bake builders |
-| Surroundings | Site data plus runtime seed and frontage settings | Exterior terrain, roads, houses, vegetation, and coastal/river water; presentation-only, outside authored geometry exports |
-| Atmosphere | Runtime sky settings | Sky radiance supplied to the host's background, lighting, reflections, and fog; no authored node |
+| Surroundings | Site data plus project-local seed, preset, and frontage settings | Exterior terrain, roads, houses, dense meadow/woodland vegetation, and coastal/river water; presentation-only, with explicit opt-in finite GLB/USDZ export |
+| Atmosphere | Project-local sky and weather settings | Sky radiance, lighting, reflections, fog, rain, world-anchored snow, surface wetness/snow cover, and lightning/thunder; no authored node |
 
 Ground Cover, Surface, Pond, and River are registered as nodes in
-[`src/index.ts`](./src/index.ts). Sky, neighborhood settings, and brush controls
-live in [`src/store.ts`](./src/store.ts) and are not saved with the scene.
-Painted results and authored water parameters belong to nodes, not transient tool
-stores. Surroundings' sea and rivers remain separate, presentation-only water.
+[`src/index.ts`](./src/index.ts). Sky and surroundings configuration is stored
+per project in a versioned browser sidecar, outside the semantic scene graph.
+Brush controls remain transient. Painted results and authored water parameters
+belong to nodes, not the presentation sidecar. Surroundings' sea and rivers
+remain separate, presentation-only water.
 
 The plugin ID is `pascal:environment`. `GrassFieldNode` retains its original name;
 `GroundCoverNode` is an exported alias, not another node kind.
@@ -69,36 +70,42 @@ coordinate. Leave wind, paint sampling, obstacles, and export for separate steps
 
 ## Integration and host API readiness
 
-A host loads `environmentPlugin` through plugin discovery and registers
-`environmentHostPanel` separately through the editor host-panel registry. The local
-Editor does both. `SurroundingsLayer` and `AtmosphereLayer` are separate exports:
-local application routes mount them through `viewerSceneSlot`, supplying
-`SceneGroundReplacement` and `SceneAtmosphere`. Registering the plugin alone does
-not install those presentation layers.
+A host loads `environmentPlugin` through plugin discovery, registers
+`environmentHostPanel` through the editor host-panel registry, and registers
+`environmentPresentation` through the viewer presentation registry. The reusable
+Editor mounts registered presentations once in its normal and preview viewers.
+The Environment contribution supplies `SceneGroundReplacement` and
+`SceneAtmosphere`; application routes no longer mount plugin layers directly.
 
-The declared peer range starts at Pascal `1.0.0-beta.5`, but that is **not sufficient
-to guarantee all current features**. Site-scoped floorplan output, bake-only geometry,
-selection-material preservation, and presentation contributions have host release
-requirements tracked in [`HOST-API-READINESS.md`](./HOST-API-READINESS.md).
+The candidate peer range starts at Pascal `1.0.0-beta.6`. Beta.5 does not provide
+the host APIs required by the current plugin. Site-scoped floorplan output,
+asynchronous bake context, selection-material preservation, and live/static presentation contributions
+have release requirements tracked in [`HOST-API-READINESS.md`](./HOST-API-READINESS.md).
 That register also covers Terrain/tool activation and the deployment checklist.
-Local direct mounts are not a published presentation API; project-scoped persistence
-for sky and surroundings remains unresolved. Do not infer release readiness from a
-local demo or package typecheck.
+`bun run check:release`, also run by `prepublishOnly`, requires a matching published
+host version, matching installed host packages, and a successful standalone typecheck.
+Until those requirements are met, use the local Editor workflow below; do not infer
+publication readiness from a local demo or typecheck.
+Presentation configuration remains versioned and project-local in browser storage.
+Cloud/share synchronization remains out of scope.
 
 ## Development
 
-From this repository:
+Install dependencies with `bun install`. While the required host APIs are unreleased,
+validate against an installed local Editor with its host packages built:
 
 ```sh
-bun install
-bun test
-bun run check-types
+bun run check-types:pascal
+bun run test:pascal
 ```
 
-For a focused grass check, use `bun test src/ground-cover/geometry.test.ts`.
-Tests and typechecking do not establish GPU appearance, host integration, or export
-parity; check the affected path in the host as well. Dated validation results belong
-in the [baseline](./docs/mission/VERIFIED-BASELINE.md), not a permanent green badge here.
+For a focused grass check, use `bun run test:pascal src/ground-cover/geometry.test.ts`.
+The standalone `bun test` and `bun run check-types` commands use this repository's
+installed host packages; the beta.5 development dependencies do not establish
+compatibility with the candidate APIs.
+Tests and typechecking do not establish GPU appearance or export parity; check the
+affected path in the host as well. Dated validation results belong in the
+[baseline](./docs/mission/VERIFIED-BASELINE.md), not a permanent green badge here.
 
 ### Local Editor synchronization
 
@@ -108,6 +115,16 @@ With Environment already installed in the sibling `editor` checkout:
   source under `editor/apps/editor/node_modules/@pascal-app/plugin-environment`.
 - `bun run dev:pascal` performs the same synchronization and keeps watching for
   source changes. `PASCAL_EDITOR_ROOT` can select another host checkout.
+- `bun run check-types:pascal` and `bun run test:pascal [paths...]` synchronize first,
+  then validate against that host's package graph.
+
+The integration candidate uses an archive inside
+`editor/apps/editor/vendor/`, not a dependency on the sibling Environment folder.
+`bun run pack:pascal` refreshes that archive from the current plugin source.
+After packing, run `bun install` in the Editor root and include the archive and
+lockfile in the candidate. This prepares a local artifact; it does not publish.
+Source synchronization and watching do not modify the tracked archive, app manifest,
+or lockfile. Repacking is explicit, so local iteration does not rewrite the submission.
 
 The local Editor consumes built host packages from `dist/`, not their `src/`.
 Rebuild changed host packages before visual verification. For Site ground-renderer
@@ -141,6 +158,8 @@ material on the Site; dragging its slider commits on release.
 **Ground Cover** separates coverage painting from local height adjustment.
 **Target coverage** controls where grass grows; the Grass Field inspector
 groups global appearance, natural variation, wind, and obstacle interaction.
+Wind strength belongs to each Grass Field; changing one field does not change the
+wind of another field or the natural surroundings.
 Ground Cover excludes building interiors, colliding props, and the resolved wet
 surfaces of authored ponds and rivers. Dry banks and islands remain paintable.
 Water edits and live terrain changes refresh the exclusion without erasing saved
@@ -152,6 +171,13 @@ nonmetallic surfaces leave metalness at zero. Tangent-space normals use a
 negative Y scale to match the supplied maps.
 The draped ground triangles face upward on both flat and sculpted Sites, so
 double-sided shading does not invert their lighting normals under Atmosphere.
+
+GLB and USDZ exports freeze procedural geometry and bake intrinsic material
+appearance into portable textures, without animation clips. Portable RGB values
+outside 0–1 are clipped with a warning; ordinary colors and internal high-range
+grass baking are unchanged. OBJ and STL remain geometry-only. Floorplan PDFs
+retain vector architecture and water outlines with raster paint layers in Full
+mode; Structure only omits those paint layers.
 
 ### Authored ponds and rivers
 
@@ -199,18 +225,24 @@ road controls without losing edge assignments. **Variation & birds** contains th
 landscape seed, bird visibility, and bird animation settings.
 
 The map follows the live camera bearing while keeping labels upright. Its framing
-stays centered on the Site when road types change. Neighborhood visibility and
-road assignments are runtime-only and are not saved with the scene.
+stays centered on the Site when road types change. Neighborhood visibility,
+landscape preset, seed, and road assignments are saved per project in the
+browser-side presentation configuration.
 
-Dry neighborhood terrain defaults to grass with sparse soil patches. Its broad
-color variation and soil pattern follow the surroundings seed: replaying a seed
-reproduces them, while changing it changes the pattern. Sand is limited to low
-ground near sea level in coastal or river regions; flat ground at the property's
-elevation is not treated as a beach. The material reuses the shared noise texture
-without adding a terrain pass or per-seed textures.
-Surroundings meadow and woodland coverage is baked into the terrain tint.
-Automatic grass blades and their camera-driven LOD are not rendered; authored
-Ground Cover keeps its separate painted blade renderer.
+The **Surroundings** switch in model export is off by default. Enabling it adds
+finite derived context independently of the live camera's culling and LOD,
+including the twelve birds at phase zero when birds are enabled. Sky, weather,
+light beams, and the offshore apron are not included. These exports do not create
+semantic nodes or replace the separately saved presentation configuration.
+
+Regional terrain retains its seeded material treatment. Open Meadow and Woodland
+Edge replace built context with deterministic natural surroundings. Woodland
+reuses cached EZ-Tree prototypes for 96 nearby trees, existing impostors for the
+distant forest, and the Ground Cover GPU blade/LOD/wind material for a bounded
+understory. The natural renderer caps the full tree population at 640 and grass
+at 28,672 blades. Meadow keeps sparse tree structure, denser grass, and more
+flower accents. Both presets preserve clearings, the Site boundary, and water
+exclusions.
 Only painted Surface materials feather beyond the property boundary, over six
 metres. Unpainted areas retain the surrounding terrain; the editor theme's plain
 ground color is not extended into the neighborhood.
@@ -294,15 +326,16 @@ The local host supplies `SceneGroundReplacement` to `SurroundingsLayer`. While
 Surroundings owns the exterior ground, the viewer hides its higher fallback disc
 and extends the perspective far plane for the ocean horizon. The orthographic
 camera retains its normal depth range. Removing the final replacement restores
-the fallback. This is presentation-only water, not an authored or baked Water body.
+the fallback. This water remains separate from authored Water nodes; its finite
+surface can be included through the opt-in static surroundings export.
 
 ### Local Sky tool
 
-In the development host, open **Environment → Catalogue → Atmosphere**, then
-enable **Use environment sky**. Choose an ambiance or adjust time of day, north,
-cloud cover, haze, fog distance, and exposure. Manual sun angles, scattering
-controls, and diagnostic views are available underneath. Day playback takes two
-minutes; cloud animation is separately opt-in.
+In the development host, open **Environment → Catalogue → Atmosphere**. The
+environment sky is active by default. Clear, Light rain, Rain, Storm, and Snow
+presets expose the common controls first; sun position follows, while manual
+scattering and diagnostics live under **Advanced**. Day playback takes two
+minutes and remains opt-in.
 
 The time widget shows a daylight or nighttime semicircle. Drag the sun or moon,
 switch orbit with the two celestial buttons, or enter an exact time. Arrow keys
@@ -314,14 +347,17 @@ The procedural provider shares a normalized world-direction, linear-HDR contract
 between the background, reflections, and fog. One solar state drives the visible
 sun and scene lights. Fog omits celestial discs, stars, cloud detail, and the dark
 ground hemisphere: downward views receive atmospheric airlight rather than ground
-bounce. Rough and diffuse environment lighting also avoid cloud detail. Disabling
-Sky restores Pascal's normal theme lighting and environment.
+bounce. Disabling Sky restores Pascal's normal theme lighting and environment
+when no precipitation requires the weather sky.
 
-The model uses wavelength-dependent Rayleigh scattering, a Henyey–Greenstein Mie
-phase, and Beer–Lambert attenuation with approximate atmospheric columns. Twilight,
-cloud shading, the moon phase, and the 24-hour orbit are artistic approximations,
-not a geolocated or photometrically calibrated solar study. There is no volumetric
-raymarch or continuously regenerated environment map.
+Rain monotonically increases cloud coverage and optical density, cools and
+darkens the atmosphere, reduces direct light, tightens fog, and adds whole-map
+surface wetness. Snow uses a stable world-cell particle field and adds cooler
+clouds plus upward-facing cover across editable and surrounding terrain and
+structures. Surface effects are immediate visual coverage, not accumulation,
+melting, runoff, or indoor collision simulation. Storm lightning responds within
+200 ms, illuminates clouds and ambient light without adding a second scene light,
+and synthesized thunder requires a fresh user gesture.
 
 The goal is an independently designed, credible sky for architectural scenes—not
 visual parity with Three.js Water Pro. The Vaulty notes have Water Pro study
@@ -331,10 +367,38 @@ to reproduce. Public atmospheric-rendering references include
 [Bruneton's reference implementation](https://ebruneton.github.io/precomputed_atmospheric_scattering/);
 this lightweight approximation does not implement their full scattering solvers.
 
-Sky settings are runtime-only, start disabled, and do not create scene nodes or
-history entries. The local host mounts `AtmosphereLayer` through `viewerSceneSlot`
-and supplies the viewer's `SceneAtmosphere` adapter. This remains a local
-integration, subject to `ENV-HOST-006`, not a published plugin-presentation API.
+Sky and weather settings are saved per project in the local browser sidecar and
+do not create scene nodes or history entries. Bootstrap registers
+`environmentPresentation`; the reusable Editor mounts it through the public
+viewer contribution seam. Publication still depends on `ENV-HOST-006` and
+`ENV-HOST-007`.
+Configuration exports use version 2. Importing a valid version 1 snapshot drops
+the removed `godRays` setting while preserving its other environment settings.
+
+## Executable feature lab
+
+The Environment executable lab exercises the production plugin in focused Gyms,
+true-scale Zoos, and guided Museums. Its fixtures use current semantic nodes,
+terrain/paint codecs, basin analysis, river grading, presentation configuration,
+and the real Environment panel—never a parallel exhibit renderer.
+
+```ts
+import {
+  EnvironmentLabControls,
+  createEnvironmentLabFixture,
+  initializeEnvironmentLabFixture,
+} from '@pascal-app/plugin-environment/lab'
+import { ENVIRONMENT_LAB_CASES } from '@pascal-app/plugin-environment/lab/catalog'
+
+const fixture = createEnvironmentLabFixture('living-landscape', 'daylight')
+initializeEnvironmentLabFixture('living-landscape', fixture)
+```
+
+The host owns routes, scratch persistence, scene replacement, camera UI, and review
+downloads. Start with the
+[executable lab guide](https://github.com/pascalorg/plugin-environment/blob/main/docs/lab/README.md),
+then use its [case guide](https://github.com/pascalorg/plugin-environment/blob/main/docs/lab/cases.md)
+and [reproducibility contract](https://github.com/pascalorg/plugin-environment/blob/main/docs/lab/reproducibility.md).
 
 ## Documentation map
 

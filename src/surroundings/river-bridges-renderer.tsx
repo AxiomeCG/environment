@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { Matrix4, Vector3 } from 'three'
+import type { Group } from 'three'
 import { disposePrimitiveInstances, PrimitiveInstances } from './primitive-instances'
 import type { BridgeSpan } from './river-bridges'
 
@@ -129,7 +130,7 @@ function addSpan(instances: PrimitiveInstances, span: BridgeSpan): void {
   }
 }
 
-function buildBridgeInstances(spans: readonly BridgeSpan[]) {
+export function buildBridgeInstances(spans: readonly BridgeSpan[]): Group {
   const instances = new PrimitiveInstances()
   for (const span of spans) {
     if (span.points.length >= 2) addSpan(instances, span)

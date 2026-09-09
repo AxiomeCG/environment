@@ -1,7 +1,7 @@
-import {
-  SceneAtmosphere,
-  SceneGroundReplacement,
-  type ViewerPresentationContribution,
+import { SceneAtmosphere, SceneGroundReplacement } from '@pascal-app/viewer'
+import type {
+  ViewerPresentationContribution,
+  ViewerPresentationExportContext,
 } from '@pascal-app/viewer'
 import { z } from 'zod'
 import AtmosphereLayer from './atmosphere/layer'
@@ -9,11 +9,12 @@ import type { SkySettings } from './atmosphere/settings'
 import { type EnvironmentStore, useEnvironmentStore } from './store'
 import type { FrontageContexts } from './surroundings/frontages'
 import type { SurroundingsPresetId } from './surroundings/presets'
+import { buildStaticSurroundings } from './surroundings/static-export'
 import SurroundingsLayer from './surroundings/layer'
 
-export const ENVIRONMENT_CONFIGURATION_VERSION = 1 as const
+export const ENVIRONMENT_CONFIGURATION_VERSION = 2 as const
 
-export type EnvironmentConfigurationV1 = Readonly<{
+export type EnvironmentConfigurationV2 = Readonly<{
   version: typeof ENVIRONMENT_CONFIGURATION_VERSION
   preset: SurroundingsPresetId
   seed: string
@@ -31,7 +32,7 @@ export type EnvironmentConfigurationV1 = Readonly<{
   }>
 }>
 
-export type EnvironmentConfiguration = EnvironmentConfigurationV1
+export type EnvironmentConfiguration = EnvironmentConfigurationV2
 
 const frontageKey = /^(0|[1-9]\d*)$/
 const frontagesSchema = z
@@ -57,65 +58,93 @@ const frontagesSchema = z
     }
   })
 
-const skySettingsSchema = z
+const skySettingsShape = {
+  provider: z.enum(['procedural', 'gradient']),
+  sunMode: z.enum(['time', 'manual']),
+  timeOfDay: z.number().finite().min(0).lt(24),
+  northOffset: z.number().finite().min(0).lt(360),
+  sunElevation: z.number().finite().min(-90).max(90),
+  sunAzimuth: z.number().finite().min(0).lt(360),
+  rayleigh: z.number().finite().min(0).max(2),
+  mie: z.number().finite().min(0).max(0.02),
+  mieG: z.number().finite().min(0).max(0.9),
+  turbidity: z.number().finite().min(1).max(10),
+  sunRadius: z.number().finite().min(0.00465).max(0.03),
+  sunRadiance: z.number().finite().min(1).max(100),
+  cloudCoverage: z.number().finite().min(0).max(1),
+  cloudSoftness: z.number().finite().min(0.02).max(0.4),
+  cloudScale: z.number().finite().min(0.25).max(4),
+  cloudSpeed: z.number().finite().min(0).max(0.04),
+  moonPhase: z.number().finite().min(0).max(1),
+  exposureCompensation: z.number().finite().min(-3).max(3),
+  fogStart: z.number().finite().min(0).max(2000),
+  fogEnd: z.number().finite().min(20).max(5000),
+  debug: z.enum(['none', 'direction', 'rayleigh', 'mie', 'haze', 'sun', 'clouds', 'luminance']),
+}
+
+function validateFogRange(
+  settings: { fogStart: number; fogEnd: number },
+  context: z.RefinementCtx,
+): void {
+  if (settings.fogEnd < settings.fogStart + 20) {
+    context.addIssue({
+      code: 'custom',
+      message: 'fogEnd must be at least 20 greater than fogStart',
+      path: ['fogEnd'],
+    })
+  }
+}
+
+const skySettingsSchema = z.object(skySettingsShape).strict().superRefine(validateFogRange)
+const legacySkySettingsSchema = z
   .object({
-    provider: z.enum(['procedural', 'gradient']),
-    sunMode: z.enum(['time', 'manual']),
-    timeOfDay: z.number().finite().min(0).lt(24),
-    northOffset: z.number().finite().min(0).lt(360),
-    sunElevation: z.number().finite().min(-90).max(90),
-    sunAzimuth: z.number().finite().min(0).lt(360),
-    rayleigh: z.number().finite().min(0).max(2),
-    mie: z.number().finite().min(0).max(0.02),
-    mieG: z.number().finite().min(0).max(0.9),
-    turbidity: z.number().finite().min(1).max(10),
-    sunRadius: z.number().finite().min(0.00465).max(0.03),
-    sunRadiance: z.number().finite().min(1).max(100),
-    cloudCoverage: z.number().finite().min(0).max(1),
-    cloudSoftness: z.number().finite().min(0.02).max(0.4),
-    cloudScale: z.number().finite().min(0.25).max(4),
-    cloudSpeed: z.number().finite().min(0).max(0.04),
-    moonPhase: z.number().finite().min(0).max(1),
-    exposureCompensation: z.number().finite().min(-3).max(3),
+    ...skySettingsShape,
     godRays: z.number().finite().min(0).max(1),
-    fogStart: z.number().finite().min(0).max(2000),
-    fogEnd: z.number().finite().min(20).max(5000),
-    debug: z.enum(['none', 'direction', 'rayleigh', 'mie', 'haze', 'sun', 'clouds', 'luminance']),
   })
   .strict()
-  .superRefine((settings, context) => {
-    if (settings.fogEnd < settings.fogStart + 20) {
-      context.addIssue({
-        code: 'custom',
-        message: 'fogEnd must be at least 20 greater than fogStart',
-        path: ['fogEnd'],
-      })
-    }
+  .superRefine(validateFogRange)
+const visibilitySchema = z
+  .object({
+    surroundings: z.boolean(),
+    sky: z.boolean(),
   })
+  .strict()
+const weatherSchema = z
+  .object({
+    rain: z.number().finite().min(0).max(1),
+    snow: z.number().finite().min(0).max(1),
+    wind: z.number().finite().min(0).max(1),
+    storm: z.boolean(),
+  })
+  .strict()
+const configurationShape = {
+  preset: z.enum(['regional', 'open-meadow', 'woodland-edge']),
+  seed: z.string().trim().min(1),
+  frontages: frontagesSchema,
+  visibility: visibilitySchema,
+  weather: weatherSchema,
+}
+
+const EnvironmentConfigurationV1Schema = z
+  .object({
+    ...configurationShape,
+    version: z.literal(1),
+    sky: legacySkySettingsSchema,
+  })
+  .strict()
 
 export const EnvironmentConfigurationSchema = z
   .object({
+    ...configurationShape,
     version: z.literal(ENVIRONMENT_CONFIGURATION_VERSION),
-    preset: z.enum(['regional', 'open-meadow', 'woodland-edge']),
-    seed: z.string().trim().min(1),
-    frontages: frontagesSchema,
     sky: skySettingsSchema,
-    visibility: z
-      .object({
-        surroundings: z.boolean(),
-        sky: z.boolean(),
-      })
-      .strict(),
-    weather: z
-      .object({
-        rain: z.number().finite().min(0).max(1),
-        snow: z.number().finite().min(0).max(1),
-        wind: z.number().finite().min(0).max(1),
-        storm: z.boolean(),
-      })
-      .strict(),
   })
   .strict()
+
+const persistedConfigurationSchema = z.discriminatedUnion('version', [
+  EnvironmentConfigurationV1Schema,
+  EnvironmentConfigurationSchema,
+])
 
 function snapshotEnvironmentConfiguration(state: EnvironmentStore): EnvironmentConfiguration {
   return {
@@ -151,7 +180,14 @@ export function exportEnvironmentConfiguration(): EnvironmentConfiguration {
  * Consent and playback state are session-only and always return to their safe defaults.
  */
 export function importEnvironmentConfiguration(input: unknown): EnvironmentConfiguration {
-  const configuration = EnvironmentConfigurationSchema.parse(input) as EnvironmentConfiguration
+  const parsed = persistedConfigurationSchema.parse(input)
+  let configuration: EnvironmentConfiguration
+  if (parsed.version === 1) {
+    const { godRays: _godRays, ...sky } = parsed.sky
+    configuration = { ...parsed, version: ENVIRONMENT_CONFIGURATION_VERSION, sky }
+  } else {
+    configuration = parsed
+  }
   const environment = useEnvironmentStore.getState()
   environment.setSurroundingsPreset(configuration.preset)
   environment.setSurroundingsSeed(configuration.seed)
@@ -205,6 +241,17 @@ export const environmentPresentation: ViewerPresentationContribution = {
   id: 'pascal:environment:presentation',
   pluginId: 'pascal:environment',
   component: () => import('./presentation'),
+  staticExport: {
+    label: 'Surroundings',
+    build: (context: ViewerPresentationExportContext) => {
+      const birdsEnabled = useEnvironmentStore.getState().birdsEnabled
+      return buildStaticSurroundings(
+        context,
+        EnvironmentConfigurationSchema.parse(context.configuration) as EnvironmentConfiguration,
+        birdsEnabled,
+      )
+    },
+  },
   configuration: {
     getSnapshot: exportEnvironmentConfiguration,
     restore: importEnvironmentConfiguration,

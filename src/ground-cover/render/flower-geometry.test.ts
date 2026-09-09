@@ -39,7 +39,7 @@ describe('flower geometry batches', () => {
   })
 
   test('shares one material across bounded species batches and updates terrain roots', () => {
-    const group = createAnimatedFlowerBatches(PLACEMENTS, uniform(1))
+    const group = createAnimatedFlowerBatches(PLACEMENTS, uniform(1), uniform(1))
     const meshes = group.children.filter(
       (child): child is InstancedMesh => child instanceof InstancedMesh,
     )

@@ -64,7 +64,7 @@ export class PresentationBasicMaterial extends MeshBasicNodeMaterial {
   }
 }
 
-function surfaceTexture(surface: PresentationSurface): DataTexture {
+export function getPresentationSurfaceTexture(surface: PresentationSurface): DataTexture {
   const cached = textures.get(surface)
   if (cached) return cached
   const size = 64
@@ -111,11 +111,11 @@ export function getPresentationMaterial(surface: PresentationSurface): MeshStand
     ? vec2(positionWorld.x.add(positionWorld.z), positionWorld.y).mul(0.65)
     : positionWorld.xz.mul(surface === 'roof' ? 0.42 : 0.12)
   const detailSurface = surface === 'facade' || surface === 'window-lit' ? 'paint' : surface
-  const detail = texture(surfaceTexture(detailSurface), coordinates).r
+  const detail = texture(getPresentationSurfaceTexture(detailSurface), coordinates).r
   if (surface === 'ground') {
     const world = positionWorld.xz
     const rotated = vec2(world.x.mul(0.8).sub(world.y.mul(0.6)), world.x.mul(0.6).add(world.y.mul(0.8)))
-    const macro = texture(surfaceTexture('ground'), rotated.mul(0.007).add(vec2(0.37, 0.61))).r
+    const macro = texture(getPresentationSurfaceTexture('ground'), rotated.mul(0.007).add(vec2(0.37, 0.61))).r
     const broadTint = mix(vec3(0.86, 0.9, 0.76), vec3(1.07, 1.02, 0.88), macro)
     material.colorNode = (materialColor as unknown as Node<'vec3'>).mul(broadTint).mul(detail.mul(0.16).add(0.88))
   } else if (surface === 'facade') {
@@ -162,7 +162,7 @@ export function getPresentationMaterial(surface: PresentationSurface): MeshStand
 
 /** Share the ground's tiny noise map; no per-road texture, normal map or pass. */
 export function applyRoadSurfaceDetail(material: PresentationMaterial): void {
-  const map = surfaceTexture('ground')
+  const map = getPresentationSurfaceTexture('ground')
   const aggregate = texture(map, positionWorld.xz.mul(0.83)).r
   const weathering = texture(map, vec2(positionWorld.x.add(positionWorld.z.mul(0.31)), positionWorld.z).mul(0.023)).r
   material.colorNode = (materialColor as unknown as Node<'vec3'>)
@@ -214,7 +214,7 @@ export function createLandscapeGroundMaterial(
   const nearDetail = smoothstep(siteRadius + 32, siteRadius + 96, world.sub(vec2(...center)).length()).oneMinus()
   // Reuse the Surface sampler: adjacent stochastic cells blend continuously,
   // with explicit gradients retaining stable mip selection across the offsets.
-  const noise = surfaceTexture('ground')
+  const noise = getPresentationSurfaceTexture('ground')
   const detail = stochasticSample(noise, variation.mul(0.12)).r
   const macro = stochasticSample(noise, variation.mul(0.007)).r.mul(0.24).add(0.87)
   const grass = albedos ? stochasticSample(albedos.grass, variation.mul(0.5)).rgb : tint(palette.grass).mul(detail)

@@ -1005,7 +1005,7 @@ function SurroundingsControls() {
         </div>
       </details>
       <p className="text-xs text-sidebar-foreground/60">
-        Preview only — surroundings aren’t saved with this project yet.
+        Surroundings are saved per project in this browser and excluded from geometry exports.
       </p>
     </div>
   )

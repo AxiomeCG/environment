@@ -518,6 +518,9 @@ function constrainedFrameIsTopologySafe(frame: ConstrainedBoundaryFrame): boolea
 
 const CONSTRAINED_APPROACH_SEPARATION = 1e-4
 const PRESENTATION_TERMINAL_REMAINDER = 1e-3
+const DEFAULT_PRESENTATION_CORNER_RADIUS = 6
+const MINIMUM_PRESENTATION_CORNER_RADIUS = 0.5
+const CORNER_RADIUS_FIT_ITERATIONS = 20
 
 function constrainedMiterSolution(
   network: RoadNetworkNode,
@@ -604,37 +607,100 @@ function appendOrientedJunctionCell(
     if (Math.abs(area) <= JUNCTION_GEOMETRY_EPSILON) return
     localTriangles.push(area > 0 ? [0, 1, 2] : [0, 2, 1])
   } else if (points.length === 4) {
-    const turns = points.map(({ point }, index) => upwardDoubleArea(
-      point,
-      points[(index + 1) % points.length]!.point,
-      points[(index + 2) % points.length]!.point,
-    )).filter((area) => Math.abs(area) > JUNCTION_GEOMETRY_EPSILON)
-    if (turns.some((area) => area > 0) && turns.some((area) => area < 0)) {
-      throw new Error('Cannot triangulate a non-convex junction band cell')
-    }
-
     const candidates = [
       [[0, 1, 2], [0, 2, 3]],
       [[0, 1, 3], [1, 2, 3]],
     ] as const
     const validCandidates = candidates.flatMap((triangles) => {
-      const areas = triangles.map(([first, second, third]) => upwardDoubleArea(
-        points[first]!.point,
-        points[second]!.point,
-        points[third]!.point,
-      ))
-      if (
-        areas.some((area) => Math.abs(area) <= JUNCTION_GEOMETRY_EPSILON)
-        || Math.sign(areas[0]!) !== Math.sign(areas[1]!)
-      ) return []
-      return [{ areas, score: Math.min(...areas.map(Math.abs)), triangles }]
+      const resolved = triangles.flatMap((triangle) => {
+        const [first, second, third] = triangle
+        const area = upwardDoubleArea(
+          points[first]!.point,
+          points[second]!.point,
+          points[third]!.point,
+        )
+        return Math.abs(area) <= JUNCTION_GEOMETRY_EPSILON
+          ? []
+          : [{ area, triangle }]
+      })
+      if (resolved.length === 0) return [{ score: 0, triangles: resolved }]
+      const sign = Math.sign(resolved[0]!.area)
+      if (resolved.some(({ area }) => Math.sign(area) !== sign)) return []
+      return [{
+        score: Math.min(...resolved.map(({ area }) => Math.abs(area))),
+        triangles: resolved,
+      }]
     }).sort((first, second) => second.score - first.score)
     const selected = validCandidates[0]
     if (!selected) {
-      throw new Error('Cannot triangulate a degenerate junction band cell')
+      const crossingPairs = [
+        [0, 1, 2, 3],
+        [1, 2, 3, 0],
+      ] as const
+      for (const [firstStart, firstEnd, secondStart, secondEnd] of crossingPairs) {
+        const firstDirection = [
+          points[firstEnd]!.point[0] - points[firstStart]!.point[0],
+          points[firstEnd]!.point[1] - points[firstStart]!.point[1],
+        ] as const
+        const secondDirection = [
+          points[secondEnd]!.point[0] - points[secondStart]!.point[0],
+          points[secondEnd]!.point[1] - points[secondStart]!.point[1],
+        ] as const
+        const crossing = lineIntersection(
+          points[firstStart]!.point,
+          firstDirection,
+          points[secondStart]!.point,
+          secondDirection,
+        )
+        if (!crossing) continue
+        const firstLength = Math.hypot(...firstDirection)
+        const secondLength = Math.hypot(...secondDirection)
+        const firstMix = Math.hypot(
+          crossing[0] - points[firstStart]!.point[0],
+          crossing[1] - points[firstStart]!.point[1],
+        ) / firstLength
+        const secondMix = Math.hypot(
+          crossing[0] - points[secondStart]!.point[0],
+          crossing[1] - points[secondStart]!.point[1],
+        ) / secondLength
+        if (
+          firstMix <= JUNCTION_GEOMETRY_EPSILON
+          || firstMix >= 1 - JUNCTION_GEOMETRY_EPSILON
+          || secondMix <= JUNCTION_GEOMETRY_EPSILON
+          || secondMix >= 1 - JUNCTION_GEOMETRY_EPSILON
+        ) continue
+        const crossingPoint = {
+          point: crossing,
+          surfaceThickness: (
+            interpolate(
+              points[firstStart]!.surfaceThickness,
+              points[firstEnd]!.surfaceThickness,
+              firstMix,
+            )
+            + interpolate(
+              points[secondStart]!.surfaceThickness,
+              points[secondEnd]!.surfaceThickness,
+              secondMix,
+            )
+          ) / 2,
+        }
+        appendOrientedJunctionCell(geometry, [
+          points[firstStart]!,
+          crossingPoint,
+          points[secondEnd]!,
+        ])
+        appendOrientedJunctionCell(geometry, [
+          points[firstEnd]!,
+          points[secondStart]!,
+          crossingPoint,
+        ])
+        return
+      }
+      throw new Error('Cannot triangulate a junction band cell')
     }
-    const reverse = selected.areas[0]! < 0
-    for (const [first, second, third] of selected.triangles) {
+    if (selected.triangles.length === 0) return
+    const reverse = selected.triangles[0]!.area < 0
+    for (const { triangle: [first, second, third] } of selected.triangles) {
       localTriangles.push(reverse ? [first, third, second] : [first, second, third])
     }
   } else {
@@ -988,8 +1054,26 @@ function markingGeometry(polygons: readonly RoadMarkingPolygon[]): RoadSurfaceGe
 function constrainedInnerReturnRadius(): number {
   return 1.45
 }
+function cornerRadiiWithDefault(
+  approaches: JunctionBoundaryGeometryData['approaches'],
+  authored: Readonly<Record<string, number>>,
+  defaultRadius: number,
+): Record<string, number> {
+  const resolved = { ...authored }
+  for (let first = 0; first < approaches.length - 1; first += 1) {
+    for (let second = first + 1; second < approaches.length; second += 1) {
+      const key = junctionCornerKey(approaches[first]!.edgeId, approaches[second]!.edgeId)
+      resolved[key] ??= defaultRadius
+    }
+  }
+  return resolved
+}
 
-function solveJunctions(network: RoadNetworkNode): SolvedJunction[] {
+
+function solveJunctions(
+  network: RoadNetworkNode,
+  cornerRadiusDefaults: ReadonlyMap<string, number> = new Map(),
+): SolvedJunction[] {
   return Object.values(network.graphNodes).flatMap((graphNode) => {
     const incident = Object.values(network.edges).filter(
       (edge) => edge.startNodeId === graphNode.id || edge.endNodeId === graphNode.id,
@@ -1023,7 +1107,13 @@ function solveJunctions(network: RoadNetworkNode): SolvedJunction[] {
       }]
     })
     const constrainedCornerKey = mixedTSiteSideCornerKey(network, graphNode.id)
-    const cornerRadii = { ...junction?.cornerRadii }
+    const defaultCornerRadius =
+      cornerRadiusDefaults.get(graphNode.id) ?? DEFAULT_PRESENTATION_CORNER_RADIUS
+    const cornerRadii = cornerRadiiWithDefault(
+      approaches,
+      junction?.cornerRadii ?? {},
+      defaultCornerRadius,
+    )
     let solution: JunctionBoundaryGeometryData
     if (constrainedCornerKey) {
       const solutionAtRadius = (radius: number): JunctionBoundaryGeometryData | undefined => {
@@ -1037,7 +1127,7 @@ function solveJunctions(network: RoadNetworkNode): SolvedJunction[] {
           constrainedCornerKey,
         )
       }
-      const preferredRadius = constrainedInnerReturnRadius()
+      const preferredRadius = Math.min(constrainedInnerReturnRadius(), defaultCornerRadius)
       const preferredSolution = solutionAtRadius(preferredRadius)
       if (preferredSolution) {
         solution = preferredSolution
@@ -1098,11 +1188,10 @@ function sampledRoadEdgeLength(
   }
   return total
 }
-
-function presentationNetworkWithTerminalExtensions(
+function edgeApproachCuts(
   network: RoadNetworkNode,
   junctions: readonly SolvedJunction[],
-): RoadNetworkNode {
+): Map<string, EdgeApproachCuts> {
   const cutsByEdge = new Map<string, EdgeApproachCuts>()
   for (const { graphNode, solution } of junctions) {
     for (const [edgeId, cut] of Object.entries(solution.approachCuts)) {
@@ -1114,6 +1203,66 @@ function presentationNetworkWithTerminalExtensions(
       cutsByEdge.set(edgeId, cuts)
     }
   }
+  return cutsByEdge
+}
+
+function overlappingJunctionIds(
+  network: RoadNetworkNode,
+  junctions: readonly SolvedJunction[],
+): Set<string> {
+  const result = new Set<string>()
+  for (const [edgeId, cuts] of edgeApproachCuts(network, junctions)) {
+    if (
+      cuts.start <= JUNCTION_GEOMETRY_EPSILON
+      || cuts.end <= JUNCTION_GEOMETRY_EPSILON
+    ) continue
+    const edge = network.edges[edgeId]
+    if (
+      edge
+      && sampledRoadEdgeLength(edge, network.graphNodes)
+        < cuts.start + cuts.end + PRESENTATION_TERMINAL_REMAINDER
+    ) {
+      result.add(edge.startNodeId)
+      result.add(edge.endNodeId)
+    }
+  }
+  return result
+}
+
+function solveFittingJunctions(network: RoadNetworkNode): SolvedJunction[] {
+  const preferred = solveJunctions(network)
+  const constrainedJunctionIds = overlappingJunctionIds(network, preferred)
+  if (constrainedJunctionIds.size === 0) return preferred
+
+  const defaults = new Map<string, number>()
+  for (const id of constrainedJunctionIds) {
+    defaults.set(id, MINIMUM_PRESENTATION_CORNER_RADIUS)
+  }
+  let fitting = solveJunctions(network, defaults)
+  if (overlappingJunctionIds(network, fitting).size > 0) return preferred
+
+  let lowerRadius = MINIMUM_PRESENTATION_CORNER_RADIUS
+  let upperRadius = DEFAULT_PRESENTATION_CORNER_RADIUS
+  for (let iteration = 0; iteration < CORNER_RADIUS_FIT_ITERATIONS; iteration += 1) {
+    const radius = (lowerRadius + upperRadius) / 2
+    for (const id of constrainedJunctionIds) defaults.set(id, radius)
+    const candidate = solveJunctions(network, defaults)
+    if (overlappingJunctionIds(network, candidate).size === 0) {
+      lowerRadius = radius
+      fitting = candidate
+    } else {
+      upperRadius = radius
+    }
+  }
+  return fitting
+}
+
+
+function presentationNetworkWithTerminalExtensions(
+  network: RoadNetworkNode,
+  junctions: readonly SolvedJunction[],
+): RoadNetworkNode {
+  const cutsByEdge = edgeApproachCuts(network, junctions)
 
   const incidentCounts = new Map<string, number>()
   for (const edge of Object.values(network.edges)) {
@@ -1137,7 +1286,14 @@ function presentationNetworkWithTerminalExtensions(
         ? edge.startNodeId
         : undefined
     if (!terminalNodeId) {
-      throw new Error(`Unable to extend road edge cut at both ends ${edge.id}`)
+      // Two nearby junction fans can legitimately consume the entire connector.
+      // Keep the authored edge in place; edgeSurfaces renders its full ribbon
+      // beneath the higher-offset junction patches as one compound road surface.
+      if (
+        cuts.start > JUNCTION_GEOMETRY_EPSILON
+        && cuts.end > JUNCTION_GEOMETRY_EPSILON
+      ) continue
+      throw new Error(`Unable to resolve road edge cuts ${edge.id}`)
     }
     if (incidentCounts.get(terminalNodeId) !== 1) {
       const terminal = graphNodes[terminalNodeId]
@@ -1208,10 +1364,17 @@ function edgeSurfaces(
   const surfaces: RoadPresentationSurface[] = []
 
   for (const profile of buildRoadTransitionProfiles(network)) {
+    const startCut = approachCuts[`${profile.startNodeId}:${profile.edgeIds[0]}`] ?? 0
+    const endCut = approachCuts[`${profile.endNodeId}:${profile.edgeIds.at(-1)}`] ?? 0
+    const profileLength = profile.samples.at(-1)?.distance ?? 0
+    const junctionsConsumeProfile =
+      startCut > JUNCTION_GEOMETRY_EPSILON
+      && endCut > JUNCTION_GEOMETRY_EPSILON
+      && profileLength < startCut + endCut + PRESENTATION_TERMINAL_REMAINDER
     const decorativeProfile = trimRoadTransitionProfile(
       profile,
-      approachCuts[`${profile.startNodeId}:${profile.edgeIds[0]}`] ?? 0,
-      approachCuts[`${profile.endNodeId}:${profile.edgeIds.at(-1)}`] ?? 0,
+      junctionsConsumeProfile ? 0 : startCut,
+      junctionsConsumeProfile ? 0 : endCut,
     )
     surfaces.push(standardSurface({
       id: `${profile.key}:carriageway`,
@@ -1383,14 +1546,14 @@ function junctionSurfaces(
 export function buildRoadPresentationPlan(
   network: RoadNetworkNode,
 ): RoadPresentationPlan {
-  const initialJunctions = solveJunctions(network)
+  const initialJunctions = solveFittingJunctions(network)
   const presentationNetwork = presentationNetworkWithTerminalExtensions(
     network,
     initialJunctions,
   )
   const solvedJunctions = presentationNetwork === network
     ? initialJunctions
-    : solveJunctions(presentationNetwork)
+    : solveFittingJunctions(presentationNetwork)
   const presentedJunctions = junctionSurfaces(presentationNetwork, solvedJunctions)
   return {
     id: 'environment-streetscape-road-network',

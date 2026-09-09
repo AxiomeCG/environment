@@ -119,20 +119,28 @@ Acceptance checks:
 
 | Field | Value |
 |---|---|
-| Status | **Host change required — implemented locally; release blocker for faithful generic-GLB output** |
+| Status | **Host change required — implemented locally; release blocker for faithful portable GLB/USDZ output** |
 | Observed | 2026-09-02; source rechecked 2026-09-08 |
 | Host repository | `pascalorg/editor` |
 | Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
-| Required Pascal version | First published Pascal release containing the `bakeGeometry` node-definition hook and replace-bake viewer path; version not assigned |
-| Plugin evidence | `src/ground-cover/definition.ts`, `src/ground-cover/bake-geometry.ts`, `src/ground-cover/bake-geometry.test.ts`, `src/ground-cover/static-renderer.tsx` |
-| Host evidence | `packages/core/src/registry/types.ts`, `packages/editor/src/lib/glb-export.ts`, `packages/editor/src/lib/glb-export.test.ts`, `wiki/architecture/node-definitions.md` |
+| Required Pascal version | First published Pascal release containing `bakeGeometry`, `bakeGeometryAsync`, captured material/level context, and the replace-bake viewer path; version not assigned |
+| Plugin evidence | `src/ground-cover/bake-geometry.ts`, `src/surface-material/bake-geometry.ts`, `src/export/material-baker.ts`, `src/export/water-material-bake.ts`, and their node definitions/tests |
+| Host evidence | `packages/core/src/registry/types.ts`, `packages/editor/src/lib/glb-export.ts`, `packages/editor/src/lib/portable-export.ts`, `packages/editor/src/lib/usdz-export.ts`, and their tests |
 
 The published `@pascal-app/core@1.0.0-beta.5` package has no bake-only geometry builder. Ground Cover's live `InstancedMesh` contains the maximum candidate population and lets its TSL material reject candidates from paint alpha, global density and obstacle inputs, so cloning and material conversion alone cannot produce a faithful portable snapshot.
 
 The local Pascal Editor source now exposes the pure `bakeGeometry(node, context)` definition hook. `prepareSceneForExport()` invokes it against persisted semantic nodes after clone-only visibility pruning and before generic mesh/material sanitization. The returned detached Object3D replaces only the export clone; the host preserves the registered node transform, visibility, layers, sibling order and identity mapping and rejects builders that return live or already-parented objects. Kinds without the hook retain the existing clone-and-convert path.
 
 Environment's bake builder shares the deterministic candidate scatter and Site/Terrain/paint/obstacle resolution used by the live field, emits only accepted blades, and bakes them into baseline glTF mesh primitives with one shared `MeshStandardMaterial`. The output is split below 65,535 vertices per mesh so every chunk uses portable 16-bit indices and does not depend on `EXT_mesh_gpu_instancing`. Ground Cover also declares `bake: 'replace'` and a Pascal replacement renderer that rebuilds the live TSL geometry from the current scene store, so Pascal hides the static snapshot without duplicating grass.
+
+Portable preparation prefers `bakeGeometryAsync` exactly once when a kind needs
+texture reads or GPU material baking; synchronous geometry-only callers retain
+`bakeGeometry`. The captured context includes material and level data. Surface,
+ground-cover underlays, ponds, and rivers use this path to bake intrinsic
+appearance into ordinary textures. GLB/USDZ normalization preserves vertex and
+instance colors through portable materials and freezes geometry without changing
+the live scene; saved-viewer artifacts retain their supported animation clips.
 
 Until the host change is released and Environment's minimum peer version is updated, the portable snapshot path is available only with the local Pascal checkout and published-host deployment must not claim GLB parity.
 
@@ -214,11 +222,12 @@ with the viewer's `SceneAtmosphere` and `SceneGroundReplacement` adapters.
 Those adapters retain ownership per R3F Scene, so releasing one viewer cannot
 change another viewer's fog, environment, fallback ground, or camera range.
 
-The mount is a sibling of `scene-renderer`. Editor model export is rooted at
-`scene-renderer`, so presentation is not authored or exported and cannot gain
-a `pascalId`, selection target, query result, history entry, or serialized
-scene node. Raw Viewer snapshots include it only when the host explicitly
-mounts `<ViewerPresentations />`.
+The live mount is a sibling of `scene-renderer`, so it cannot gain a `pascalId`,
+selection target, query result, history entry, or serialized scene node.
+Authored model export excludes that live subtree. A separately registered
+`staticExport` builder can contribute explicitly selected portable geometry
+through ENV-HOST-008. Raw Viewer snapshots include live presentation only when
+the host explicitly mounts `<ViewerPresentations />`.
 
 This source implementation does not make the gap released. Environment's
 published peer range must move to the first Pascal release that contains the
@@ -231,7 +240,7 @@ Acceptance checks:
 - Project uninstall removes the contribution; reinstall remounts it without re-registering code.
 - Two simultaneous viewer scenes keep atmosphere and ground ownership independent.
 - The contribution creates no authored node or scene persistence entry.
-- Geometry export stays rooted at `scene-renderer` and excludes the contribution.
+- Authored geometry export excludes the live contribution; static output requires the explicit opt-in builder.
 - A failing lazy contribution leaves authored rendering and healthy contributions mounted.
 
 ### ENV-HOST-007 — Project persistence for Environment configuration
@@ -249,10 +258,11 @@ Acceptance checks:
 
 Environment still exposes the explicit, standalone handoff:
 `EnvironmentConfigurationSchema`, `exportEnvironmentConfiguration()`, and
-`importEnvironmentConfiguration(unknown)`. Version 1 is strict and contains
-preset, seed, complete frontage contexts, complete sky settings (including god
-rays and time of day), surroundings and sky visibility, and rain, snow, wind,
-and storm state. Import validates the complete snapshot before mutation.
+`importEnvironmentConfiguration(unknown)`. Version 2 is strict and contains
+preset, seed, complete frontage contexts, complete sky settings (including time
+of day), surroundings and sky visibility, and rain, snow, wind, and storm state.
+Import validates the complete snapshot before mutation. Valid version 1 inputs
+migrate to version 2 by discarding only the removed `godRays` setting.
 
 The public viewer contribution now optionally exposes:
 
@@ -284,7 +294,7 @@ versioned local sidecar:
   version: 1,
   projectId,
   contributions: {
-    "pascal:environment:presentation": EnvironmentConfigurationV1
+    "pascal:environment:presentation": EnvironmentConfigurationV2
   }
 }
 ```
@@ -309,7 +319,7 @@ assigned.
 Acceptance checks:
 
 - A new project starts with atmosphere enabled.
-- Version 1 round-trips preset, seed, frontages, sky/time/god rays, visibility, rain, snow, wind, and storm.
+- Version 2 round-trips preset, seed, frontages, sky/time, visibility, rain, snow, wind, and storm; valid version 1 snapshots retain those settings during migration.
 - Reload restores the matching local project; another project restores its own value or initial defaults.
 - A project switch flushes the old project before resetting or restoring the next project.
 - Corrupted presentation storage recovers without changing scene JSON.
@@ -318,6 +328,35 @@ Acceptance checks:
 - Restore disables thunder audio consent, sky playback, and sky motion.
 - Standalone hosts retain the explicit validated export/import handoff.
 - Scene graph JSON, authored nodes, history, and geometry export remain unchanged.
+
+### ENV-HOST-008 — Static presentation exports and resource ownership
+
+| Field | Value |
+|---|---|
+| Status | **Host change required — implemented locally; release blocker for opt-in surroundings GLB/USDZ export** |
+| Host repository | `pascalorg/editor` |
+| Host issue / PR | TBD |
+| Required Pascal version | First published release containing `ViewerPresentationContribution.staticExport`, its export context, and borrowed-texture ownership helpers; version not assigned |
+| Plugin evidence | `src/presentation.tsx`, `src/surroundings/static-export.ts`, `src/surroundings/static-export.test.ts` |
+| Host evidence | `packages/viewer/src/components/viewer/viewer-presentations.tsx`, `packages/editor/src/lib/glb-export.ts`, `packages/editor/src/components/ui/sidebar/panels/settings-panel/index.tsx` |
+
+The host discovers static presentation builders and includes them only when
+their IDs are selected in a GLB/USDZ request. Each builder receives a complete
+semantic snapshot, a detached configuration captured at export start, and output
+visibility/type filters. It returns a detached world-space root, not a clone of
+the camera-dependent live presentation. Export owns returned resources; cached
+texture handles marked with `markViewerPresentationTextureBorrowed` are cloned
+before attachment and their source handles are never disposed.
+
+Acceptance checks:
+
+- Surroundings is excluded by default and included only when explicitly selected.
+- Installed-plugin gates and captured configuration determine the contribution.
+- Full semantic generation context remains available when output kinds are filtered.
+- Finite terrain, roads, vegetation, props, and water do not depend on live camera LOD.
+- Sky, weather, light beams, and the offshore apron remain outside portable output.
+- Export creates no semantic nodes and leaves live scene resources unchanged.
+- Success and failure release export-owned resources without disposing borrowed textures.
 
 ## Deployment gate
 

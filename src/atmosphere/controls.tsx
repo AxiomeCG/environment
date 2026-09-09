@@ -406,24 +406,6 @@ export default function AtmosphereControls() {
           </p>
         </section>
 
-        <section className={SECTION_CLASS} aria-labelledby={`${controlId}-rays-heading`}>
-          <div>
-            <h3 id={`${controlId}-rays-heading`} className="text-xs font-semibold">
-              Sunlight
-            </h3>
-            <p className={`mt-1 ${META_CLASS}`}>
-              God rays appear when clouds partially interrupt direct sun.
-            </p>
-          </div>
-          <ParameterRange
-            label="God rays"
-            value={settings.godRays * 100}
-            min={0}
-            max={100}
-            step={1}
-            onChange={(value) => setSettings({ godRays: value / 100 })}
-          />
-        </section>
 
         <details className="border-t border-sidebar-border pt-3">
           <summary className="flex min-h-10 cursor-pointer items-center text-xs font-semibold focus-visible:outline-2 focus-visible:outline-ring">

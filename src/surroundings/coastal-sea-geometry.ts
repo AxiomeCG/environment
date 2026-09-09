@@ -8,14 +8,17 @@ import { clipConvexPolygon } from './neighborhood'
 
 export type SeaGeometryBuffers = MeshGeometryBuffers & Readonly<{ depths: Float32Array }>
 
-/** One merged surface: terrain-sampled near water and a constant-cost offshore apron. */
+/** One merged sampled surface; the runtime default also adds a constant-cost offshore apron. */
 export function buildSeaGeometry(
   sections: readonly ExteriorTerrainSectionAddress[],
   sampler: ExteriorTerrainSampler,
   boundary: readonly Point2[],
   coast: LandscapeRegion['coast'],
+  options: Readonly<{ includeOffshoreApron?: boolean }> = {},
 ): SeaGeometryBuffers {
-  const positions: number[] = [], indices: number[] = [], depths: number[] = []
+  const positions: number[] = [],
+    indices: number[] = [],
+    depths: number[] = []
   const step = 16
   for (const section of sections) {
     for (let row = 0; row < EXTERIOR_TERRAIN_SECTION_SIZE; row += step) {
@@ -28,7 +31,20 @@ export function buildSeaGeometry(
         const d = SEA_LEVEL - sampler.heightAt(x + step, z + step)
         if (Math.max(a, b, c, d) <= 0) continue
         const start = positions.length / 3
-        positions.push(x, SEA_LEVEL, z, x + step, SEA_LEVEL, z, x, SEA_LEVEL, z + step, x + step, SEA_LEVEL, z + step)
+        positions.push(
+          x,
+          SEA_LEVEL,
+          z,
+          x + step,
+          SEA_LEVEL,
+          z,
+          x,
+          SEA_LEVEL,
+          z + step,
+          x + step,
+          SEA_LEVEL,
+          z + step,
+        )
         // Signed depths preserve the shore crossing when interpolated across a cell.
         depths.push(a, b, c, d)
         indices.push(start, start + 2, start + 1, start + 1, start + 2, start + 3)
@@ -36,13 +52,23 @@ export function buildSeaGeometry(
     }
   }
 
-  if (coast && sections.length > 0 && boundary.length >= 3) {
+  if (
+    options.includeOffshoreApron !== false &&
+    coast &&
+    sections.length > 0 &&
+    boundary.length >= 3
+  ) {
     const center = polygonCentroid(boundary)
-    const protectedRadius = Math.max(...boundary.map(([x, z]) => Math.hypot(x - center[0], z - center[1])))
+    const protectedRadius = Math.max(
+      ...boundary.map(([x, z]) => Math.hypot(x - center[0], z - center[1])),
+    )
     // Beyond every bay/noise excursion and the 65 m coastal transition the field
     // is uniformly submerged. Never extend a river mouth into an inland ocean.
     const offshoreStart = protectedRadius + coast.distance + coast.bays + 24 + 65
-    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity
+    let minX = Infinity,
+      minZ = Infinity,
+      maxX = -Infinity,
+      maxZ = -Infinity
     for (const section of sections) {
       minX = Math.min(minX, section.x * EXTERIOR_TERRAIN_SECTION_SIZE)
       minZ = Math.min(minZ, section.z * EXTERIOR_TERRAIN_SECTION_SIZE)
@@ -58,14 +84,26 @@ export function buildSeaGeometry(
     ]
     // Four disjoint rectangles exclude the detailed window: no coplanar overlap,
     // no per-frame recentering, and at most 24 extra triangles at any sea extent.
-    const left = center[0] - reach, right = center[0] + reach
-    const bottom = center[1] - reach, top = center[1] + reach
+    const left = center[0] - reach,
+      right = center[0] + reach
+    const bottom = center[1] - reach,
+      top = center[1] + reach
     const apronBounds = [
-      [left, minZ, minX, maxZ], [maxX, minZ, right, maxZ],
-      [left, bottom, right, minZ], [left, maxZ, right, top],
+      [left, minZ, minX, maxZ],
+      [maxX, minZ, right, maxZ],
+      [left, bottom, right, minZ],
+      [left, maxZ, right, top],
     ] as const
     for (const [x0, z0, x1, z1] of apronBounds) {
-      const polygon = clipConvexPolygon([[x0, z0], [x1, z0], [x1, z1], [x0, z1]], offshore)
+      const polygon = clipConvexPolygon(
+        [
+          [x0, z0],
+          [x1, z0],
+          [x1, z1],
+          [x0, z1],
+        ],
+        offshore,
+      )
       const start = positions.length / 3
       for (const [x, z] of polygon) {
         positions.push(x, SEA_LEVEL, z)

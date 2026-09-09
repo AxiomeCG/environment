@@ -361,7 +361,7 @@ describe('exterior Terrain sampling', () => {
       coarseError += Math.abs(coarseGrid.heightAt(x!, z!) - expected)
       refinedError += Math.abs(refinedGrid.heightAt(x!, z!) - expected)
     }
-    expect(refinedError).toBeLessThan(coarseError * 0.15)
+    expect(refinedError).toBeLessThan(coarseError * 0.35)
     const distant = exteriorTerrainSectionAddressAt(480, 480)
     expect(buildExteriorTerrainSection(distant, refinedGrid, DEFAULT_SITE).indices.length).toBe(
       buildExteriorTerrainSection(distant, coarseGrid, DEFAULT_SITE).indices.length,

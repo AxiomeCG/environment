@@ -2,7 +2,6 @@
 
 // EZ-Tree loads texture images at module scope; callers lazy-load this client boundary.
 import { Tree } from '@dgreenheck/ez-tree'
-import { useSceneSunScattering } from '@pascal-app/viewer'
 import { useEffect, useLayoutEffect, useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
 import {
@@ -34,7 +33,6 @@ type Placement = {
   height: number
   leafColor: string
   crownAspect?: number
-  godRayOccluder: boolean
   whitening?: number
 }
 type Variant = {
@@ -122,7 +120,7 @@ function buildInstances(plans: readonly Placement[], root = new Group()): Group 
   const buckets = new Map<string, Placement[]>()
   for (const child of root.children) if (child instanceof InstancedMesh) child.count = 0
   for (const plan of plans) {
-    const key = `${plan.species}:${plan.godRayOccluder ? 'near' : 'horizon'}`
+    const key = plan.species
     const bucket = buckets.get(key)
     if (bucket) bucket.push(plan)
     else buckets.set(key, [plan])
@@ -136,11 +134,10 @@ function buildInstances(plans: readonly Placement[], root = new Group()): Group 
     bytes = 0,
     drawCalls = 0
   for (const placements of buckets.values()) {
-    const { species, godRayOccluder } = placements[0]!
+    const { species } = placements[0]!
     const variant = getVariant(species)
     for (const part of variant.parts) {
-      const distance = godRayOccluder ? 'near' : 'horizon'
-      const partName = `eztree-${species}-${distance}-${part.leaves ? 'leaves' : 'branches'}`
+      const partName = `eztree-${species}-${part.leaves ? 'leaves' : 'branches'}`
       let mesh = root.children.find((child) => child.name === partName) as InstancedMesh | undefined
       if (!mesh || mesh.instanceMatrix.count < placements.length) {
         if (mesh) {
@@ -159,7 +156,6 @@ function buildInstances(plans: readonly Placement[], root = new Group()): Group 
       drawCalls += 1
       mesh.castShadow = false
       mesh.receiveShadow = false
-      mesh.userData.godRayOccluder = godRayOccluder
       mesh.renderOrder = -20
       mesh.raycast = NO_RAYCAST
       for (let i = 0; i < placements.length; i += 1) {
@@ -217,7 +213,6 @@ export function buildTreeInstances(
     return {
       ...plan,
       crownAspect,
-      godRayOccluder: true,
       position: [
         plan.position[0],
         heightAt(plan.position[0], plan.position[1]),
@@ -226,7 +221,7 @@ export function buildTreeInstances(
     }
   })
   for (const plan of horizonPlans) {
-    placements.push({ ...plan, godRayOccluder: false, whitening: 0.65 })
+    placements.push({ ...plan, whitening: 0.65 })
   }
   return buildInstances(placements, root)
 }
@@ -241,19 +236,10 @@ export function NeighborhoodTrees({
 }) {
   const root = useMemo(() => new Group(), [])
   const invalidate = useThree((state) => state.invalidate)
-  const sunScattering = useSceneSunScattering()
   useLayoutEffect(() => {
     buildTreeInstances(plans, heightAt, root, horizonPlans)
     invalidate()
   }, [root, plans, horizonPlans, heightAt, invalidate])
-  useLayoutEffect(() => {
-    root.traverse((child) => {
-      if (child instanceof InstancedMesh) {
-        child.castShadow = sunScattering !== null && child.userData.godRayOccluder === true
-      }
-    })
-    invalidate()
-  }, [root, plans, horizonPlans, heightAt, invalidate, sunScattering])
   useEffect(
     () => () => {
       disposePrimitiveInstances(root)

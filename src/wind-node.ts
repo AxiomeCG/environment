@@ -1,12 +1,6 @@
 import * as TSL from 'three/tsl'
 import type { Node } from 'three/webgpu'
 
-export const GLOBAL_WIND_STRENGTH = TSL.uniform(1)
-
-export function setGlobalWindStrength(strength: number): void {
-  GLOBAL_WIND_STRENGTH.value = Math.max(0, strength)
-}
-
 export const PLANT_WIND_FREQUENCY = 1.3
 export const PLANT_WIND_STRENGTH = 0.05
 
@@ -18,6 +12,7 @@ const WIND_DIRECTION_WORLD = TSL.normalize(TSL.vec2(0.8, 0.6))
  */
 export function grassWindBend(
   samplePosition: Node<'vec3'>,
+  strength: Node<'float'>,
   influence: Node<'float'>,
 ): Node<'vec3'> {
   return TSL.Fn(() => {
@@ -47,7 +42,7 @@ export function grassWindBend(
     )
     return windDirection
       .mul(PLANT_WIND_STRENGTH)
-      .mul(GLOBAL_WIND_STRENGTH)
+      .mul(strength)
       .mul(influence)
       .mul(gust)
   })()
@@ -59,12 +54,13 @@ export function grassWindPosition(
   localPosition: Node<'vec3'>,
   height: Node<'float'>,
   heightMask: Node<'float'>,
+  strength: Node<'float'>,
   influence: Node<'float'>,
 ): Node<'vec3'> {
   return TSL.Fn(() => {
     const displacedPosition = localPosition.toVar()
     displacedPosition.addAssign(
-      grassWindBend(localPosition, influence).mul(height).mul(heightMask),
+      grassWindBend(localPosition, strength, influence).mul(height).mul(heightMask),
     )
     return displacedPosition
   })()
