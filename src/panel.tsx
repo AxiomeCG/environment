@@ -13,6 +13,8 @@ import {
   Check,
   ChevronDown,
   Eraser,
+  List,
+  Map,
   PaintBucket,
   RotateCcw,
   Square,
@@ -139,11 +141,6 @@ export default function EnvironmentPanel() {
   const setWaterTab = useEnvironmentStore((state) => state.setWaterTab)
   const nodes = useScene((state) => state.nodes)
   const selectedIds = useViewer((state) => state.selection.selectedIds)
-  const layerCount = useScene(
-    (state) =>
-      Object.values(state.nodes).filter((node) => (node.type as string) === GROUND_COVER_TOOL)
-        .length,
-  )
   const groundCoverActive = activeTool === GROUND_COVER_TOOL && editorMode === 'build'
   const groundCoverSelected = selectedIds.some(
     (id) => (nodes[id as AnyNodeId]?.type as string | undefined) === GROUND_COVER_TOOL,
@@ -337,28 +334,39 @@ export default function EnvironmentPanel() {
           Choose an area of the environment to work on.
         </p>
       </header>
-      <label className="flex items-center justify-between gap-3 px-4 pb-3 text-xs">
+      <div className="flex items-center justify-between gap-3 px-4 pb-3 text-xs">
         <span className="text-sidebar-foreground/60">Browse</span>
-        <select
+        <div
+          role="group"
           aria-label="Environment view"
-          className="h-9 rounded-md border border-sidebar-border bg-transparent px-3 text-sidebar-foreground text-xs"
-          onChange={(event) =>
-            setCatalogueView(event.target.value === 'site' ? 'site' : 'catalogue')
-          }
-          value={catalogueView}
+          className="flex gap-1 rounded-lg bg-sidebar-accent/50 p-1"
+          onKeyDownCapture={(event) => {
+            // Keep Space on the view buttons instead of starting canvas panning.
+            if (event.code === 'Space') event.stopPropagation()
+          }}
         >
-          <option value="catalogue">Catalogue</option>
-          <option value="site">Site View</option>
-        </select>
-      </label>
-      {layerCount > 0 && (
-        <div className="px-4 pb-3">
-          <ResumeButton
-            label={groundCoverSelected ? 'Ground Cover · Selected' : 'Ground Cover · Select layer'}
-            onClick={() => selectEnvironmentTool('ground-cover')}
-          />
+          {([
+            { value: 'site', label: 'Site View', icon: Map },
+            { value: 'catalogue', label: 'Catalogue', icon: List },
+          ] as const).map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              aria-label={label}
+              aria-pressed={catalogueView === value}
+              title={label}
+              onClick={() => setCatalogueView(value)}
+              className={`flex size-10 items-center justify-center rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-ring ${
+                catalogueView === value
+                  ? 'bg-sidebar-accent text-primary ring-1 ring-inset ring-sidebar-border'
+                  : 'text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground'
+              }`}
+            >
+              <Icon aria-hidden size={18} />
+            </button>
+          ))}
         </div>
-      )}
+      </div>
       {catalogueView === 'catalogue' ? (
         <EnvironmentCatalogue
           className="min-h-0 flex-1 overflow-y-auto px-4 pb-4"

@@ -205,9 +205,11 @@ walkthrough above.
 
 ### Browsing Environment
 
-The Environment panel opens with the illustrated **Site View**. Use **Browse → Catalogue**
-for the compact tool list; both views open the same tools. Unavailable tools
-remain disabled and are marked **Coming soon** in the Catalogue.
+The Environment panel opens with the illustrated **Site View**. The two **Browse**
+icon buttons switch between the map (**Site View**) and list (**Catalogue**).
+Each has a tooltip and accessible label, and the active view is marked.
+Both views open the same tools. Unavailable tools remain disabled and are marked
+**Coming soon** in the Catalogue.
 
 Your chosen view is retained when returning from a tool, but resets on reload.
 
@@ -225,6 +227,9 @@ material on the Site; dragging its slider commits on release.
 **Ground Cover** separates coverage painting from local height adjustment.
 **Target coverage** controls where grass grows; the Grass Field inspector
 groups global appearance, natural variation, wind, and obstacle interaction.
+Opening **Ground Cover** selects its existing layer (or creates one if needed)
+and activates painting. Layer selection is part of this tool flow, not a separate
+shortcut on the Environment home screen; **Resume painting** restores it after a pause.
 Wind strength belongs to each Grass Field; changing one field does not change the
 wind of another field or the natural surroundings.
 Ground Cover excludes building interiors, colliding props, and the resolved wet
