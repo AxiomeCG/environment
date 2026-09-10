@@ -105,12 +105,20 @@ export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
   const previousNodesRef = useRef(new Map<string, GrassFieldNode>())
 
   useEffect(() => {
+    const deferredObstacleSites = new Set<string>()
     const unsubscribeScene = sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
       const changes = grassFieldSiteChanges(currentNodes, previousNodes)
       for (const change of changes) {
         const node = currentNodes[change.id as AnyNodeId]
         const site = node?.parentId ? currentNodes[node.parentId as AnyNodeId] : undefined
         const group = sceneRegistry.nodes.get(change.id)
+        // A sculpt commit is published before live.end(); reconcile once the live field is gone.
+        if (
+          !change.boundaryChanged &&
+          change.terrainChanged &&
+          site?.type === 'site' &&
+          useLiveTerrain.getState().fieldOf(site.id)
+        ) continue
         if (
           !change.boundaryChanged &&
           change.terrainChanged &&
@@ -133,6 +141,10 @@ export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
           }
           const field = candidate as unknown as GrassFieldNode
           const site = field.parentId ? currentNodes[field.parentId as AnyNodeId] : undefined
+          if (site?.type === 'site' && useLiveTerrain.getState().fieldOf(site.id)) {
+            deferredObstacleSites.add(site.id)
+            continue
+          }
           if (
             (field.flowerDensity ?? 0) > 0 ||
             site?.type !== 'site' ||
@@ -151,45 +163,42 @@ export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
         ...previous.strokes.keys(),
         ...previous.remoteStrokes.keys(),
       ])
-      const changedSiteIds = new Set<string>()
-
+      const nodes = sceneApi.nodes()
       for (const siteId of siteIds) {
-        const currentField =
-          current.strokes.get(siteId)?.field ?? current.remoteStrokes.get(siteId)?.field
-        const previousField =
-          previous.strokes.get(siteId)?.field ?? previous.remoteStrokes.get(siteId)?.field
-        if (currentField !== previousField) changedSiteIds.add(siteId)
-      }
+        const local = current.strokes.get(siteId)
+        const previousLocal = previous.strokes.get(siteId)
+        const remote = current.remoteStrokes.get(siteId)
+        const previousRemote = previous.remoteStrokes.get(siteId)
+        const active = local ?? remote
+        const previousActive = previousLocal ?? previousRemote
+        if (active?.field === previousActive?.field) continue
 
-      if (changedSiteIds.size > 0) {
-        const nodes = sceneApi.nodes()
+        // A replacement source can differ outside lastPatch; only continuous strokes are local.
+        const continuous = local
+          ? previousLocal?.snapshot === local.snapshot
+          : !previousLocal && remote && previousRemote?.sourceId === remote.sourceId
+        const patch = continuous ? active?.lastPatch ?? undefined : undefined
+        const hasWater = siteHasWaterObstacles(siteId, nodes)
+        if (active && hasWater) deferredObstacleSites.add(siteId)
+        const reconcileObstacles = !active && (hasWater || deferredObstacleSites.has(siteId))
+
         for (const node of Object.values(nodes)) {
-          if (
-            (node.type as string) !== GRASS_FIELD_KIND ||
-            !changedSiteIds.has(node.parentId as string)
-          ) {
-            continue
-          }
+          if ((node.type as string) !== GRASS_FIELD_KIND || node.parentId !== siteId) continue
 
-          const site = nodes[node.parentId as AnyNodeId]
+          const site = nodes[siteId as AnyNodeId]
           const group = sceneRegistry.nodes.get(node.id)
-          if (
-            site?.type !== 'site' ||
-            !group ||
-            !updateGrassFieldTerrain(group, site as SiteNode)
-          ) {
-            sceneApi.markDirty(node.id)
-          }
-          if (site?.type === 'site' && siteHasWaterObstacles(site.id, nodes)) {
+          let rebuild = site?.type !== 'site' || !group ||
+            !updateGrassFieldTerrain(group, site as SiteNode, patch)
+
+          // Root heights preview live. Water exclusion and flower placement settle on release/cancel.
+          if (reconcileObstacles && site?.type === 'site' && !rebuild) {
             const field = node as unknown as GrassFieldNode
-            if (
-              (field.flowerDensity ?? 0) > 0 ||
+            rebuild = (field.flowerDensity ?? 0) > 0 ||
               !updateGrassFieldObstacles(field, site, nodes)
-            ) {
-              sceneApi.markDirty(node.id)
-            }
           }
+          if (rebuild) sceneApi.markDirty(node.id)
         }
+        if (!active) deferredObstacleSites.delete(siteId)
       }
     })
 
@@ -197,6 +206,7 @@ export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
     return () => {
       unsubscribeScene?.()
       unsubscribeLiveTerrain()
+      deferredObstacleSites.clear()
       previousNodes.clear()
     }
   }, [sceneApi])

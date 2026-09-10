@@ -1,5 +1,6 @@
-import { surfaceHeightAt, type TerrainField } from '@pascal-app/core'
+import { surfaceHeightAt, type HeightPatch, type TerrainField } from '@pascal-app/core'
 import {
+  Box3,
   BufferAttribute,
   BufferGeometry,
   CircleGeometry,
@@ -17,6 +18,7 @@ import {
   MeshStandardMaterial,
   OctahedronGeometry,
   type Object3D,
+  Sphere,
   Vector3,
 } from 'three'
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
@@ -24,6 +26,7 @@ import * as TSL from 'three/tsl'
 import { MeshStandardNodeMaterial, type Node } from 'three/webgpu'
 import { grassWindBend } from '../../wind-node'
 import { FLOWER_KINDS, type FlowerKind, type FlowerPlacement } from '../flower-scatter'
+import { queueTerrainAttributeUpdate, terrainPatchBounds, type TerrainPatchBounds } from '../terrain-patch'
 
 const MAX_BAKED_FLOWER_VERTICES = 65_535
 const STEM_COLOR = new Color('#31552b')
@@ -44,10 +47,14 @@ const runtimes = new WeakMap<Object3D, FlowerBatchRuntime>()
 type FlowerBatch = {
   mesh: InstancedMesh
   roots: InstancedBufferAttribute
+  rootBounds: TerrainPatchBounds
 }
 
 type FlowerBatchRuntime = {
   batches: FlowerBatch[]
+  scratchBox: Box3
+  scratchMatrix: Matrix4
+  scratchSphere: Sphere
 }
 
 /** Returns a fresh, caller-owned low-poly flower geometry. */
@@ -106,10 +113,20 @@ export function createAnimatedFlowerBatches(
     const matrices = new Float32Array(kindPlacements.length * 16)
     const matrix = new Matrix4()
     const scale = new Vector3()
+    const rootBounds: TerrainPatchBounds = {
+      minX: Infinity,
+      minZ: Infinity,
+      maxX: -Infinity,
+      maxZ: -Infinity,
+    }
 
     for (let index = 0; index < kindPlacements.length; index += 1) {
       const placement = kindPlacements[index]!
       roots.setXYZ(index, ...placement.position)
+      rootBounds.minX = Math.min(rootBounds.minX, roots.getX(index))
+      rootBounds.minZ = Math.min(rootBounds.minZ, roots.getZ(index))
+      rootBounds.maxX = Math.max(rootBounds.maxX, roots.getX(index))
+      rootBounds.maxZ = Math.max(rootBounds.maxZ, roots.getZ(index))
       matrix.makeRotationY(placement.rotationY)
       scale.setScalar(placement.scale)
       matrix.scale(scale)
@@ -127,32 +144,80 @@ export function createAnimatedFlowerBatches(
     mesh.computeBoundingBox()
     mesh.computeBoundingSphere()
     group.add(mesh)
-    batches.push({ mesh, roots })
+    batches.push({ mesh, roots, rootBounds })
   }
 
-  runtimes.set(group, { batches })
+  runtimes.set(group, {
+    batches,
+    scratchBox: new Box3(),
+    scratchMatrix: new Matrix4(),
+    scratchSphere: new Sphere(),
+  })
   return group
 }
 
-export function updateFlowerBatchTerrain(root: Object3D, terrain: TerrainField | null): boolean {
+export function updateFlowerBatchTerrain(
+  root: Object3D,
+  terrain: TerrainField | null,
+  patch?: HeightPatch,
+): boolean {
   const runtime = flowerRuntime(root)
   if (!runtime) return false
+  const patchBounds = terrain && patch ? terrainPatchBounds(terrain, patch) : null
+  if (patch && !patchBounds) return true
 
-  for (const { mesh, roots } of runtime.batches) {
+  const { scratchBox, scratchMatrix, scratchSphere } = runtime
+  for (const { mesh, roots, rootBounds } of runtime.batches) {
+    if (patchBounds && (
+      rootBounds.maxX < patchBounds.minX || rootBounds.minX > patchBounds.maxX ||
+      rootBounds.maxZ < patchBounds.minZ || rootBounds.minZ > patchBounds.maxZ
+    )) continue
+
     const rootValues = roots.array as Float32Array
     const matrices = mesh.instanceMatrix.array as Float32Array
+    let firstRoot = Infinity
+    let lastRoot = -1
+    let firstMatrix = Infinity
+    let lastMatrix = -1
     for (let index = 0; index < roots.count; index += 1) {
       const offset = index * 3
       const x = rootValues[offset]!
       const z = rootValues[offset + 2]!
-      const y = terrain ? surfaceHeightAt(terrain, x, z) : 0
-      rootValues[offset + 1] = y
-      matrices[index * 16 + 13] = y
+      if (patchBounds && (
+        x < patchBounds.minX || x > patchBounds.maxX ||
+        z < patchBounds.minZ || z > patchBounds.maxZ
+      )) continue
+
+      const y = terrain ? Math.fround(surfaceHeightAt(terrain, x, z)) : 0
+      if (rootValues[offset + 1] !== y) {
+        rootValues[offset + 1] = y
+        firstRoot = Math.min(firstRoot, offset + 1)
+        lastRoot = offset + 1
+      }
+      const matrixOffset = index * 16 + 13
+      if (matrices[matrixOffset] !== y) {
+        matrices[matrixOffset] = y
+        firstMatrix = Math.min(firstMatrix, matrixOffset)
+        lastMatrix = matrixOffset
+        if (patchBounds) {
+          mesh.getMatrixAt(index, scratchMatrix)
+          scratchBox.copy(mesh.geometry.boundingBox!).applyMatrix4(scratchMatrix)
+          scratchSphere.copy(mesh.geometry.boundingSphere!).applyMatrix4(scratchMatrix)
+          mesh.boundingBox!.union(scratchBox)
+          mesh.boundingSphere!.union(scratchSphere)
+        }
+      }
     }
-    roots.needsUpdate = true
-    mesh.instanceMatrix.needsUpdate = true
-    mesh.computeBoundingBox()
-    mesh.computeBoundingSphere()
+    if (firstRoot <= lastRoot) {
+      queueTerrainAttributeUpdate(roots, firstRoot, lastRoot - firstRoot + 1)
+    }
+    if (firstMatrix <= lastMatrix) {
+      queueTerrainAttributeUpdate(mesh.instanceMatrix, firstMatrix, lastMatrix - firstMatrix + 1)
+    }
+    if (!patchBounds) {
+      mesh.computeBoundingBox()
+      mesh.computeBoundingSphere()
+    }
   }
   return true
 }

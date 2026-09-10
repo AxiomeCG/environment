@@ -1,4 +1,4 @@
-import { surfaceHeightAt, type TerrainField } from '@pascal-app/core'
+import { surfaceHeightAt, type HeightPatch, type TerrainField } from '@pascal-app/core'
 import {
   Box3,
   BufferGeometry,
@@ -16,6 +16,7 @@ import {
 } from 'three'
 import type { SiteBounds } from '../paint-field'
 import { visitGrassCandidates, type GrassBladeDimensions, type GrassCandidateVisitor } from '../scatter'
+import { queueTerrainAttributeUpdate, terrainPatchBounds } from '../terrain-patch'
 import { buildBladeGeometry } from './blade-geometry'
 
 export const GRASS_TILE_SIZE = 8
@@ -83,6 +84,7 @@ type TileBuildData = {
 
 type InternalGrassTileRuntime = GrassTileRuntime & {
   readonly group: Group
+  readonly rootBounds: Box3
 }
 
 type InternalGrassTilesRuntime = GrassTilesRuntime & {
@@ -206,36 +208,65 @@ export function createGrassTiles(
 export function updateGrassTileTerrain(
   group: Object3D,
   terrain: TerrainField | null,
+  patch?: HeightPatch,
 ): boolean {
   const runtime = getInternalRuntime(group)
   if (!runtime) return false
+  const patchBounds = terrain && patch ? terrainPatchBounds(terrain, patch) : null
+  if (patch && !patchBounds) return true
 
   for (const tile of runtime.tiles) {
+    const { rootBounds } = tile
+    if (patchBounds && (
+      rootBounds.max.x < patchBounds.minX || rootBounds.min.x > patchBounds.maxX ||
+      rootBounds.max.z < patchBounds.minZ || rootBounds.min.z > patchBounds.maxZ
+    )) continue
+
     const roots = tile.attributes.root.array as Float32Array
     const matrices = tile.full.instanceMatrix.array as Float32Array
-    let minY = Infinity
-    let maxY = -Infinity
+    let minY = patchBounds ? rootBounds.min.y : Infinity
+    let maxY = patchBounds ? rootBounds.max.y : -Infinity
+    let firstRoot = Infinity
+    let lastRoot = -1
+    let firstMatrix = Infinity
+    let lastMatrix = -1
 
     for (let index = 0; index < tile.candidateCount; index += 1) {
       const rootOffset = index * 3
       const x = roots[rootOffset]!
       const z = roots[rootOffset + 2]!
-      const y = terrain ? surfaceHeightAt(terrain, x, z) : 0
-      roots[rootOffset + 1] = y
-      matrices[index * 16 + 13] = y
+      if (patchBounds && (
+        x < patchBounds.minX || x > patchBounds.maxX ||
+        z < patchBounds.minZ || z > patchBounds.maxZ
+      )) continue
+
+      const y = terrain ? Math.fround(surfaceHeightAt(terrain, x, z)) : 0
+      if (roots[rootOffset + 1] !== y) {
+        roots[rootOffset + 1] = y
+        firstRoot = Math.min(firstRoot, rootOffset + 1)
+        lastRoot = rootOffset + 1
+      }
+      const matrixOffset = index * 16 + 13
+      if (matrices[matrixOffset] !== y) {
+        matrices[matrixOffset] = y
+        firstMatrix = Math.min(firstMatrix, matrixOffset)
+        lastMatrix = matrixOffset
+      }
       minY = Math.min(minY, y)
       maxY = Math.max(maxY, y)
     }
 
-    tile.attributes.root.needsUpdate = true
-    tile.full.instanceMatrix.needsUpdate = true
-    updateTileBounds(
-      tile,
-      minY,
-      maxY,
-      runtime.maxBladeHeight,
-      runtime.radialPadding,
-    )
+    if (firstRoot <= lastRoot) {
+      queueTerrainAttributeUpdate(tile.attributes.root, firstRoot, lastRoot - firstRoot + 1)
+    }
+    if (firstMatrix <= lastMatrix) {
+      queueTerrainAttributeUpdate(tile.full.instanceMatrix, firstMatrix, lastMatrix - firstMatrix + 1)
+    }
+    if (patchBounds && firstRoot > lastRoot && firstMatrix > lastMatrix) continue
+
+    rootBounds.min.y = minY
+    rootBounds.max.y = maxY
+    updateTileBounds(tile, runtime.maxBladeHeight, runtime.radialPadding)
   }
 
   return true
@@ -486,18 +517,9 @@ function buildTile(
     lod: null,
     projectedBladePixels: 0,
     group: tileGroup,
+    rootBounds: new Box3(min, max),
   }
-  updateTileBounds(
-    tile,
-    min.y,
-    max.y,
-    maxBladeHeight,
-    radialPadding,
-    min.x,
-    max.x,
-    min.z,
-    max.z,
-  )
+  updateTileBounds(tile, maxBladeHeight, radialPadding)
   return tile
 }
 
@@ -552,44 +574,18 @@ function buildReducedBladeGeometries(): {
 
 function updateTileBounds(
   tile: InternalGrassTileRuntime,
-  minY: number,
-  maxY: number,
   maxBladeHeight: number,
   radialPadding: number,
-  suppliedMinX?: number,
-  suppliedMaxX?: number,
-  suppliedMinZ?: number,
-  suppliedMaxZ?: number,
 ): void {
-  const roots = tile.attributes.root.array as Float32Array
-  let minX = suppliedMinX ?? Infinity
-  let maxX = suppliedMaxX ?? -Infinity
-  let minZ = suppliedMinZ ?? Infinity
-  let maxZ = suppliedMaxZ ?? -Infinity
-  if (suppliedMinX === undefined) {
-    for (let index = 0; index < tile.candidateCount; index += 1) {
-      const offset = index * 3
-      minX = Math.min(minX, roots[offset]!)
-      maxX = Math.max(maxX, roots[offset]!)
-      minZ = Math.min(minZ, roots[offset + 2]!)
-      maxZ = Math.max(maxZ, roots[offset + 2]!)
-    }
-  }
-
-  tile.bounds.min.set(
-    minX - radialPadding,
-    minY,
-    minZ - radialPadding,
-  )
-  tile.bounds.max.set(
-    maxX + radialPadding,
-    maxY + maxBladeHeight,
-    maxZ + radialPadding,
-  )
+  const { min, max } = tile.rootBounds
+  tile.bounds.min.set(min.x - radialPadding, min.y, min.z - radialPadding)
+  tile.bounds.max.set(max.x + radialPadding, max.y + maxBladeHeight, max.z + radialPadding)
   tile.bounds.getBoundingSphere(tile.sphere)
   for (const mesh of [tile.full, tile.mid, tile.far]) {
-    mesh.boundingBox = tile.bounds.clone()
-    mesh.boundingSphere = tile.sphere.clone()
+    if (mesh.boundingBox) mesh.boundingBox.copy(tile.bounds)
+    else mesh.boundingBox = tile.bounds.clone()
+    if (mesh.boundingSphere) mesh.boundingSphere.copy(tile.sphere)
+    else mesh.boundingSphere = tile.sphere.clone()
   }
 }
 
