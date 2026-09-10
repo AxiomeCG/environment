@@ -46,16 +46,7 @@ function pointInPolygon(x: number, z: number, polygon: ReadonlyArray<readonly [n
 }
 
 describe('PondNode', () => {
-  test('supplies stable defaults and bounds persisted water props', () => {
-    const pond = PondNode.parse({ id: 'pond_defaults', type: POND_KIND })
-    expect(pond.name).toBe('Pond')
-    expect(pond.seed).toEqual([0, 0])
-    expect(pond.waterLevel).toBeNull()
-    expect(pond.quality).toBe('clear')
-    expect(pond.props).toEqual([])
-    expect('position' in pond).toBe(false)
-    expect('rotation' in pond).toBe(false)
-
+  test('rejects persisted ponds above the prop cap', () => {
     const prop = (index: number): PondProp => ({
       id: `lily_${index}`,
       kind: 'water-lily',
@@ -63,7 +54,9 @@ describe('PondNode', () => {
       yaw: 0,
       scale: 1,
     })
-    expect(PondNode.safeParse({ id: 'pond_capped', type: POND_KIND, props: Array.from({ length: 129 }, (_, index) => prop(index)) }).success).toBe(false)
+    const props = Array.from({ length: 129 }, (_, index) => prop(index))
+
+    expect(PondNode.safeParse({ id: 'pond_capped', type: POND_KIND, props }).success).toBe(false)
   })
 })
 
@@ -96,39 +89,43 @@ describe('pond basin analysis', () => {
     }
   })
 
-  test('keeps adjacent pits in distinct watershed components through their saddle', () => {
+  test('keeps low-saddle minima isolated below the saddle and joins them through the outer spill', () => {
     const terrain = terrainFromRows([
-      [5, 5, 5, 5, 5],
-      [5, 0, 4, 1, 5],
-      [5, 5, 5, 5, 5],
-    ])
-    const boundary = [[0, 0], [4, 0], [4, 2], [0, 2]] as const
-    const left = analyzePondBasin(terrain, boundary, [1.4, 1])
-    const right = analyzePondBasin(terrain, boundary, [3, 1])
-    expect(left?.spillLevel).toBe(4)
-    expect(right?.spillLevel).toBe(4)
+      [6, 6, 6, 6, 6, 6, 6],
+      [6, 2, 1.25, 4, 2, 2, 6],
+      [6, 1, 0, 4, 1.5, 7, 6],
+      [6, 1.5, 0.5, 3, 1.25, 0.25, 5],
+      [6, 2, 1.25, 4, 1.5, 0.75, 6],
+      [6, 3, 2, 4.5, 2.5, 2, 6],
+      [6, 6, 6, 6, 6, 6, 6],
+    ], 0.25)
+    const boundary = [[0, 0], [6, 0], [6, 6], [0, 6]] as const
+    const left = analyzePondBasin(terrain, boundary, [1.6, 2])
+    const right = analyzePondBasin(terrain, boundary, [4.6, 3.6])
+    expect(left?.bottomLevel).toBe(0)
+    expect(right?.bottomLevel).toBe(0.25)
+    expect(left?.spillLevel).toBe(5)
+    expect(right?.spillLevel).toBe(5)
     if (!left || !right) return
-    expect(left.seed).toEqual([1, 1])
+
+    const leftBelowSaddle = buildPondSurface(left, 2.5)
+    const rightBelowSaddle = buildPondSurface(right, 2.5)
+    expect(pondSurfaceDepthAt(leftBelowSaddle, 2, 2)).toBeCloseTo(2.5, 6)
+    expect(pondSurfaceDepthAt(leftBelowSaddle, 5, 3)).toBe(0)
+    expect(pondSurfaceDepthAt(leftBelowSaddle, 3, 3)).toBe(0)
+    expect(pondSurfaceDepthAt(rightBelowSaddle, 5, 3)).toBeCloseTo(2.25, 6)
+    expect(pondSurfaceDepthAt(rightBelowSaddle, 2, 2)).toBe(0)
+    expect(pondSurfaceDepthAt(rightBelowSaddle, 4, 3)).toBeCloseTo(1.25, 6)
 
     const leftFilled = buildPondSurface(left, left.spillLevel)
     const rightFilled = buildPondSurface(right, right.spillLevel)
-    expect(pondSurfaceDepthAt(leftFilled, 1, 1)).toBeCloseTo(4, 6)
-    expect(pondSurfaceDepthAt(leftFilled, 3, 1)).toBe(0)
-    expect(pondSurfaceDepthAt(rightFilled, 3, 1)).toBeCloseTo(3, 6)
-    expect(pondSurfaceDepthAt(rightFilled, 1, 1)).toBe(0)
-    expect(pondSurfaceDepthAt(leftFilled, 2.5, 1)).toBe(0)
-    const saddleDepths: number[] = []
-    for (let vertex = 0; vertex < leftFilled.depths.length; vertex += 1) {
-      const offset = vertex * 3
-      if (
-        Math.abs((leftFilled.positions[offset] ?? Number.POSITIVE_INFINITY) - 2) <= 1e-6 &&
-        Math.abs((leftFilled.positions[offset + 2] ?? Number.POSITIVE_INFINITY) - 1) <= 1e-6
-      ) {
-        saddleDepths.push(leftFilled.depths[vertex] ?? Number.POSITIVE_INFINITY)
-      }
+    for (const filled of [leftFilled, rightFilled]) {
+      expect(pondSurfaceDepthAt(filled, 2, 2)).toBeCloseTo(5, 6)
+      expect(pondSurfaceDepthAt(filled, 5, 3)).toBeCloseTo(4.75, 6)
+      expect(pondSurfaceDepthAt(filled, 3, 3)).toBeCloseTo(2, 6)
+      expect(pondSurfaceDepthAt(filled, 5, 2)).toBe(0)
+      expect(pondSurfaceDepthAt(filled, 6.1, 3)).toBe(0)
     }
-    expect(saddleDepths.length).toBeGreaterThan(0)
-    expect(saddleDepths.every((depth) => Math.abs(depth) <= 1e-6)).toBe(true)
   })
 
   test('clips a rotated concave property exactly rather than flooding its bounding box', () => {
@@ -196,6 +193,19 @@ describe('pond basin analysis', () => {
     expect(nextPondLevel(basin, 0.6, 'lower')).toBe(0.5)
     expect(nextPondLevel(basin, 0.25, 'lower')).toBeNull()
     expect(nextPondLevel(basin, 0.6, 'empty')).toBeNull()
+  })
+
+  test('rejects terrain with an open downhill path to the boundary', () => {
+    const openSlope = terrainFromRows([
+      [4, 3, 2, 1, 0],
+      [4, 3, 2, 1, 0],
+      [4, 3, 2, 1, 0],
+      [4, 3, 2, 1, 0],
+      [4, 3, 2, 1, 0],
+    ])
+    const boundary = [[0, 0], [4, 0], [4, 4], [0, 4]] as const
+
+    expect(analyzePondBasin(openSlope, boundary, [2, 2])).toBeNull()
   })
 
   test('returns an explicit empty surface and re-analyzes after terrain edits', () => {

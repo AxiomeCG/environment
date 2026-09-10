@@ -128,11 +128,49 @@ function connectedPondsForBasin(
   nodes: PondSceneNodes,
   siteId: string,
   basin: PondBasin,
+  preferredId: string | null,
+  startingLevel: number | null = null,
 ): PondNodeValue[] {
-  const spillSurface = buildPondSurface(basin, basin.spillLevel)
-  return sitePonds(nodes, siteId).filter(
-    (pond) => pondSurfaceDepthAt(spillSurface, pond.seed[0], pond.seed[1]) > WET_EPSILON,
-  )
+  const candidates = sitePonds(nodes, siteId)
+  const preferred = preferredId
+    ? candidates.find((pond) => String(pond.id) === preferredId)
+    : undefined
+  const connected = preferred ? [preferred] : []
+  const connectedIds = new Set(connected.map((pond) => String(pond.id)))
+  let connectedLevel = startingLevel
+  if (
+    preferred?.waterLevel !== null &&
+    preferred?.waterLevel !== undefined &&
+    (connectedLevel === null || preferred.waterLevel > connectedLevel)
+  ) {
+    connectedLevel = preferred.waterLevel
+  }
+
+  let added = true
+  while (added) {
+    added = false
+    for (const pond of candidates) {
+      if (connectedIds.has(String(pond.id))) continue
+      let connectionLevel = connectedLevel
+      if (
+        pond.waterLevel !== null &&
+        (connectionLevel === null || pond.waterLevel > connectionLevel)
+      ) {
+        connectionLevel = pond.waterLevel
+      }
+      if (connectionLevel === null && connected.length === 0) {
+        connectionLevel = basin.levels[0] ?? null
+      }
+      if (connectionLevel === null) continue
+      const surface = buildPondSurface(basin, connectionLevel)
+      if (pondSurfaceDepthAt(surface, pond.seed[0], pond.seed[1]) <= WET_EPSILON) continue
+      connected.push(pond)
+      connectedIds.add(String(pond.id))
+      connectedLevel = connectionLevel
+      added = true
+    }
+  }
+  return connected
 }
 
 function preferredPond(
@@ -192,7 +230,12 @@ export function inspectPondTarget(
   if (!terrain) return null
   const basin = analyzePondBasin(terrain, site.polygon.points, target.seed)
   if (!basin) return null
-  const connectedPonds = connectedPondsForBasin(nodes, target.siteId, basin)
+  const connectedPonds = connectedPondsForBasin(
+    nodes,
+    target.siteId,
+    basin,
+    target.pondId,
+  )
   const pond = preferredPond(connectedPonds, target.pondId)
   const level = effectiveLevel(connectedPonds)
   const surface = buildPondSurface(basin, level)
@@ -217,7 +260,7 @@ export function targetPondAtSeed(
   if (!terrain) return null
   const basin = analyzePondBasin(terrain, site.polygon.points, seed)
   if (!basin) return null
-  const pond = preferredPond(connectedPondsForBasin(nodes, site.id, basin), null)
+  const pond = preferredPond(connectedPondsForBasin(nodes, site.id, basin, null), null)
   return {
     basin,
     pond,
@@ -282,7 +325,19 @@ export function commitPondLevelAction(
   }
 
   const nextLevel = nextPondLevel(info.basin, info.level, action)
-  if (!info.pond) {
+  const actionPonds = connectedPondsForBasin(
+    nodes,
+    target.siteId,
+    info.basin,
+    info.pond ? String(info.pond.id) : target.pondId,
+    nextLevel,
+  )
+  const actionInfo: PondTargetInfo = {
+    ...info,
+    pond: preferredPond(actionPonds, info.pond ? String(info.pond.id) : target.pondId),
+    connectedPonds: actionPonds,
+  }
+  if (!actionInfo.pond) {
     if (nextLevel === null) return { ok: false, message: 'There is no pond water to change.' }
     const pond = PondNode.parse({
       parentId: info.site.id,
@@ -306,9 +361,9 @@ export function commitPondLevelAction(
     }
   }
 
-  const props = mergedProps(info.pond, info.connectedPonds)
+  const props = mergedProps(actionInfo.pond, actionInfo.connectedPonds)
   const alreadyAtLevel = nextLevel === info.level
-  const duplicates = duplicateIds(info)
+  const duplicates = duplicateIds(actionInfo)
   if (alreadyAtLevel && duplicates.length === 0) {
     return {
       ok: false,
@@ -316,17 +371,17 @@ export function commitPondLevelAction(
         action === 'raise' || action === 'fill'
           ? 'The pond is already at its spill level.'
           : 'The pond is already empty.',
-      target: targetFor(info.site.id, info.pond),
+      target: targetFor(info.site.id, actionInfo.pond),
     }
   }
-  updatePrimary(scene, info, { waterLevel: nextLevel, props })
+  updatePrimary(scene, actionInfo, { waterLevel: nextLevel, props })
   return {
     ok: true,
     message:
       nextLevel === null
         ? 'Pond emptied. Its basin and props are retained.'
         : `Pond level set to ${formatMetres(nextLevel)}.`,
-    target: targetFor(info.site.id, info.pond),
+    target: targetFor(info.site.id, actionInfo.pond),
   }
 }
 

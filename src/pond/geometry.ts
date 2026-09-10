@@ -13,7 +13,13 @@ import {
   MeshPhysicalMaterial,
 } from 'three'
 import { POND_WATER_APPEARANCE, type PondWaterAppearance } from './appearance'
-import { analyzePondBasin, buildPondSurface, type PondBasin, type PondSurface } from './basin'
+import {
+  analyzePondBasin,
+  buildPondSurface,
+  pondSurfaceDepthAt,
+  type PondBasin,
+  type PondSurface,
+} from './basin'
 import { buildPondShoreGeometry, createPondShoreDistances } from './shoreline'
 import { buildPondPropGeometry } from './props'
 import {
@@ -27,6 +33,7 @@ import { bakeWaterMaterial, type BakedWaterMaterial } from '../export/water-mate
 import { createWaterMaterial, type WaterMaterialOptions } from '../surroundings/water-material'
 
 const POND_WATER_MESH_NAME = 'environment-pond-water'
+const WET_EPSILON = 1e-4
 
 export type ResolvedPond = {
   site: SiteNode
@@ -45,20 +52,7 @@ export function resolvePond(node: PondNode, context: GeometryContext): ResolvedP
   const basin = analyzePondBasin(terrain, parent.polygon.points, node.seed)
   if (!basin) return null
 
-  const spillSurface = buildPondSurface(basin, basin.spillLevel)
-  const connected = [node]
-  for (const sibling of context.siblings) {
-    if ((sibling.type as string) !== POND_KIND) continue
-    const parsed = PondNodeSchema.safeParse(sibling)
-    if (
-      parsed.success &&
-      parsed.data.visible &&
-      parsed.data.id !== node.id &&
-      pondSurfaceContainsSeed(spillSurface, parsed.data.seed)
-    ) {
-      connected.push(parsed.data)
-    }
-  }
+  const connected = connectedPondsForBasin(node, context.siblings, basin)
   connected.sort((left, right) => {
     const levelOrder =
       (right.waterLevel ?? Number.NEGATIVE_INFINITY) - (left.waterLevel ?? Number.NEGATIVE_INFINITY)
@@ -267,31 +261,51 @@ function pondWaterMaterialOptions(
   }
 }
 
+function connectedPondsForBasin(
+  node: PondNode,
+  siblings: GeometryContext['siblings'],
+  basin: PondBasin,
+): PondNode[] {
+  const candidates = [node]
+  for (const sibling of siblings) {
+    if ((sibling.type as string) !== POND_KIND) continue
+    const parsed = PondNodeSchema.safeParse(sibling)
+    if (parsed.success && parsed.data.visible && parsed.data.id !== node.id) {
+      candidates.push(parsed.data)
+    }
+  }
+
+  const connected = [node]
+  const connectedIds = new Set<string>([String(node.id)])
+  let connectedLevel = node.waterLevel
+  let added = true
+  while (added) {
+    added = false
+    for (const pond of candidates) {
+      if (connectedIds.has(String(pond.id))) continue
+      let connectionLevel = connectedLevel
+      if (
+        pond.waterLevel !== null &&
+        (connectionLevel === null || pond.waterLevel > connectionLevel)
+      ) {
+        connectionLevel = pond.waterLevel
+      }
+      if (connectionLevel === null) continue
+      const surface = buildPondSurface(basin, connectionLevel)
+      if (pondSurfaceDepthAt(surface, pond.seed[0], pond.seed[1]) <= WET_EPSILON) continue
+      connected.push(pond)
+      connectedIds.add(String(pond.id))
+      connectedLevel = connectionLevel
+      added = true
+    }
+  }
+  return connected
+}
+
 function isWaterQuality(value: string): value is WaterQuality {
   return value === 'pure' || value === 'clear' || value === 'deep' || value === 'swampy'
 }
 
-function pondSurfaceContainsSeed(surface: PondSurface, seed: readonly [number, number]): boolean {
-  if (surface.level === null) return false
-  for (let offset = 0; offset < surface.positions.length; offset += 9) {
-    const ax = surface.positions[offset]!
-    const az = surface.positions[offset + 2]!
-    const bx = surface.positions[offset + 3]!
-    const bz = surface.positions[offset + 5]!
-    const cx = surface.positions[offset + 6]!
-    const cz = surface.positions[offset + 8]!
-    const first = (bx - ax) * (seed[1] - az) - (bz - az) * (seed[0] - ax)
-    const second = (cx - bx) * (seed[1] - bz) - (cz - bz) * (seed[0] - bx)
-    const third = (ax - cx) * (seed[1] - cz) - (az - cz) * (seed[0] - cx)
-    if (
-      (first >= -1e-7 && second >= -1e-7 && third >= -1e-7) ||
-      (first <= 1e-7 && second <= 1e-7 && third <= 1e-7)
-    ) {
-      return true
-    }
-  }
-  return false
-}
 
 function smoothStep(first: number, second: number, value: number): number {
   const amount = Math.min(1, Math.max(0, (value - first) / Math.max(1e-6, second - first)))

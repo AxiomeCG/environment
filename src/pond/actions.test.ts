@@ -17,13 +17,15 @@ import {
 } from './actions'
 import { POND_KIND, PondNode, type PondProp } from './schema'
 
-const BOUNDARY = [[0, 0], [4, 0], [4, 4], [0, 4]] as const
+const BOUNDARY = [[0, 0], [6, 0], [6, 6], [0, 6]] as const
 const BASIN_ROWS = [
-  [6, 6, 4, 6, 6],
-  [6, 3, 2, 3, 6],
-  [6, 2, 0, 2, 6],
-  [6, 3, 2, 3, 6],
-  [6, 6, 6, 6, 6],
+  [6, 6, 6, 6, 6, 6, 6],
+  [6, 2, 1, 4, 2, 2, 6],
+  [6, 1, 0, 4, 2, 7, 6],
+  [6, 2, 1, 3, 2, 1, 5],
+  [6, 2, 1, 4, 2, 1, 6],
+  [6, 3, 2, 4, 3, 2, 6],
+  [6, 6, 6, 6, 6, 6, 6],
 ] as const
 
 function terrainFromRows(rows: readonly (readonly number[])[]): TerrainField {
@@ -71,10 +73,10 @@ function sceneWith(nodes: readonly unknown[]) {
   return { scene: createSceneApi(store), changes }
 }
 
-function target(pondId: string | null = null) {
+function target(pondId: string | null = null, seed: readonly [number, number] = [2, 2]) {
   return {
     siteId: 'site_pond_actions',
-    seed: [2, 2] as const,
+    seed,
     pondId,
   }
 }
@@ -103,7 +105,7 @@ describe('pond scene actions', () => {
     })
   })
 
-  test('merges connected legacy ponds into one undoable update', () => {
+  test('merges pond records from connected minima without losing their props', () => {
     const first = PondNode.parse({
       id: 'pond_first',
       parentId: 'site_pond_actions',
@@ -114,7 +116,7 @@ describe('pond scene actions', () => {
     const second = PondNode.parse({
       id: 'pond_second',
       parentId: 'site_pond_actions',
-      seed: [2.25, 2],
+      seed: [5, 3],
       waterLevel: 2,
       props: [pondProp('koi', 'koi')],
     })
@@ -129,12 +131,40 @@ describe('pond scene actions', () => {
     expect(changes[0]?.update?.[0]).toMatchObject({
       id: first.id,
       data: {
-        waterLevel: 4,
+        waterLevel: 5,
         props: [
           { id: 'lily', kind: 'water-lily' },
           { id: 'koi', kind: 'koi' },
         ],
       },
+    })
+  })
+
+  test('keeps below-saddle pond records independently targetable', () => {
+    const first = PondNode.parse({
+      id: 'pond_shallow_left',
+      parentId: 'site_pond_actions',
+      seed: [2, 2],
+      waterLevel: 2,
+    })
+    const second = PondNode.parse({
+      id: 'pond_shallow_right',
+      parentId: 'site_pond_actions',
+      seed: [5, 3],
+      waterLevel: 1,
+    })
+    const site = pondSite([first.id, second.id])
+    const { scene, changes } = sceneWith([site, first, second])
+
+    const result = commitPondLevelAction(scene, target(second.id, [5, 3]), 'raise', 'clear')
+
+    expect(result.ok).toBe(true)
+    expect(changes).toHaveLength(1)
+    expect(changes[0]?.delete ?? []).toEqual([])
+    expect(changes[0]?.update).toHaveLength(1)
+    expect(changes[0]?.update?.[0]).toMatchObject({
+      id: second.id,
+      data: { waterLevel: 2 },
     })
   })
 

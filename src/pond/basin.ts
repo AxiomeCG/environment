@@ -94,15 +94,7 @@ export function analyzePondBasin(
   if (!bottomVertex) return null
   const bottomLevel = bottomVertex.height
 
-  const rootByVertex = buildWatershedRoots(mesh)
-  const selectedRoot = rootByVertex[firstBottomVertex]
-  if (selectedRoot === undefined || selectedRoot < 0) return null
-  const catchment = new Uint8Array(mesh.vertices.length)
-  for (let index = 0; index < rootByVertex.length; index += 1) {
-    if (rootByVertex[index] === selectedRoot) catchment[index] = 1
-  }
-
-  const spillLevel = priorityFloodToSpill(mesh, bottomVertices, catchment)
+  const spillLevel = priorityFloodToBoundary(mesh, bottomVertices)
   const tolerance = heightTolerance(terrain)
   if (!Number.isFinite(spillLevel) || spillLevel <= bottomLevel + tolerance) return null
 
@@ -477,104 +469,9 @@ function descendToMinimum(mesh: TerrainMesh, initialVertex: number): number[] {
     current = lowerVertex
   }
 }
-function buildWatershedRoots(mesh: TerrainMesh): Int32Array {
-  const vertexCount = mesh.vertices.length
-  const parent = new Int32Array(vertexCount)
-  for (let index = 0; index < vertexCount; index += 1) parent[index] = index
-
-  const representativeOf = (start: number): number => {
-    let representative = start
-    while (parent[representative] !== representative) {
-      representative = parent[representative] as number
-    }
-    let current = start
-    while (current !== representative) {
-      const next = parent[current] as number
-      parent[current] = representative
-      current = next
-    }
-    return representative
-  }
-
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const height = mesh.vertices[vertex]?.height
-    if (height === undefined) continue
-    for (const neighbor of mesh.adjacency[vertex] ?? []) {
-      if (neighbor <= vertex) continue
-      const neighborHeight = mesh.vertices[neighbor]?.height
-      if (neighborHeight === undefined || Math.abs(neighborHeight - height) > GEOMETRY_EPSILON) continue
-      const firstRoot = representativeOf(vertex)
-      const secondRoot = representativeOf(neighbor)
-      if (firstRoot === secondRoot) continue
-      const lowerRoot = Math.min(firstRoot, secondRoot)
-      parent[Math.max(firstRoot, secondRoot)] = lowerRoot
-    }
-  }
-
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    parent[vertex] = representativeOf(vertex)
-  }
-
-  const plateauHeight = new Float64Array(vertexCount)
-  plateauHeight.fill(Number.POSITIVE_INFINITY)
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const plateau = parent[vertex] as number
-    const height = mesh.vertices[vertex]?.height
-    if (height !== undefined) plateauHeight[plateau] = Math.min(plateauHeight[plateau] as number, height)
-  }
-
-  const downstream = new Int32Array(vertexCount)
-  downstream.fill(-1)
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    const plateau = parent[vertex] as number
-    const height = plateauHeight[plateau] as number
-    for (const neighbor of mesh.adjacency[vertex] ?? []) {
-      const neighborPlateau = parent[neighbor] as number
-      if (neighborPlateau === plateau) continue
-      const neighborHeight = plateauHeight[neighborPlateau] as number
-      if (neighborHeight >= height - GEOMETRY_EPSILON) continue
-      const selected = downstream[plateau] as number
-      const selectedHeight = selected >= 0
-        ? plateauHeight[selected] as number
-        : Number.POSITIVE_INFINITY
-      if (
-        neighborHeight < selectedHeight - GEOMETRY_EPSILON ||
-        (Math.abs(neighborHeight - selectedHeight) <= GEOMETRY_EPSILON && neighborPlateau < selected)
-      ) {
-        downstream[plateau] = neighborPlateau
-      }
-    }
-  }
-
-  const minimumByPlateau = new Int32Array(vertexCount)
-  minimumByPlateau.fill(-1)
-  const resolveMinimum = (start: number): number => {
-    const path: number[] = []
-    let current = start
-    while (minimumByPlateau[current] === -1 && downstream[current] !== -1) {
-      path.push(current)
-      current = downstream[current] as number
-    }
-    const minimum = minimumByPlateau[current] === -1
-      ? current
-      : minimumByPlateau[current] as number
-    minimumByPlateau[current] = minimum
-    for (const plateau of path) minimumByPlateau[plateau] = minimum
-    return minimum
-  }
-
-  const rootByVertex = new Int32Array(vertexCount)
-  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    rootByVertex[vertex] = resolveMinimum(parent[vertex] as number)
-  }
-  return rootByVertex
-}
-
-
-function priorityFloodToSpill(
+function priorityFloodToBoundary(
   mesh: TerrainMesh,
   sources: readonly number[],
-  catchment: Uint8Array,
 ): number {
   const levels = new Float64Array(mesh.vertices.length)
   levels.fill(Number.POSITIVE_INFINITY)
@@ -586,29 +483,28 @@ function priorityFloodToSpill(
     pushPriority(heap, { vertex: source, level })
   }
 
-  let spillLevel = Number.POSITIVE_INFINITY
   while (heap.length > 0) {
     const current = popPriority(heap)
-    if (!current || current.level > (levels[current.vertex] ?? Number.POSITIVE_INFINITY) + GEOMETRY_EPSILON) continue
-    if (current.level >= spillLevel - GEOMETRY_EPSILON) return spillLevel
+    if (
+      !current ||
+      current.level > (levels[current.vertex] ?? Number.POSITIVE_INFINITY) + GEOMETRY_EPSILON
+    ) {
+      continue
+    }
     const vertex = mesh.vertices[current.vertex]
     if (!vertex) continue
-    if (vertex.boundary) spillLevel = Math.min(spillLevel, current.level)
+    if (vertex.boundary) return current.level
 
     for (const neighbor of mesh.adjacency[current.vertex] ?? []) {
       const neighborHeight = mesh.vertices[neighbor]?.height
       if (neighborHeight === undefined) continue
       const nextLevel = Math.max(current.level, neighborHeight)
-      if (catchment[neighbor] !== 1) {
-        spillLevel = Math.min(spillLevel, nextLevel)
-        continue
-      }
       if (nextLevel >= (levels[neighbor] ?? Number.POSITIVE_INFINITY) - GEOMETRY_EPSILON) continue
       levels[neighbor] = nextLevel
       pushPriority(heap, { vertex: neighbor, level: nextLevel })
     }
   }
-  return spillLevel
+  return Number.POSITIVE_INFINITY
 }
 
 function pushPriority(heap: PriorityEntry[], entry: PriorityEntry): void {

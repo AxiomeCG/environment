@@ -254,6 +254,10 @@ Open **Environment → Water** and choose the **Pond** or **River** tab.
   Swampy have distinct appearances. The soft shoreline fades against the actual
   terrain; **Rocky bank** adds deterministic, terrain-following stones. Pond koi
   swim within the wet footprint, independently of the ambient bird-motion toggle.
+  **Fill to spill** uses the enclosing terrain's lowest escape elevation, including
+  depressions with multiple low points. Below an internal ridge, ponds stay separate;
+  once water overtops it, connected ponds merge and retain their props. Dry islands
+  and ground above the water level remain uncovered.
 - **River:** choose **Draw new river**, then click terrain to lay out its centerline.
   A cursor marker, visible points, and a live count confirm placement; two points
   are required. **Finish river**, **Remove last point**, and **Cancel** sit beside
