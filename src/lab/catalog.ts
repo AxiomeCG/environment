@@ -28,8 +28,11 @@ export type EnvironmentLabCase = {
   variants: readonly { id: string; label: string; description: string }[]
 }
 
-const SOURCE_ROOT = 'https://github.com/pascalorg/plugin-environment/blob/main/src'
-const source = (label: string, path: string) => ({ label, url: `${SOURCE_ROOT}/${path}` })
+const SOURCE_ROOT = 'https://github.com/AxiomeCG/environment/blob/main/src'
+const source = (label: string, path: string) => ({
+  label: `${label} (repository access required)`,
+  url: `${SOURCE_ROOT}/${path}`,
+})
 const camera = (
   position: [number, number, number],
   target: [number, number, number],
@@ -40,7 +43,7 @@ export const ENVIRONMENT_LAB_FEATURES = [
     id: 'surface-materials',
     title: 'Surface materials',
     description:
-      'Four terrain-draped PBR paint channels, texture scale, feathered Site transitions and baked vertex colors.',
+      'Four terrain-draped PBR paint channels, texture scale, feathered Site transitions and current-production GLB inspection.',
   },
   {
     id: 'surface-authoring',
@@ -174,9 +177,9 @@ export const ENVIRONMENT_LAB_CASES = [
       },
       {
         id: 'floorplan-export',
-        action: 'Compare 2D, 3D and the portability notes.',
+        action: 'Compare 2D, 3D and the current production model export.',
         expectation:
-          '2D shows authored colors; live PBR textures are bundled assets while bake/export uses vertex colors.',
+          '2D shows authored colors; inspect the exporter’s actual material-baked GLB separately from the editable Review JSON rather than assuming live/export visual equivalence.',
       },
     ],
     sources: [
@@ -326,7 +329,7 @@ export const ENVIRONMENT_LAB_CASES = [
     kind: 'zoo',
     title: 'Ground Cover exclusions',
     summary:
-      'A true-scale obstacle field combines a building slab, freestanding solid, pond, island, dry bank and carved river without destructively erasing grass paint.',
+      'A true-scale obstacle field combines a building slab, freestanding solid, pond, broad low dry island, bank and carved river without destructively erasing grass paint.',
     featureIds: [
       'ground-cover-obstacles',
       'ground-cover-appearance',
@@ -343,7 +346,7 @@ export const ENVIRONMENT_LAB_CASES = [
       },
       {
         id: 'water-boundary',
-        action: 'Inspect pond water, its dry bank and raised island, then the river channel.',
+        action: 'Inspect pond water, its dry bank and broad low island, then the river channel.',
         expectation: 'Resolved wet triangles exclude roots while dry terrain remains paintable.',
       },
       {
@@ -381,8 +384,8 @@ export const ENVIRONMENT_LAB_CASES = [
       {
         id: 'pond-island',
         title: '3 · Pond, bank and island',
-        description: 'Wet and dry terrain share one painted grass field.',
-        camera: camera([10, 7, 18], [4, 3, 11]),
+        description: 'A genuine wet basin surrounds a broad low dry island in one painted grass field.',
+        camera: camera([10, 11, 18], [4, 4.4, 11]),
       },
       {
         id: 'river',
@@ -396,7 +399,7 @@ export const ENVIRONMENT_LAB_CASES = [
       {
         id: 'drained-pond',
         label: 'Drained pond',
-        description: 'Retains the pond node and props with a null level so paint can reappear.',
+        description: 'Retains the pond node with a null level so paint can reappear; this fixture has no Pond props.',
       },
       {
         id: 'water-removed',
@@ -411,7 +414,7 @@ export const ENVIRONMENT_LAB_CASES = [
     kind: 'gym',
     title: 'Pond basin and level gym',
     summary:
-      'The production basin resolver receives the established five-metre deterministic bowl, never a decorative water plane.',
+      'The production basin resolver receives an established deterministic 4 m × 4 m sample span, never a decorative water plane.',
     featureIds: ['pond-basins'],
     reviewSteps: [
       {
@@ -444,19 +447,19 @@ export const ENVIRONMENT_LAB_CASES = [
       source('Pond tool', 'pond/tool.tsx'),
       source('Pond schema', 'pond/schema.ts'),
     ],
-    camera: camera([7, 7, 8], [2, 1, 2]),
+    camera: camera([7, 12, 8], [2, 4, 2]),
     stations: [
       {
         id: 'basin',
         title: '1 · Known bowl',
         description: 'Five-by-five one-metre terrain samples with a contained zero-metre bottom.',
-        camera: camera([7, 7, 8], [2, 1, 2]),
+        camera: camera([7, 12, 8], [2, 4, 2]),
       },
       {
         id: 'spill',
         title: '2 · Spill boundary',
-        description: 'The six-metre rim defines the maximum connected water level.',
-        camera: camera([5, 3, 7], [2, 4, 2]),
+        description: 'The lowest rim sample sets the actual four-metre spill level.',
+        camera: camera([6, 11, -5], [2, 4, 1]),
       },
     ],
     variants: [
@@ -521,25 +524,25 @@ export const ENVIRONMENT_LAB_CASES = [
       source('Prop fit rules', 'pond/props.ts'),
       source('Koi motion', 'pond/koi-motion.ts'),
     ],
-    camera: camera([7, 5, 8], [2, 2, 2]),
+    camera: camera([7, 12, 8], [2, 4, 2]),
     stations: [
       {
         id: 'shoreline',
         title: '1 · Shoreline',
-        description: 'Inspect the real terrain intersection and optional stones.',
-        camera: camera([5, 2.5, 6], [2, 4, 2]),
+        description: 'Inspect the real terrain intersection and optional stones from above the rim.',
+        camera: camera([6, 10, 7], [2, 4, 2]),
       },
       {
         id: 'lilies',
         title: '2 · Lilies',
         description: 'Surface props must fit entirely inside the wet outline.',
-        camera: camera([4.5, 5, 4.5], [1.8, 4, 2]),
+        camera: camera([5, 10, 5], [2, 4, 2]),
       },
       {
         id: 'koi',
         title: '3 · Koi',
         description: 'Animated props require at least 0.20 m of resolved depth.',
-        camera: camera([4.5, 4, 5], [2.2, 3.5, 2.1]),
+        camera: camera([5, 10, 5.5], [2.2, 3.4, 2.1]),
       },
     ],
     variants: [
@@ -701,26 +704,27 @@ export const ENVIRONMENT_LAB_CASES = [
       source('Landscape continuation', 'surroundings/river-landscape.ts'),
       source('Bridge derivation', 'surroundings/river-bridges.ts'),
     ],
-    camera: camera([23, 14, 22], [8, 1, 8]),
+    camera: camera([28, 18, 28], [8, 1, 8]),
     stations: [
       {
         id: 'source',
         title: '1 · Source contract',
-        description: 'Rounded caps use half-width; mountain sources reach the property boundary.',
-        camera: camera([8, 6, 8], [2, 1, 2]),
+        description: 'Rounded caps stay internal; mountain sources reach the south boundary.',
+        camera: camera([8, 6, 7], [2, 1, 0]),
       },
       {
         id: 'bridge',
-        title: '2 · Continuation and bridge',
+        title: '2 · Source continuation bridge',
         description:
-          'Presentation terrain consumes the authored endpoint without becoming an authored node.',
-        camera: camera([15, 9, 14], [9, 0, 9]),
+          'The fixed primary frontage crosses the production mountain continuation outside the Site.',
+        camera: camera([17, 12, 9], [-0.7, 0.5, -7.85]),
       },
       {
         id: 'outlet',
-        title: '3 · Outlet contract',
-        description: 'Sea is available only for a proven coastal regional seed.',
-        camera: camera([19, 7, 20], [14, 0, 14]),
+        title: '3 · Sea outlet and bridge',
+        description:
+          'The coastal rounded-to-sea variant continues to a real bridge beyond the east frontage.',
+        camera: camera([45, 18, 55], [23.85, 0.5, 35]),
       },
     ],
     variants: [
@@ -752,8 +756,8 @@ export const ENVIRONMENT_LAB_CASES = [
     kind: 'museum',
     title: 'Regional surroundings',
     summary:
-      'A concave Site demonstrates boundary clipping, frontage policies and seeded presentation context while the Site remains editable.',
-    featureIds: ['surroundings-regional', 'surface-materials'],
+      'A concave Site combines authored river continuation, boundary clipping, frontage policies and seeded presentation context while the Site remains editable.',
+    featureIds: ['surroundings-regional', 'surface-materials', 'river-terrain', 'river-flow'],
     reviewSteps: [
       {
         id: 'boundary',
@@ -777,9 +781,9 @@ export const ENVIRONMENT_LAB_CASES = [
       {
         id: 'context',
         action:
-          'Inspect roads, homes, trees, shared shadows and distant context; edit the Surface or Site.',
+          'Inspect roads, homes, trees, shared shadows and authored river continuation; edit the Surface or Site.',
         expectation:
-          'Presentation context is derived, while the semantic Site and its painted transition remain editable.',
+          'Presentation context is derived from the semantic Site and River while both authored nodes and the painted transition remain editable.',
       },
     ],
     sources: [
@@ -787,6 +791,7 @@ export const ENVIRONMENT_LAB_CASES = [
       source('Boundary/frontage model', 'surroundings/frontages.ts'),
       source('Runtime roads', 'surroundings/runtime-road-graph.ts'),
       source('Neighborhood shadows', 'surroundings/neighborhood-shadows.tsx'),
+      source('River continuation', 'surroundings/river-landscape.ts'),
     ],
     camera: camera([33, 24, 34], [12, 1, 12]),
     stations: [
@@ -803,14 +808,21 @@ export const ENVIRONMENT_LAB_CASES = [
         camera: camera([29, 13, 12], [16, 0, 8]),
       },
       {
+        id: 'river',
+        title: '3 · Authored river continuation',
+        description:
+          'Mountain and sea endpoints continue across the regional terrain and road graph.',
+        camera: camera([44, 15, 29], [30, 1, 15]),
+      },
+      {
         id: 'neighborhood',
-        title: '3 · Houses, trees and shadows',
+        title: '4 · Houses, trees and shadows',
         description: 'Seeded regional context uses production instancing and terrain sampling.',
         camera: camera([42, 15, 28], [22, 2, 17]),
       },
       {
         id: 'transition',
-        title: '4 · Surface transition',
+        title: '5 · Surface transition',
         description: 'Only painted Surface material feathers six metres beyond the boundary.',
         camera: camera([10, 7, 31], [10, 0, 20]),
       },
@@ -925,7 +937,7 @@ export const ENVIRONMENT_LAB_CASES = [
     kind: 'museum',
     title: 'Regional landmarks after dark',
     summary:
-      'The proven pascal-suburbs coastal seed frames day/night windows, streetlights, commerce, skyline, boulders, fields and a pause-aware lighthouse.',
+      'The fixed environment-lab-night-2295 coastal seed frames day/night windows, streetlights, gas and supermarket lots, a parked car, skyline, boulders, fields and a pause-aware lighthouse.',
     featureIds: ['surroundings-regional', 'surroundings-motion', 'atmosphere-sky'],
     reviewSteps: [
       {
@@ -936,9 +948,9 @@ export const ENVIRONMENT_LAB_CASES = [
       },
       {
         id: 'landmarks',
-        action: 'Visit commerce, fields, skyline/boulders and lighthouse stations.',
+        action: 'Visit the commerce, distant landscape and lighthouse stations.',
         expectation:
-          'Generated third-ring families and the coastal landmark are presentation context, not editable semantic nodes.',
+          'The fixed plan supplies gas station, supermarket, parked cars, fields, skyline, boulders and the coastal landmark as presentation context rather than editable nodes.',
       },
       {
         id: 'pause',
@@ -959,31 +971,28 @@ export const ENVIRONMENT_LAB_CASES = [
       source('Night lighting', 'surroundings/night-lighting.ts'),
       source('Lighthouse beacon', 'surroundings/lighthouse-beacon.tsx'),
     ],
-    camera: camera([52, 25, 55], [18, 3, 18]),
+    camera: camera([182.536, 121.559, 218.666], [20.678, 5.022, 56.808]),
     stations: [
       {
         id: 'commerce',
-        title: '1 · Commerce',
-        description: 'Gas station and supermarket use reserved viable road plots when generated.',
-        camera: camera([51, 13, 28], [32, 2, 20]),
+        title: '1 · Gas station and supermarket',
+        description:
+          'One framed production streetscape contains both viable lots and its parked-car context.',
+        camera: camera([182.536, 121.559, 218.666], [20.678, 5.022, 56.808]),
       },
       {
-        id: 'fields',
-        title: '2 · Fields and boulders',
-        description: 'Bounded third-ring terrain detail.',
-        camera: camera([45, 17, 48], [29, 1, 31]),
-      },
-      {
-        id: 'skyline',
-        title: '3 · Skyline and windows',
-        description: 'Seeded opaque window grids share the night factor.',
-        camera: camera([28, 14, 48], [20, 7, 32]),
+        id: 'distant-landscape',
+        title: '2 · Fields, skyline and boulders',
+        description:
+          'One production view frames a woodland field together with real skyline and boulder instances.',
+        camera: camera([45.302, 182.362, 494.431], [-145.826, 44.75, 303.303]),
       },
       {
         id: 'lighthouse',
-        title: '4 · Coastal lighthouse',
-        description: 'A rotating 20-second beacon with solar and pause gating.',
-        camera: camera([68, 20, 68], [42, 7, 42]),
+        title: '3 · Coastal lighthouse',
+        description:
+          'The 24.0 m landmark carries a rotating 20-second beacon with solar and pause gating.',
+        camera: camera([140.514, 40.286, 363.951], [111.084, 16.153, 334.521]),
       },
     ],
     variants: [
@@ -1022,7 +1031,8 @@ export const ENVIRONMENT_LAB_CASES = [
       },
       {
         id: 'manual',
-        action: 'Open Manual sun; change elevation, azimuth and north offset in the real controls.',
+        action:
+          'Open Manual sun; compare the non-geolocated display clock, elevation, azimuth and north offset in the real controls.',
         expectation:
           'Manual and time modes drive the same solar lighting state; changing settings pauses time playback.',
       },
@@ -1224,9 +1234,9 @@ export const ENVIRONMENT_LAB_CASES = [
       },
       {
         id: 'bake',
-        action: 'Use the existing model export/bake path and compare it with the live scene.',
+        action: 'Run the current production model exporter and inspect its GLB beside the live scene.',
         expectation:
-          'Authored node builders create static portable geometry; Surface textures become vertex colors and animated water/koi/grass behavior is not baked.',
+          'The exporter currently emits material-baked static geometry. Inspect its actual inclusions and limits; live motion or visual equivalence is not promised, and the separate Review JSON retains the editable graph and Environment configuration.',
       },
       {
         id: 'presentation',
@@ -1263,8 +1273,8 @@ export const ENVIRONMENT_LAB_CASES = [
       },
       {
         id: 'export',
-        title: '3 · Static portability',
-        description: 'Inspect which appearance and motion survive the existing bake/export path.',
+        title: '3 · Production export result',
+        description: 'Inspect the current material-baked GLB without treating its encoding as a stable contract.',
         camera: camera([18, 12, 15], [8, 2, 8]),
       },
     ],
@@ -1292,7 +1302,7 @@ export const ENVIRONMENT_LAB_CASES = [
     kind: 'museum',
     title: 'Living landscape',
     summary:
-      'A compact combined museum connects a concave/sloped Site, painted Surface, flowered grass, basin/koi, rocky curved river, regional context, sky, weather and night.',
+      'A compact combined museum connects a concave/sloped Site, painted Surface, flowered grass, a genuine basin with koi and a broad low island, rocky curved river, regional context, sky, weather and night.',
     featureIds: [
       'combined-landscape',
       'surface-materials',
@@ -1357,8 +1367,8 @@ export const ENVIRONMENT_LAB_CASES = [
       {
         id: 'pond',
         title: '2 · Basin, koi and island',
-        description: 'Terrain-resolved water and dry-land grass share one field.',
-        camera: camera([14, 8, 23], [7, 4, 17]),
+        description: 'A broad low dry island and viable pond life sit inside a genuine surrounding wet depression.',
+        camera: camera([14, 16, 25], [7, 4.5, 18]),
       },
       {
         id: 'river',

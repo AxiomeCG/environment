@@ -73,7 +73,7 @@ test('missing controls receive defaults without replacing explicit zeroes', () =
     }),
   ).toMatchObject({
     bladeWidth: 0.035,
-    bladeHeight: 0.15,
+    bladeHeight: 0.3,
   })
   expect(
     getMissingGrassFieldDefaults({

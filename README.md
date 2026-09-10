@@ -394,11 +394,13 @@ const fixture = createEnvironmentLabFixture('living-landscape', 'daylight')
 initializeEnvironmentLabFixture('living-landscape', fixture)
 ```
 
+With the integration host running on port 3001, open the local [Environment lab](http://localhost:3001/environment-lab) at `/environment-lab`.
+
 The host owns routes, scratch persistence, scene replacement, camera UI, and review
-downloads. Start with the
-[executable lab guide](https://github.com/pascalorg/plugin-environment/blob/main/docs/lab/README.md),
-then use its [case guide](https://github.com/pascalorg/plugin-environment/blob/main/docs/lab/cases.md)
-and [reproducibility contract](https://github.com/pascalorg/plugin-environment/blob/main/docs/lab/reproducibility.md).
+downloads. Start with the [executable lab guide](./docs/lab/README.md), then use
+its [case guide](./docs/lab/cases.md) and
+[reproducibility contract](./docs/lab/reproducibility.md). Catalog source links
+target the private `AxiomeCG/environment` repository and require repository access.
 
 ## Documentation map
 

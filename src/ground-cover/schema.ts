@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { GrassPaintFieldData } from './paint-field'
 
 export const DEFAULT_GRASS_BLADE_WIDTH = 0.035
-export const DEFAULT_GRASS_BLADE_HEIGHT = 0.15
+export const DEFAULT_GRASS_BLADE_HEIGHT = 0.3
 export const DEFAULT_GRASS_BLADE_REST_BEND = 0.22
 
 export const GrassFieldNode = BaseNode.extend({

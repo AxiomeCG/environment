@@ -8,13 +8,13 @@ import {
   quantize,
   SiteNode,
   SlabNode,
-  type SiteNode as SiteNodeValue,
-  type TerrainField,
 } from '@pascal-app/core'
+import type { SiteNode as SiteNodeValue, TerrainField } from '@pascal-app/core'
 import type { SceneGraph } from '@pascal-app/editor'
-import { DEFAULT_SKY_SETTINGS, SKY_PRESETS, type SkySettings } from '../atmosphere/settings'
+import { DEFAULT_SKY_SETTINGS, SKY_PRESETS } from '../atmosphere/settings'
+import type { SkySettings } from '../atmosphere/settings'
 import { resetThunderAudioSession } from '../atmosphere/weather-audio'
-import { GrassFieldNode } from '../ground-cover/schema'
+import { DEFAULT_GRASS_BLADE_HEIGHT, GrassFieldNode } from '../ground-cover/schema'
 import { createGrassHeightField } from '../ground-cover/height-field'
 import {
   createGrassPaintField,
@@ -23,16 +23,19 @@ import {
   siteBounds,
 } from '../ground-cover/paint-field'
 import { DEFAULT_PAINT_STROKE_SETTINGS } from '../ground-cover/paint-stroke'
-import { analyzePondBasin, type PondBasin } from '../pond/basin'
-import { PondNode, type PondProp, type WaterQuality } from '../pond/schema'
+import { analyzePondBasin } from '../pond/basin'
+import type { PondBasin } from '../pond/basin'
+import { PondNode } from '../pond/schema'
+import type { PondProp, WaterQuality } from '../pond/schema'
 import {
   ENVIRONMENT_CONFIGURATION_VERSION,
   EnvironmentConfigurationSchema,
   importEnvironmentConfiguration,
-  type EnvironmentConfiguration,
 } from '../presentation'
+import type { EnvironmentConfiguration } from '../presentation'
 import { clearRiverAuthoring } from '../river/store'
-import { RiverNode, type RiverOutlet, type RiverSource } from '../river/schema'
+import { RiverNode } from '../river/schema'
+import type { RiverOutlet, RiverSource } from '../river/schema'
 import { rebuildRiverTerrain } from '../river/terrain'
 import { useEnvironmentStore } from '../store'
 import { deriveLandscapeRegion } from '../surroundings/landscape-region'
@@ -43,11 +46,8 @@ import {
 } from '../surface-material/material-types'
 import { createSurfaceMaterialField, encodeSurfaceMaterialField } from '../surface-material/field'
 import { SurfaceMaterialNode } from '../surface-material/schema'
-import {
-  getEnvironmentLabCase,
-  type EnvironmentLabCase,
-  type EnvironmentLabCamera,
-} from './catalog'
+import { getEnvironmentLabCase } from './catalog'
+import type { EnvironmentLabCamera, EnvironmentLabCase } from './catalog'
 
 export type EnvironmentLabFixture = {
   scene: SceneGraph
@@ -93,6 +93,7 @@ const CONCAVE_BOUNDARY = [
 ] as const
 const COASTAL_SEED = 'pascal-suburbs'
 const INLAND_SEED = 'environment-lab-8'
+const NIGHT_SEED = 'environment-lab-night-2295'
 
 function selectionFor(
   caseId: string,
@@ -126,26 +127,30 @@ function createFixtureTerrain(kind: TerrainKind): TerrainField {
   }
 
   const large = kind === 'regional' || kind === 'combined'
-  const side = large ? 33 : 17
+  const spacing = kind === 'mixed' || kind === 'combined' ? 0.5 : 1
+  const extent = large ? 32 : 16
+  const side = extent / spacing + 1
   const field = createTerrainField({
     origin: [0, 0],
-    spacing: 1,
+    spacing,
     cols: side,
     rows: side,
     step: 0.01,
   })
 
   for (let row = 0; row < field.rows; row += 1) {
+    const z = row * spacing
     for (let col = 0; col < field.cols; col += 1) {
+      const x = col * spacing
       let height = 0
       if (kind === 'surface') {
-        height = 0.45 + Math.sin(col * 0.52) * 0.28 + Math.cos(row * 0.43) * 0.2
+        height = 0.45 + Math.sin(x * 0.52) * 0.28 + Math.cos(z * 0.43) * 0.2
       } else if (kind === 'mixed') {
         height = 6
       } else if (kind === 'regional') {
-        height = 0.6 + col * 0.055 + row * 0.025
+        height = 0.6 + x * 0.055 + z * 0.025
       } else if (kind === 'combined') {
-        height = 6 + Math.max(0, col - 14) * 0.08 + row * 0.015
+        height = 6 + Math.max(0, x - 14) * 0.08 + z * 0.015
       }
       field.heights[row * field.cols + col] = quantize(field, height)
     }
@@ -157,17 +162,22 @@ function createFixtureTerrain(kind: TerrainKind): TerrainField {
 }
 
 function sculptIslandBasin(field: TerrainField, centerX: number, centerZ: number): void {
-  for (let row = -4; row <= 4; row += 1) {
-    for (let col = -4; col <= 4; col += 1) {
-      const distance = Math.hypot(col, row)
-      if (distance > 4) continue
-      const index = (centerZ + row) * field.cols + centerX + col
-      const floor = Math.min(6, 0.35 + distance * 1.35)
-      field.heights[index] = quantize(field, floor)
+  for (let row = 0; row < field.rows; row += 1) {
+    const z = field.origin[1] + row * field.spacing
+    for (let col = 0; col < field.cols; col += 1) {
+      const x = field.origin[0] + col * field.spacing
+      const dx = x - centerX
+      const dz = z - centerZ
+      if (Math.hypot(dx, dz) > 4) continue
+      const basin =
+        6.1 * Math.exp(-(dx * dx + dz * dz) / (2 * 2.2 * 2.2))
+      const islandDx = dx - 0.5
+      const island =
+        5.8 * Math.exp(-(islandDx * islandDx + dz * dz) / (2 * 1.3 * 1.3))
+      const height = Math.max(0.35, Math.min(6, 6 - basin + island))
+      field.heights[row * field.cols + col] = quantize(field, height)
     }
   }
-  field.heights[centerZ * field.cols + centerX] = quantize(field, 7.25)
-  field.heights[centerZ * field.cols + centerX - 1] = quantize(field, 0.35)
 }
 
 function createSurfaceNode(
@@ -252,7 +262,7 @@ function createGrassNode(
     name: 'Environment Lab Ground Cover',
     bladeWidth: 0.035,
     bladeWidthVariation: 36,
-    bladeHeight: 0.18,
+    bladeHeight: DEFAULT_GRASS_BLADE_HEIGHT,
     bladeHeightVariation: 42,
     bladeRestBend: 0.32,
     bladeTintVariation: 34,
@@ -271,8 +281,8 @@ function createGrassNode(
 
 function pondSeed(kind: TerrainKind): [number, number] {
   if (kind === 'bowl') return [2, 2]
-  if (kind === 'combined') return [6, 18]
-  return [3, 11]
+  if (kind === 'combined') return [5, 18]
+  return [2, 11]
 }
 
 function requireBasin(
@@ -300,14 +310,14 @@ function pondProps(kind: TerrainKind): PondProp[] {
     {
       id: 'water-lily_lab-a',
       kind: 'water-lily',
-      position: [centerX - 1, centerZ - 0.55],
+      position: [centerX - 1.65, centerZ + 0.55],
       yaw: 0.5,
       scale: 0.82,
     },
     {
       id: 'koi_lab-a',
       kind: 'koi',
-      position: [centerX - 0.7, centerZ + 0.45],
+      position: [centerX - 1.85, centerZ - 0.2],
       yaw: 1.6,
       scale: 0.92,
     },
@@ -338,7 +348,10 @@ function createPondNodes(
         ? 'swampy'
         : 'clear'
   const hasLife =
-    caseId === 'pond-life' || caseId === 'portability' || caseId === 'living-landscape'
+    caseId === 'pond-life' ||
+    caseId === 'portability' ||
+    caseId === 'living-landscape' ||
+    (caseId === 'pond-basins' && variantId === 'dry-retained')
   const waterLevel = dry
     ? null
     : stepped
@@ -351,7 +364,10 @@ function createPondNodes(
     seed,
     waterLevel,
     quality,
-    shoreline: variantId.includes('rocky') || caseId === 'living-landscape' ? 'rocky' : 'soft',
+    shoreline:
+      variantId.includes('rocky') || variantId === 'swampy-life' || caseId === 'living-landscape'
+        ? 'rocky'
+        : 'soft',
     props: hasLife ? pondProps(kind) : [],
   })
   if (variantId !== 'connected-seeds') return [primary]
@@ -379,19 +395,31 @@ function riverEndpoints(
   source: RiverSource
   outlet: RiverOutlet
 } {
-  if (caseId !== 'river-endpoints') {
-    if (caseId === 'living-landscape') {
-      return {
-        points: [
-          [18, 4],
-          [23, 8],
-          [27, 13],
-          [30, 17],
-        ],
-        source: 'rounded',
-        outlet: 'rounded',
-      }
+  if (caseId === 'regional-surroundings') {
+    return {
+      points: [
+        [2, 0],
+        [10, 7],
+        [20, 13],
+        [32, 16],
+      ],
+      source: 'mountain',
+      outlet: 'sea',
     }
+  }
+  if (caseId === 'living-landscape') {
+    return {
+      points: [
+        [18, 4],
+        [23, 8],
+        [27, 13],
+        [32, 16],
+      ],
+      source: 'rounded',
+      outlet: 'sea',
+    }
+  }
+  if (caseId !== 'river-endpoints') {
     return {
       points: [
         [2, 2],
@@ -408,9 +436,9 @@ function riverEndpoints(
   const outlet: RiverOutlet = variantId.endsWith('-sea') ? 'sea' : 'rounded'
   return {
     points: [
-      source === 'mountain' ? [0, 2] : [2, 2],
-      [7, 5],
-      [10, 9],
+      source === 'mountain' ? [2, 0] : [2, 2],
+      [8, 5],
+      [9, 11],
       outlet === 'sea' ? [16, 14] : [14, 13],
     ],
     source,
@@ -479,6 +507,26 @@ function createStructure(caseId: string, siteId: string, baseElevation: number) 
   return [building, level, slab, block]
 }
 
+function createFloorplanContext(caseId: string, siteId: string, baseElevation: number) {
+  const buildingId = `building_lab-${caseId}`
+  const levelId = `level_lab-${caseId}`
+  const level = LevelNode.parse({
+    id: levelId,
+    parentId: buildingId,
+    name: 'Environment Lab Level',
+    baseElevation,
+    height: 3,
+    children: [],
+  })
+  const building = BuildingNode.parse({
+    id: buildingId,
+    parentId: siteId,
+    name: 'Environment Lab Building',
+    children: [levelId],
+  })
+  return [building, level]
+}
+
 function planFor(caseId: string, variantId: string): BuildPlan {
   switch (caseId) {
     case 'surface-materials':
@@ -502,7 +550,7 @@ function planFor(caseId: string, variantId: string): BuildPlan {
     case 'river-endpoints':
       return { terrain: 'flat', river: true }
     case 'regional-surroundings':
-      return { terrain: 'regional', surface: true }
+      return { terrain: 'regional', surface: true, river: true }
     case 'natural-presets':
       return { terrain: 'regional' }
     case 'night-landmarks':
@@ -589,12 +637,12 @@ function buildScene(caseId: string, variantId: string): SceneGraph {
       siteChildren.push(pond.id)
     }
   }
-  if (plan.structure) {
-    const baseElevation = plan.terrain === 'mixed' || plan.terrain === 'combined' ? 6 : 0
-    const structure = createStructure(caseId, siteId, baseElevation)
-    for (const node of structure) nodes[node.id] = node
-    siteChildren.push(structure[0]!.id)
-  }
+  const baseElevation = plan.terrain === 'mixed' || plan.terrain === 'combined' ? 6 : 0
+  const structure = plan.structure
+    ? createStructure(caseId, siteId, baseElevation)
+    : createFloorplanContext(caseId, siteId, baseElevation)
+  for (const node of structure) nodes[node.id] = node
+  siteChildren.push(structure[0]!.id)
 
   site = SiteNode.parse({ ...site, children: siteChildren })
   nodes[site.id] = site
@@ -613,6 +661,22 @@ function fixedInlandSeed(): string {
 }
 
 function frontagesFor(caseId: string, variantId: string): FrontageContexts {
+  if (caseId === 'river-endpoints') {
+    if (variantId === 'inland-rounded') return {}
+    const bridgeEdge = variantId === 'coastal-rounded-sea' ? 1 : 0
+    return {
+      [bridgeEdge]: {
+        separator: 'primary-road',
+        access: 'none',
+        roadStyleId: 'collector',
+      },
+    }
+  }
+  if (caseId === 'night-landmarks') {
+    return {
+      0: { separator: 'primary-road', access: 'driveway', roadStyleId: 'collector' },
+    }
+  }
   if (
     caseId !== 'regional-surroundings' &&
     caseId !== 'night-landmarks' &&
@@ -716,10 +780,11 @@ function configurationFor(caseId: string, variantId: string): EnvironmentConfigu
   const inland = caseId === 'river-endpoints' && variantId === 'inland-rounded'
   const hidden = variantId === 'presentation-hidden'
   const skyDisabled = variantId === 'sky-disabled'
+  const seed = caseId === 'night-landmarks' ? NIGHT_SEED : inland ? fixedInlandSeed() : COASTAL_SEED
   return EnvironmentConfigurationSchema.parse({
     version: ENVIRONMENT_CONFIGURATION_VERSION,
     preset,
-    seed: inland ? fixedInlandSeed() : COASTAL_SEED,
+    seed,
     frontages: frontagesFor(caseId, variantId),
     sky: skyFor(caseId, variantId),
     visibility: {

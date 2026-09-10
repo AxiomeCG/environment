@@ -60,7 +60,8 @@
   "description": "Pascal plugin for terrain-dependent ground cover and future environment systems.",
   "files": [
     "src",
-    "README.md"
+    "README.md",
+    "docs/lab"
   ],
   "homepage": "https://editor.pascal.app/docs/developers/plugins",
   "keywords": [
