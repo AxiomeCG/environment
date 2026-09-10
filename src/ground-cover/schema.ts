@@ -1,6 +1,8 @@
 import { BaseNode, nodeType, objectId } from '@pascal-app/core'
 import { z } from 'zod'
 import { GrassPaintFieldData } from './paint-field'
+export const GRASS_FIELD_KIND = 'environment:ground-cover'
+
 
 export const DEFAULT_GRASS_BLADE_WIDTH = 0.035
 export const DEFAULT_GRASS_BLADE_HEIGHT = 0.3
@@ -8,7 +10,7 @@ export const DEFAULT_GRASS_BLADE_REST_BEND = 0.22
 
 export const GrassFieldNode = BaseNode.extend({
   id: objectId('grass-field'),
-  type: nodeType('environment:ground-cover'),
+  type: nodeType(GRASS_FIELD_KIND),
   position: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   rotation: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   bladeWidth: z.number().positive().default(DEFAULT_GRASS_BLADE_WIDTH),

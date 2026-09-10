@@ -1,18 +1,103 @@
-import { SiteNode, useScene, type AnyNode, type AnyNodeId } from '@pascal-app/core'
+import {
+  createSceneApi,
+  SiteNode,
+  useScene,
+  type AnyNode,
+  type AnyNodeId,
+} from '@pascal-app/core'
 import { useEditor, useInteractionScope } from '@pascal-app/editor'
 import { useViewer } from '@pascal-app/viewer'
 import { act, create } from '@react-three/test-renderer'
 import { expect, test } from 'bun:test'
-import { StrictMode } from 'react'
+import { StrictMode, type ComponentType, type ReactNode } from 'react'
 import { OrthographicCamera, Raycaster, Vector2, Vector3 } from 'three'
 import { activateRiverTool } from '../pascal-tool-actions'
 import { riverNodeOf } from './actions'
+import { retainRiverToolBody } from './interaction'
 import { RiverNode } from './schema'
 import { useRiverStore } from './store'
 import { rebuildRiverTerrain } from './terrain'
-import { RiverTool } from './tool'
+import { cancelRiverInteraction, RiverTool } from './tool'
 
-test('river clicks survive native tool reactivation and renderer remounts in Site coordinates', async () => {
+test('StrictMode body replay preserves first Edit path intent until true unmount', async () => {
+  const previousRiver = useRiverStore.getState()
+  const previousViewer = useViewer.getState()
+  const previousScope = useInteractionScope.getState()
+  const previousScene = useScene.getState()
+  const previousHistory = useScene.temporal.getState()
+  const site = SiteNode.parse({
+    id: 'site_river_first_activation',
+    children: ['river_first_activation', 'river_successor'],
+  })
+  const firstRiver = RiverNode.parse({
+    id: 'river_first_activation',
+    parentId: site.id,
+    points: [[0, 0], [2, 1], [4, 1], [6, 0]],
+  })
+  const successor = RiverNode.parse({
+    id: 'river_successor',
+    parentId: site.id,
+    points: [[0, 2], [3, 3]],
+  })
+  let releaseReplay: (() => void) | undefined
+
+  try {
+    useScene.getState().setScene(
+      {
+        [site.id]: site,
+        [firstRiver.id]: firstRiver as unknown as AnyNode,
+        [successor.id]: successor as unknown as AnyNode,
+      },
+      [site.id],
+    )
+    useRiverStore.getState().cancelRiverInteraction()
+    useRiverStore.getState().editPath(firstRiver.id)
+    const historyBefore = useScene.temporal.getState().pastStates.length
+    const editableControlPoints = () => {
+      const editingId = useRiverStore.getState().editingRiverId
+      return editingId
+        ? riverNodeOf(useScene.getState().nodes[editingId as AnyNodeId])?.points ?? []
+        : []
+    }
+
+    const releaseInitial = retainRiverToolBody(cancelRiverInteraction)
+    releaseInitial()
+    releaseReplay = retainRiverToolBody(cancelRiverInteraction)
+    await Promise.resolve()
+
+    expect(useRiverStore.getState().editingRiverId).toBe(firstRiver.id)
+    expect(editableControlPoints()).toHaveLength(4)
+    expect(useScene.temporal.getState().pastStates.length).toBe(historyBefore)
+
+    releaseReplay()
+    releaseReplay = undefined
+    await Promise.resolve()
+    expect(useRiverStore.getState().editingRiverId).toBeNull()
+    expect(useRiverStore.getState().previewRiver).toBeNull()
+    expect(useInteractionScope.getState().scope.kind).toBe('idle')
+    expect(useScene.temporal.getState().pastStates.length).toBe(historyBefore)
+
+    useRiverStore.getState().editPath(firstRiver.id)
+    const releaseOldOwner = retainRiverToolBody(cancelRiverInteraction)
+    releaseOldOwner()
+    useRiverStore.getState().editPath(successor.id)
+    releaseReplay = retainRiverToolBody(cancelRiverInteraction)
+    await Promise.resolve()
+    expect(useRiverStore.getState().editingRiverId).toBe(successor.id)
+    expect(editableControlPoints()).toHaveLength(2)
+    expect(useScene.temporal.getState().pastStates.length).toBe(historyBefore)
+  } finally {
+    releaseReplay?.()
+    await Promise.resolve()
+    useRiverStore.setState(previousRiver, true)
+    useViewer.setState(previousViewer, true)
+    useInteractionScope.setState(previousScope, true)
+    useScene.setState(previousScene, true)
+    useScene.temporal.setState(previousHistory, true)
+  }
+})
+
+test('river replacement preserves authored draft until true deactivation', async () => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const previousEditor = useEditor.getState()
   const previousScope = useInteractionScope.getState()
@@ -41,11 +126,33 @@ test('river clicks survive native tool reactivation and renderer remounts in Sit
       ],
     },
   })
-  const tool = (key: string) => (
+  const sceneApi = createSceneApi(useScene)
+  const registryToolContext = {
+    activeLevelId: null,
+    isCameraDragging: () => useViewer.getState().cameraDragging,
+    sceneApi,
+    selectNode: (nodeId: AnyNodeId) =>
+      useViewer.getState().setSelection({ selectedIds: [nodeId] }),
+  }
+  const registryToolModule = new URL(
+    './components/tools/registry-tool-context.tsx',
+    import.meta.resolve('@pascal-app/editor'),
+  ).href
+  const { RegistryToolProvider } = (await import(registryToolModule)) as {
+    RegistryToolProvider: ComponentType<{
+      children: ReactNode
+      value: typeof registryToolContext
+    }>
+  }
+  const tool = (key: string, mounted = true) => (
     <StrictMode>
-      <group key={key} position={[14, 0, -7]} rotation={[0, 0.4, 0]}>
-        <RiverTool />
-      </group>
+      <RegistryToolProvider value={registryToolContext}>
+        {mounted && (
+          <group key={key} position={[14, 0, -7]} rotation={[0, 0.4, 0]}>
+            <RiverTool />
+          </group>
+        )}
+      </RegistryToolProvider>
     </StrictMode>
   )
   const clickTerrain = (x: number, z: number) => {
@@ -106,13 +213,23 @@ test('river clicks survive native tool reactivation and renderer remounts in Sit
     expect(useRiverStore.getState().draft?.points).toHaveLength(1)
     expect(useRiverStore.getState().draft!.points[0]![0]).toBeCloseTo(-4)
 
+    const historyBeforeRemount = useScene.temporal.getState().pastStates.length
     await renderer.update(tool('remounted'))
+    await Promise.resolve()
     expect(useRiverStore.getState().draft?.points).toHaveLength(1)
+    expect(useRiverStore.getState().draft!.points[0]![0]).toBeCloseTo(-4)
+    expect(useInteractionScope.getState().scope).toEqual({
+      kind: 'drafting',
+      tool: 'environment:river',
+    })
+    expect(useViewer.getState().inputDragging).toBe(false)
+    expect(useScene.temporal.getState().pastStates.length).toBe(historyBeforeRemount)
     await act(async () => {
       activateRiverTool(useEditor.getState())
       clickTerrain(4, 2)
     })
     expect(useRiverStore.getState().draft?.points).toHaveLength(2)
+    expect(useRiverStore.getState().draft!.points[0]![0]).toBeCloseTo(-4)
     expect(useRiverStore.getState().draft!.points[1]![1]).toBeCloseTo(2)
 
     await renderer.advanceFrames(1, 1 / 60)
@@ -189,8 +306,13 @@ test('river clicks survive native tool reactivation and renderer remounts in Sit
     await act(async () => {
       useEditor.getState().setMode('select')
     })
+    await renderer.update(tool('deactivated', false))
+    await Promise.resolve()
     expect(useRiverStore.getState().draft).toBeNull()
     expect(useRiverStore.getState().editingRiverId).toBeNull()
+    expect(useRiverStore.getState().previewRiver).toBeNull()
+    expect(useViewer.getState().inputDragging).toBe(false)
+    expect(useInteractionScope.getState().scope.kind).toBe('idle')
     expect(riverNodeOf(useScene.getState().nodes[riverId])!.points[1]![0]).toBeCloseTo(4)
     expect(useScene.temporal.getState().pastStates.length).toBe(historyBeforeDrag)
     await renderer.unmount()

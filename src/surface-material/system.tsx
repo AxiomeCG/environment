@@ -4,8 +4,8 @@ import {
   type AnyNode,
   type AnyNodeId,
   sceneRegistry,
+  type SceneApi,
   useLiveTerrain,
-  useScene,
 } from '@pascal-app/core'
 import { useEffect } from 'react'
 import type { Object3D } from 'three'
@@ -19,8 +19,8 @@ export type SurfaceSiteChange = {
 }
 
 export function surfaceSiteChanges(
-  currentNodes: Record<string, AnyNode>,
-  previousNodes: Record<string, AnyNode>,
+  currentNodes: Readonly<Record<string, AnyNode>>,
+  previousNodes: Readonly<Record<string, AnyNode>>,
 ): SurfaceSiteChange[] {
   const changes: SurfaceSiteChange[] = []
   for (const node of Object.values(currentNodes)) {
@@ -48,13 +48,13 @@ export function surfaceSiteChanges(
   return changes
 }
 
-export default function SurfaceMaterialSystem() {
+export default function SurfaceMaterialSystem({ sceneApi }: { sceneApi: SceneApi }) {
   useEffect(() => {
-    const unsubscribeScene = useScene.subscribe((current, previous) => {
-      for (const change of surfaceSiteChanges(current.nodes, previous.nodes)) {
-        const node = current.nodes[change.id as AnyNodeId]
+    const unsubscribeScene = sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
+      for (const change of surfaceSiteChanges(currentNodes, previousNodes)) {
+        const node = currentNodes[change.id as AnyNodeId]
         const site = node?.parentId
-          ? current.nodes[node.parentId as AnyNodeId]
+          ? currentNodes[node.parentId as AnyNodeId]
           : undefined
         const root = sceneRegistry.nodes.get(change.id) as Object3D | undefined
         if (
@@ -66,7 +66,7 @@ export default function SurfaceMaterialSystem() {
         ) {
           continue
         }
-        current.markDirty(change.id as AnyNodeId)
+        sceneApi.markDirty(change.id as AnyNodeId)
       }
     })
 
@@ -87,27 +87,27 @@ export default function SurfaceMaterialSystem() {
       }
       if (changedSiteIds.size === 0) return
 
-      const scene = useScene.getState()
-      for (const node of Object.values(scene.nodes)) {
+      const nodes = sceneApi.nodes()
+      for (const node of Object.values(nodes)) {
         if (
           (node.type as string) !== SURFACE_MATERIAL_KIND ||
           !changedSiteIds.has(node.parentId as string)
         ) {
           continue
         }
-        const site = scene.nodes[node.parentId as AnyNodeId]
+        const site = nodes[node.parentId as AnyNodeId]
         const root = sceneRegistry.nodes.get(node.id) as Object3D | undefined
         if (site?.type !== 'site' || !root || !updateSurfaceMaterialTerrain(root, site)) {
-          scene.markDirty(node.id)
+          sceneApi.markDirty(node.id)
         }
       }
     })
 
     return () => {
-      unsubscribeScene()
+      unsubscribeScene?.()
       unsubscribeLiveTerrain()
     }
-  }, [])
+  }, [sceneApi])
 
   return null
 }

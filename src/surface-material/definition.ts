@@ -1,4 +1,5 @@
 import type { NodeDefinition } from '@pascal-app/core'
+import type { FloorplanNodeExtension } from '@pascal-app/editor'
 import {
   buildSurfaceMaterialBakeGeometry,
   buildSurfaceMaterialBakeGeometryAsync,
@@ -18,6 +19,9 @@ type SurfaceMaterialDefinition = Omit<
       selectionHighlight?: boolean
     }
     floorplanScope: 'site'
+    extensions: {
+      'pascal:editor/floorplan': FloorplanNodeExtension
+    }
   }
 
 export const surfaceMaterialDefinition: SurfaceMaterialDefinition = {
@@ -53,6 +57,12 @@ export const surfaceMaterialDefinition: SurfaceMaterialDefinition = {
   floorplanScope: 'site',
   system: { module: () => import('./system'), priority: 1 },
   tool: () => import('./tool'),
+  extensions: {
+    'pascal:editor/floorplan': {
+      tool: () => import('./floorplan-tool'),
+      availableModes: ['default', 'expert'],
+    },
+  },
   toolHints: [
     { key: 'Drag', label: 'Paint surface material' },
     { key: 'Esc', label: 'Cancel stroke or stop' },

@@ -2,11 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import {
   activateGroundCoverTool,
   activatePondTool,
+  activateRiverTool,
+  activateSurfaceMaterialTool,
   applyPascalShortcut,
-  cancelEnvironmentPaintToolFor2D,
   GROUND_COVER_TOOL,
-  type GroundCoverToolActionTarget,
   POND_TOOL,
+  RIVER_TOOL,
+  SURFACE_MATERIAL_TOOL,
   type PascalToolActionTarget,
 } from './pascal-tool-actions'
 
@@ -17,15 +19,38 @@ function actionTarget(calls: string[]): PascalToolActionTarget {
   }
 }
 
-function groundCoverTarget(
-  calls: string[],
-  state: Pick<GroundCoverToolActionTarget, 'mode' | 'tool' | 'viewMode'>,
-): GroundCoverToolActionTarget {
+function environmentToolTarget() {
+  const state: {
+    mode: 'build' | 'select'
+    tool: string | null
+    viewMode: '2d' | 'split'
+  } = {
+    mode: 'select',
+    tool: null,
+    viewMode: '2d',
+  }
   return {
-    ...state,
-    setMode: (mode) => calls.push(`mode:${mode}`),
-    setTool: (tool) => calls.push(`tool:${tool}`),
-    setViewMode: (mode) => calls.push(`view:${mode}`),
+    state,
+    target: {
+      get mode() {
+        return state.mode
+      },
+      get tool() {
+        return state.tool
+      },
+      get viewMode() {
+        return state.viewMode
+      },
+      setMode: (mode: 'build' | 'select') => {
+        state.mode = mode
+      },
+      setTool: (tool: string | null) => {
+        state.tool = tool
+      },
+      setViewMode: (mode: 'split') => {
+        state.viewMode = mode
+      },
+    },
   }
 }
 
@@ -53,69 +78,23 @@ describe('Pascal environment shortcuts', () => {
 })
 
 describe('Environment canvas tool view lifecycle', () => {
-  test('promotes a deliberate 2D view to Split when painting starts', () => {
-    const calls: string[] = []
-    const editor = groundCoverTarget(calls, {
-      mode: 'select',
-      tool: null,
-      viewMode: '2d',
-    })
+  test('keeps a deliberate 2D view active for every Environment workflow', () => {
+    const { state, target } = environmentToolTarget()
+    const workflows = [
+      ['ground cover', GROUND_COVER_TOOL, activateGroundCoverTool],
+      ['surface material', SURFACE_MATERIAL_TOOL, activateSurfaceMaterialTool],
+      ['pond', POND_TOOL, activatePondTool],
+      ['river', RIVER_TOOL, activateRiverTool],
+    ] as const
 
-    activateGroundCoverTool(editor)
+    for (const [name, tool, activate] of workflows) {
+      state.mode = 'select'
+      state.tool = null
+      state.viewMode = '2d'
 
-    expect(calls).toEqual([
-      'view:split',
-      `tool:${GROUND_COVER_TOOL}`,
-      'mode:build',
-    ])
-  })
+      activate(target)
 
-  test('leaving Split for 2D cancels Ground Cover painting', () => {
-    const calls: string[] = []
-    const editor = groundCoverTarget(calls, {
-      mode: 'build',
-      tool: GROUND_COVER_TOOL,
-      viewMode: '2d',
-    })
-
-    expect(cancelEnvironmentPaintToolFor2D(editor)).toBe(true)
-    expect(calls).toEqual(['mode:select'])
-  })
-
-  test('keeps Ground Cover armed in Split', () => {
-    const calls: string[] = []
-    const editor = groundCoverTarget(calls, {
-      mode: 'build',
-      tool: GROUND_COVER_TOOL,
-      viewMode: 'split',
-    })
-
-    expect(cancelEnvironmentPaintToolFor2D(editor)).toBe(false)
-    expect(calls).toEqual([])
-  })
-
-  test('promotes 2D to Split when the Water tool starts', () => {
-    const calls: string[] = []
-    const editor = groundCoverTarget(calls, {
-      mode: 'select',
-      tool: null,
-      viewMode: '2d',
-    })
-
-    activatePondTool(editor)
-
-    expect(calls).toEqual(['view:split', `tool:${POND_TOOL}`, 'mode:build'])
-  })
-
-  test('leaving Split for 2D cancels Water and removes its contour overlay', () => {
-    const calls: string[] = []
-    const editor = groundCoverTarget(calls, {
-      mode: 'build',
-      tool: POND_TOOL,
-      viewMode: '2d',
-    })
-
-    expect(cancelEnvironmentPaintToolFor2D(editor)).toBe(true)
-    expect(calls).toEqual(['mode:select'])
+      expect(state, name).toEqual({ mode: 'build', tool, viewMode: '2d' })
+    }
   })
 })

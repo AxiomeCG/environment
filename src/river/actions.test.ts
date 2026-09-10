@@ -1,4 +1,5 @@
 import {
+  createSceneApi,
   createTerrainField,
   encodeTerrainField,
   persistedTerrainFieldOf,
@@ -6,6 +7,7 @@ import {
   surfaceHeightAt,
   type AnyNode,
   type AnyNodeId,
+  type SceneStoreLike,
   type SiteNode as SiteNodeValue,
 } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
@@ -14,7 +16,6 @@ import {
   deleteRiver,
   updateRiver,
   type RiverNodeChanges,
-  type RiverSceneWriter,
 } from './actions'
 import { RiverNode } from './schema'
 
@@ -47,44 +48,53 @@ function flatSite() {
 function mutableScene(site: SiteNodeValue) {
   const nodes = { [site.id]: site } as unknown as Record<AnyNodeId, AnyNode>
   const commits: RiverNodeChanges[] = []
-  const scene: RiverSceneWriter = {
+  const state = {
     nodes,
     rootNodeIds: [site.id as AnyNodeId],
-    applyNodeChanges: (changes) => {
-      commits.push(changes)
-      for (const update of changes.update ?? []) {
-        const current = nodes[update.id]
-        if (current) nodes[update.id] = { ...current, ...update.data } as AnyNode
-      }
-      for (const creation of changes.create ?? []) {
-        nodes[creation.node.id] = creation.node
-        if (creation.parentId) {
-          const parent = nodes[creation.parentId]
-          if (parent?.type === 'site') {
-            nodes[creation.parentId] = {
-              ...parent,
-              children: [...parent.children, creation.node.id],
-            } as AnyNode
-          }
-        }
-      }
-      for (const id of changes.delete ?? []) {
-        const deleted = nodes[id]
-        if (deleted?.parentId) {
-          const parentId = deleted.parentId as AnyNodeId
-          const parent = nodes[parentId]
-          if (parent?.type === 'site') {
-            nodes[parentId] = {
-              ...parent,
-              children: parent.children.filter((childId) => childId !== id),
-            } as AnyNode
-          }
-        }
-        delete nodes[id]
+    dirtyNodes: new Set<AnyNodeId>(),
+    createNode(node: AnyNode, parentId?: AnyNodeId) {
+      nodes[node.id] = node
+      if (!parentId) return
+      const parent = nodes[parentId]
+      if (parent?.type === 'site') {
+        nodes[parentId] = { ...parent, children: [...parent.children, node.id] } as AnyNode
       }
     },
+    updateNode(id: AnyNodeId, data: Partial<AnyNode>) {
+      const current = nodes[id]
+      if (current) nodes[id] = { ...current, ...data } as AnyNode
+    },
+    deleteNode(id: AnyNodeId) {
+      const deleted = nodes[id]
+      if (deleted?.parentId) {
+        const parentId = deleted.parentId as AnyNodeId
+        const parent = nodes[parentId]
+        if (parent?.type === 'site') {
+          nodes[parentId] = {
+            ...parent,
+            children: parent.children.filter((childId) => childId !== id),
+          } as AnyNode
+        }
+      }
+      delete nodes[id]
+    },
+    markDirty(id: AnyNodeId) {
+      state.dirtyNodes.add(id)
+    },
+    applyNodeChanges(changes: RiverNodeChanges) {
+      commits.push(changes)
+      for (const update of changes.update ?? []) state.updateNode(update.id, update.data)
+      for (const creation of changes.create ?? []) {
+        state.createNode(creation.node, creation.parentId)
+      }
+      for (const id of changes.delete ?? []) state.deleteNode(id)
+    },
   }
-  return { commits, nodes, scene }
+  const store: SceneStoreLike = {
+    getState: () => state,
+    temporal: { getState: () => ({ pause() {}, resume() {} }) },
+  }
+  return { commits, nodes, scene: createSceneApi(store) }
 }
 
 const DEFAULTS = {

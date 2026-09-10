@@ -7,11 +7,10 @@ import {
   surfaceHeightAt,
   persistedTerrainFieldOf,
   terrainFieldOf,
-  useLiveNodeOverrides,
   useLiveTerrain,
-  useScene,
   type AnyNode,
   type AnyNodeId,
+  type SceneApi,
   type SiteNode,
   type TerrainField,
 } from '@pascal-app/core'
@@ -19,8 +18,8 @@ import {
   EDITOR_LAYER,
   markToolCancelConsumed,
   NO_RAYCAST,
-  useEditor,
   useInteractionScope,
+  useRegistryToolContext,
 } from '@pascal-app/editor'
 import { useViewer } from '@pascal-app/viewer'
 import { createPortal, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
@@ -40,20 +39,35 @@ import {
   type Material,
   type Object3D,
 } from 'three'
-import {
-  cancelEnvironmentPaintToolFor2D,
-  type GroundCoverToolActionTarget,
-} from '../pascal-tool-actions'
+import { useSceneApiNodes } from '../use-scene-api-nodes'
 import { sampleRoadAlignmentPoints } from '../surroundings/streetscape/road-network-geometry'
 import {
   createRiver,
   riverNodeOf,
+  resolveActiveRiverSite,
   riversForSite,
   updateRiver,
   type RiverActionResult,
 } from './actions'
+import {
+  beginRiverControlPointScope,
+  claimRiverGesture,
+  endRiverControlPointScope,
+  endRiverControlPointScopeForNode,
+  endRiverDraftingScope,
+  ensureRiverDraftingScope,
+  ownsRiverControlPointScope,
+  ownsRiverDraftingScope,
+  ownsRiverGesture,
+  publishRiverNodePreview,
+  retainRiverNodePreview,
+  releaseRiverGesture,
+  retainRiverToolBody,
+  retainRiverDraftingScope,
+} from './interaction'
 import { buildRiverPreviewGeometry } from './geometry'
-import { RIVER_KIND, RiverNode as RiverNodeSchema, type RiverNode, type RiverPoint } from './schema'
+import { RiverNode as RiverNodeSchema } from './schema'
+import type { RiverNode, RiverPoint } from './schema'
 import { useRiverStore } from './store'
 import { rebuildRiverTerrain, riverTerrainBaseline, sampleRiverPath } from './terrain'
 
@@ -77,7 +91,7 @@ type PointDrag = {
   preview: RiverNode
 }
 
-function draftPreviewNode(): RiverNode | null {
+export function draftPreviewNode(): RiverNode | null {
   const state = useRiverStore.getState()
   const draft = state.draft
   if (!draft) return null
@@ -105,15 +119,15 @@ function draftPreviewNode(): RiverNode | null {
   return parsed.success ? parsed.data : null
 }
 
-function endRiverLiveTerrain(siteId: string | null): void {
+export function endRiverLiveTerrain(siteId: string | null): void {
   if (siteId) useLiveTerrain.getState().end(siteId)
 }
 
-function authoringBaseline(site: SiteNode): TerrainField {
+export function authoringBaseline(site: SiteNode): TerrainField {
   return persistedTerrainFieldOf(site) ?? rebuildRiverTerrain(site, []).terrain
 }
 
-function previewTerrainForRiver(
+export function previewTerrainForRiver(
   site: SiteNode,
   river: RiverNode,
   nodes: Readonly<Record<AnyNodeId, AnyNode>>,
@@ -134,11 +148,12 @@ function previewTerrainForRiver(
   for (const patch of patches) liveTerrain.advance(site.id, rebuilt.terrain, patch)
 }
 
-export function refreshRiverDraftTerrain(): boolean {
+export function refreshRiverDraftTerrain(sceneApi: SceneApi): boolean {
   const preview = draftPreviewNode()
   const draft = useRiverStore.getState().draft
   if (!draft) return false
-  const site = useScene.getState().nodes[draft.siteId as AnyNodeId]
+  const nodes = sceneApi.nodes()
+  const site = nodes[draft.siteId as AnyNodeId]
   if (site?.type !== 'site') {
     endRiverLiveTerrain(draft.siteId)
     return false
@@ -147,15 +162,15 @@ export function refreshRiverDraftTerrain(): boolean {
     endRiverLiveTerrain(draft.siteId)
     return false
   }
-  previewTerrainForRiver(site as SiteNode, preview, useScene.getState().nodes)
+  previewTerrainForRiver(site as SiteNode, preview, nodes)
   return true
 }
 
-export function finishRiverDraft(): RiverActionResult {
+export function finishRiverDraft(sceneApi: SceneApi): RiverActionResult {
   const state = useRiverStore.getState()
   const draft = state.draft
   if (!draft) return { ok: false, message: 'Start a new river before finishing.' }
-  const result = createRiver(useScene.getState(), draft.siteId, {
+  const result = createRiver(sceneApi, draft.siteId, {
     points: draft.points,
     width: state.width,
     depth: state.depth,
@@ -171,6 +186,7 @@ export function finishRiverDraft(): RiverActionResult {
     return result
   }
   endRiverLiveTerrain(draft.siteId)
+  endRiverDraftingScope()
   state.cancelRiverInteraction()
   if (result.river) {
     useViewer.getState().setSelection({ selectedIds: [result.river.id as AnyNodeId] })
@@ -182,9 +198,12 @@ export function finishRiverDraft(): RiverActionResult {
 
 export function cancelRiverInteraction(): boolean {
   const state = useRiverStore.getState()
+  const editingRiverId = state.editingRiverId
   const siteId = state.draft?.siteId ?? state.previewRiver?.parentId ?? null
-  const hadInteraction = Boolean(state.draft || state.editingRiverId || state.previewRiver)
+  const hadInteraction = Boolean(state.draft || editingRiverId || state.previewRiver)
   endRiverLiveTerrain(siteId ? String(siteId) : null)
+  endRiverDraftingScope()
+  if (editingRiverId) endRiverControlPointScopeForNode(editingRiverId)
   state.cancelRiverInteraction()
   useViewer.getState().setInputDragging(false)
   return hadInteraction
@@ -192,7 +211,8 @@ export function cancelRiverInteraction(): boolean {
 
 export function RiverTool() {
   const { camera, gl, scene } = useThree()
-  const nodes = useScene((state) => state.nodes)
+  const { activeLevelId, isCameraDragging, sceneApi } = useRegistryToolContext()
+  const nodes = useSceneApiNodes(sceneApi)
   const selection = useViewer((state) => state.selection)
   const draft = useRiverStore((state) => state.draft)
   const editingRiverId = useRiverStore((state) => state.editingRiverId)
@@ -205,36 +225,37 @@ export function RiverTool() {
   const flowSpeed = useRiverStore((state) => state.flowSpeed)
   const quality = useRiverStore((state) => state.quality)
   const shoreline = useRiverStore((state) => state.shoreline)
-  const selectedRiver = useMemo(
+  const activeSite = useMemo(
     () =>
-      selection.selectedIds.length === 1
-        ? riverNodeOf(nodes[selection.selectedIds[0] as AnyNodeId])
-        : null,
-    [nodes, selection.selectedIds],
+      resolveActiveRiverSite(nodes, [], {
+        ...selection,
+        selectedIds: activeLevelId ? [] : selection.selectedIds,
+        levelId: activeLevelId ? String(activeLevelId) : selection.levelId,
+      }),
+    [activeLevelId, nodes, selection],
   )
+  const selectedRiver = useMemo(() => {
+    if (selection.selectedIds.length !== 1) return null
+    const river = riverNodeOf(nodes[selection.selectedIds[0] as AnyNodeId])
+    return river?.parentId === activeSite?.id ? river : null
+  }, [activeSite, nodes, selection.selectedIds])
   const pointerStart = useRef<PointerStart | null>(null)
   const pointDrag = useRef<PointDrag | null>(null)
+  const gestureOwner = useRef(Symbol('river-3d-gesture'))
   const liveSiteId = useRef<string | null>(null)
   const raycaster = useRef(new Raycaster())
   const pointer = useRef(new Vector2())
-
   const previewRiverId = previewRiver?.id
+
   useEffect(() => {
     if (!previewRiverId) return
-    const overrides = useLiveNodeOverrides.getState()
-    const previousPoints = overrides.get(previewRiverId)?.points
-    return () => {
-      if (previousPoints === undefined) overrides.clearFields(previewRiverId, ['points'])
-      else overrides.set(previewRiverId, { points: previousPoints })
-      useScene.getState().markDirty(previewRiverId as AnyNodeId)
-    }
-  }, [previewRiverId])
+    return retainRiverNodePreview(sceneApi, previewRiverId)
+  }, [previewRiverId, sceneApi])
 
   useEffect(() => {
     if (!previewRiver) return
-    useLiveNodeOverrides.getState().set(previewRiver.id, { points: previewRiver.points })
-    useScene.getState().markDirty(previewRiver.id as AnyNodeId)
-  }, [previewRiver])
+    publishRiverNodePreview(sceneApi, previewRiver)
+  }, [previewRiver, sceneApi])
 
   const terrainPoint = useCallback(
     (event: PointerEvent, site: SiteNode): RiverPoint | null => {
@@ -265,24 +286,56 @@ export function RiverTool() {
     if (gl.domElement.hasPointerCapture(active.pointerId)) {
       gl.domElement.releasePointerCapture(active.pointerId)
     }
+    endRiverControlPointScope(active.original.id, active.pointIndex, 'tool')
+    releaseRiverGesture(gestureOwner.current)
     endRiverLiveTerrain(active.siteId)
     liveSiteId.current = null
     useRiverStore.getState().setPreviewRiver(null)
     useViewer.getState().setInputDragging(false)
     gl.domElement.style.cursor = ''
   }, [gl])
+  useEffect(
+    () =>
+      useInteractionScope.subscribe(() => {
+        const drag = pointDrag.current
+        if (drag && !ownsRiverControlPointScope(drag.original.id, drag.pointIndex, 'tool')) {
+          cancelPointDrag()
+        }
+        if (pointerStart.current && !ownsRiverDraftingScope()) {
+          pointerStart.current = null
+          releaseRiverGesture(gestureOwner.current)
+          const currentDraft = useRiverStore.getState().draft
+          if (currentDraft) {
+            useRiverStore.getState().setDraftCursor(null)
+            endRiverLiveTerrain(currentDraft.siteId)
+            liveSiteId.current = null
+          }
+        }
+      }),
+    [cancelPointDrag],
+  )
 
   const beginPointDrag = useCallback(
     (river: RiverNode, pointIndex: number, event: ThreeEvent<PointerEvent>) => {
       if (
         event.button !== 0 ||
         pointDrag.current ||
-        useViewer.getState().cameraDragging ||
-        !river.parentId
-      )
+        isCameraDragging() ||
+        !river.parentId ||
+        !claimRiverGesture(gestureOwner.current)
+      ) {
         return
+      }
+      if (!beginRiverControlPointScope(river.id, pointIndex, 'tool')) {
+        releaseRiverGesture(gestureOwner.current)
+        return
+      }
       const site = nodes[river.parentId as AnyNodeId]
-      if (site?.type !== 'site') return
+      if (site?.type !== 'site') {
+        endRiverControlPointScope(river.id, pointIndex, 'tool')
+        releaseRiverGesture(gestureOwner.current)
+        return
+      }
       event.stopPropagation()
       event.nativeEvent.preventDefault()
       event.nativeEvent.stopImmediatePropagation()
@@ -300,20 +353,26 @@ export function RiverTool() {
       useLiveTerrain.getState().begin(String(river.parentId), authoringBaseline(site as SiteNode))
       liveSiteId.current = String(river.parentId)
     },
-    [gl, nodes],
+    [gl, isCameraDragging, nodes],
   )
 
+  const draftSiteId = draft?.siteId ?? null
   useEffect(() => {
-    useInteractionScope.getState().begin({ kind: 'drafting', tool: RIVER_KIND })
-    refreshRiverDraftTerrain()
+    if (!draftSiteId) return
+    const releaseScope = retainRiverDraftingScope()
+    refreshRiverDraftTerrain(sceneApi)
+    return releaseScope
+  }, [draftSiteId, sceneApi])
+
+  useEffect(() => {
+    const releaseToolBody = retainRiverToolBody(cancelRiverInteraction)
     return () => {
       pointerStart.current = null
+      releaseRiverGesture(gestureOwner.current)
       cancelPointDrag()
       endRiverLiveTerrain(liveSiteId.current ?? useRiverStore.getState().draft?.siteId ?? null)
       liveSiteId.current = null
-      useInteractionScope
-        .getState()
-        .endIf((scope) => scope.kind === 'drafting' && scope.tool === RIVER_KIND)
+      releaseToolBody()
     }
   }, [cancelPointDrag])
 
@@ -327,20 +386,6 @@ export function RiverTool() {
     }
   }, [gl, isDrafting, editingRiverId])
 
-  useEffect(
-    () =>
-      useEditor.subscribe((editor) => {
-        if (
-          cancelEnvironmentPaintToolFor2D(editor as unknown as GroundCoverToolActionTarget) ||
-          editor.tool !== RIVER_KIND ||
-          editor.mode !== 'build'
-        ) {
-          cancelPointDrag()
-          cancelRiverInteraction()
-        }
-      }),
-    [cancelPointDrag],
-  )
 
   useEffect(() => {
     if (!selectedRiver || draft) return
@@ -376,41 +421,47 @@ export function RiverTool() {
         liveSiteId.current = null
         return
       }
-      previewTerrainForRiver(site, preview, useScene.getState().nodes)
+      previewTerrainForRiver(site, preview, sceneApi.nodes())
       liveSiteId.current = site.id
     }
 
     const handlePointerLeave = () => {
       const currentDraft = useRiverStore.getState().draft
       if (!currentDraft?.cursor) return
-      const site = useScene.getState().nodes[currentDraft.siteId as AnyNodeId]
+      const site = sceneApi.get(currentDraft.siteId as AnyNodeId)
       if (site?.type === 'site') syncDraftPreview(site as SiteNode, null)
     }
 
     const cancelPointer = () => {
       pointerStart.current = null
+      releaseRiverGesture(gestureOwner.current)
     }
 
     const handlePointerDown = (event: PointerEvent) => {
-      const scope = useInteractionScope.getState().scope
       if (
         event.button !== 0 ||
         pointerStart.current ||
         pointDrag.current ||
-        useViewer.getState().cameraDragging ||
-        scope.kind !== 'drafting' ||
-        scope.tool !== RIVER_KIND
+        isCameraDragging() ||
+        !ensureRiverDraftingScope() ||
+        !claimRiverGesture(gestureOwner.current)
       ) {
         return
       }
       const currentDraft = useRiverStore.getState().draft
-      if (!currentDraft) return
-      const site = useScene.getState().nodes[currentDraft.siteId as AnyNodeId]
+      if (!currentDraft) {
+        releaseRiverGesture(gestureOwner.current)
+        return
+      }
+      const site = sceneApi.get(currentDraft.siteId as AnyNodeId)
       if (site?.type !== 'site') {
+        releaseRiverGesture(gestureOwner.current)
         useRiverStore.getState().setFeedback('The active Site is no longer available.')
         cancelRiverInteraction()
         return
       }
+      event.preventDefault()
+      event.stopImmediatePropagation()
       pointerStart.current = {
         pointerId: event.pointerId,
         clientX: event.clientX,
@@ -423,7 +474,14 @@ export function RiverTool() {
     const handlePointerMove = (event: PointerEvent) => {
       const drag = pointDrag.current
       if (drag && drag.pointerId === event.pointerId) {
-        const site = useScene.getState().nodes[drag.siteId as AnyNodeId]
+        if (
+          !ownsRiverGesture(gestureOwner.current) ||
+          !ownsRiverControlPointScope(drag.original.id, drag.pointIndex, 'tool')
+        ) {
+          cancelPointDrag()
+          return
+        }
+        const site = sceneApi.get(drag.siteId as AnyNodeId)
         if (site?.type !== 'site') {
           cancelPointDrag()
           return
@@ -438,7 +496,7 @@ export function RiverTool() {
         if (!parsed.success) return
         drag.preview = parsed.data
         useRiverStore.getState().setPreviewRiver(parsed.data)
-        previewTerrainForRiver(site as SiteNode, parsed.data, useScene.getState().nodes)
+        previewTerrainForRiver(site as SiteNode, parsed.data, sceneApi.nodes())
         liveSiteId.current = drag.siteId
         return
       }
@@ -447,14 +505,14 @@ export function RiverTool() {
       if (start && start.pointerId === event.pointerId && !start.moved) {
         const dx = event.clientX - start.clientX
         const dy = event.clientY - start.clientY
-        if (dx * dx + dy * dy > CLICK_TOLERANCE_SQUARED || useViewer.getState().cameraDragging) {
+        if (dx * dx + dy * dy > CLICK_TOLERANCE_SQUARED || isCameraDragging()) {
           start.moved = true
         }
       }
-      if (event.target !== canvas) return
+      if (event.target !== canvas || !ownsRiverDraftingScope()) return
       const currentDraft = useRiverStore.getState().draft
-      if (!currentDraft || useViewer.getState().cameraDragging) return
-      const site = useScene.getState().nodes[currentDraft.siteId as AnyNodeId]
+      if (!currentDraft || isCameraDragging()) return
+      const site = sceneApi.get(currentDraft.siteId as AnyNodeId)
       if (site?.type !== 'site') return
       syncDraftPreview(site as SiteNode, terrainPoint(event, site as SiteNode))
     }
@@ -463,15 +521,26 @@ export function RiverTool() {
       const drag = pointDrag.current
       if (drag && drag.pointerId === event.pointerId) {
         const preview = drag.preview
+        const ownsScope = ownsRiverControlPointScope(
+          drag.original.id,
+          drag.pointIndex,
+          'tool',
+        )
         pointDrag.current = null
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId)
-        const result = updateRiver(useScene.getState(), drag.original.id, {
-          points: preview.points,
-        })
+        endRiverControlPointScope(drag.original.id, drag.pointIndex, 'tool')
+        releaseRiverGesture(gestureOwner.current)
+        if (ownsScope) {
+          const result = updateRiver(sceneApi, drag.original.id, {
+            points: preview.points,
+          })
+          useRiverStore
+            .getState()
+            .setFeedback(result.ok ? 'River path updated.' : result.message)
+        }
         endRiverLiveTerrain(drag.siteId)
         liveSiteId.current = null
         useRiverStore.getState().setPreviewRiver(null)
-        useRiverStore.getState().setFeedback(result.ok ? 'River path updated.' : result.message)
         useViewer.getState().setInputDragging(false)
         canvas.style.cursor = ''
         return
@@ -480,11 +549,13 @@ export function RiverTool() {
       const start = pointerStart.current
       if (!start || start.pointerId !== event.pointerId) return
       pointerStart.current = null
-      if (start.moved || useViewer.getState().cameraDragging) return
+      const ownedGesture = ownsRiverGesture(gestureOwner.current)
+      releaseRiverGesture(gestureOwner.current)
+      if (!ownedGesture || !ownsRiverDraftingScope() || start.moved || isCameraDragging()) return
       const state = useRiverStore.getState()
       const currentDraft = state.draft
       if (!currentDraft || currentDraft.siteId !== start.siteId) return
-      const site = useScene.getState().nodes[start.siteId as AnyNodeId]
+      const site = sceneApi.get(start.siteId as AnyNodeId)
       if (site?.type !== 'site') return
       const point = terrainPoint(event, site as SiteNode)
       if (!point) {
@@ -520,7 +591,7 @@ export function RiverTool() {
       if (isTextEntryTarget(event.target)) return
       if (event.key === 'Enter' && useRiverStore.getState().draft) {
         event.preventDefault()
-        finishRiverDraft()
+        finishRiverDraft(sceneApi)
         return
       }
       if (event.key === 'Backspace' && useRiverStore.getState().draft) {
@@ -531,7 +602,7 @@ export function RiverTool() {
           return
         }
         const next = useRiverStore.getState().draft
-        const site = next ? useScene.getState().nodes[next.siteId as AnyNodeId] : null
+        const site = next ? sceneApi.get(next.siteId as AnyNodeId) : null
         if (site?.type === 'site') syncDraftPreview(site as SiteNode, next?.cursor ?? null)
         state.setFeedback('Last river point removed.')
         return
@@ -547,9 +618,9 @@ export function RiverTool() {
         }
         const ids = useViewer.getState().selection.selectedIds
         const selected =
-          ids.length === 1 ? riverNodeOf(useScene.getState().nodes[ids[0] as AnyNodeId]) : null
+          ids.length === 1 ? riverNodeOf(sceneApi.get(ids[0] as AnyNodeId)) : null
         if (selected) {
-          const result = updateRiver(useScene.getState(), selected.id, {
+          const result = updateRiver(sceneApi, selected.id, {
             flowDirection: selected.flowDirection === 'forward' ? 'reverse' : 'forward',
           })
           if (result.river) state.adoptRiverSettings(result.river)
@@ -559,7 +630,7 @@ export function RiverTool() {
         }
       }
       if (event.key === 'Escape') {
-        pointerStart.current = null
+        cancelPointer()
         const hadPointDrag = Boolean(pointDrag.current)
         if (hadPointDrag) cancelPointDrag()
         if (cancelRiverInteraction() || hadPointDrag) {
@@ -570,7 +641,7 @@ export function RiverTool() {
     }
 
     const handleToolCancel = () => {
-      pointerStart.current = null
+      cancelPointer()
       if (pointDrag.current) cancelPointDrag()
       if (cancelRiverInteraction()) markToolCancelConsumed()
     }
@@ -578,6 +649,12 @@ export function RiverTool() {
     const handleBlur = () => {
       cancelPointer()
       cancelPointDrag()
+      const currentDraft = useRiverStore.getState().draft
+      if (currentDraft) {
+        useRiverStore.getState().setDraftCursor(null)
+        endRiverLiveTerrain(currentDraft.siteId)
+        liveSiteId.current = null
+      }
     }
 
     canvas.addEventListener('pointerdown', handlePointerDown)
@@ -599,7 +676,7 @@ export function RiverTool() {
       emitter.off('tool:cancel', handleToolCancel)
       cancelPointer()
     }
-  }, [cancelPointDrag, gl, terrainPoint])
+  }, [cancelPointDrag, gl, isCameraDragging, sceneApi, terrainPoint])
 
   const effectivePreview = useMemo(() => {
     if (previewRiver) return previewRiver

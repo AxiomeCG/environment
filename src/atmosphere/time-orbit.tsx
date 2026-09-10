@@ -2,7 +2,8 @@
 
 import { Moon, Sun } from 'lucide-react'
 import { useId, useRef, type KeyboardEvent, type PointerEvent } from 'react'
-import { formatSkyTime, skyPeriod, wrap, type SolarState } from './settings'
+import { formatSkyTime, skyPeriod, wrap } from './settings'
+import type { SolarState } from './solar'
 
 const STARS = [
   [70, 59, 1], [111, 42, 0.8], [162, 38, 1], [196, 64, 1.2],

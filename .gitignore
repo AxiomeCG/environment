@@ -2,6 +2,8 @@ node_modules
 .turbo
 dist
 *.tsbuildinfo
+/lab/.next/
+/lab/next-env.d.ts
 .DS_Store
 
 # Local mission corpus

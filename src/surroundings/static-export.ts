@@ -34,7 +34,7 @@ import {
 } from '../export/material-baker'
 import { bakeWaterMaterial } from '../export/water-material-bake'
 import { POND_WATER_APPEARANCE } from '../pond/appearance'
-import type { EnvironmentConfiguration } from '../presentation'
+import type { EnvironmentConfiguration } from '../presentation-configuration'
 import { RIVER_KIND, type RiverNode } from '../river/schema'
 import { riverTerrainBaseline } from '../river/terrain'
 import { loadPresentationAlbedos } from '../surface-material/materials'

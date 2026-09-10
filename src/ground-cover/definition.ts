@@ -1,4 +1,5 @@
 import type { NodeDefinition } from '@pascal-app/core'
+import type { FloorplanNodeExtension } from '@pascal-app/editor'
 import { buildGrassFieldBakeGeometry, buildGrassFieldBakeGeometryAsync } from './bake-geometry'
 import { buildGrassFieldFloorplan } from './floorplan'
 import { buildGrassFieldGeometry } from './geometry'
@@ -21,6 +22,9 @@ type GrassFieldDefinition = Omit<
       selectionHighlight?: boolean
     }
     floorplanScope: 'site'
+    extensions: {
+      'pascal:editor/floorplan': FloorplanNodeExtension
+    }
   }
 
 export const grassFieldDefinition: GrassFieldDefinition = {
@@ -69,6 +73,12 @@ export const grassFieldDefinition: GrassFieldDefinition = {
   floorplanScope: 'site',
   system: { module: () => import('./system'), priority: 1 },
   tool: () => import('./tool'),
+  extensions: {
+    'pascal:editor/floorplan': {
+      tool: () => import('./floorplan-tool'),
+      availableModes: ['default', 'expert'],
+    },
+  },
   toolHints: [
     { key: 'Drag', label: 'Paint grass' },
     { key: 'Esc', label: 'Cancel stroke or stop' },

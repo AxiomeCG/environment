@@ -2,7 +2,7 @@ import { useThree } from '@react-three/fiber'
 import { useEffect } from 'react'
 import { uniform } from 'three/tsl'
 import type { SkySettings } from '../atmosphere/settings'
-import { createSolarState, updateSolarState } from '../atmosphere/settings'
+import { createSolarState, updateSolarState } from '../atmosphere/solar'
 import { useEnvironmentStore } from '../store'
 import { seededUnit } from './seeded-random'
 

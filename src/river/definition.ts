@@ -5,6 +5,7 @@ import {
   type NodeDefinition,
   type ParametricDescriptor,
 } from '@pascal-app/core'
+import type { FloorplanNodeExtension } from '@pascal-app/editor'
 import { buildRiverFloorplan } from './floorplan'
 import { buildRiverBakeGeometry, buildRiverBakeGeometryAsync, buildRiverGeometry } from './geometry'
 import { RIVER_KIND, RiverNode, type RiverNode as RiverNodeType } from './schema'
@@ -149,6 +150,12 @@ export const riverDefinition: RiverDefinition = {
   floorplanScope: 'site',
   system: { module: () => import('./system'), priority: 1 },
   tool: () => import('./tool'),
+  extensions: {
+    'pascal:editor/floorplan': {
+      tool: () => import('./floorplan-tool'),
+      availableModes: ['default', 'expert'],
+    } satisfies FloorplanNodeExtension,
+  },
   toolHints: [
     { key: 'Click', label: 'Add river point' },
     { key: 'Enter', label: 'Finish river', minDraftVertices: 2 },

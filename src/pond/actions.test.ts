@@ -1,8 +1,11 @@
 import {
+  createSceneApi,
   createTerrainField,
   encodeTerrainField,
   SiteNode,
+  type AnyNode,
   type AnyNodeId,
+  type SceneStoreLike,
   type TerrainField,
 } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
@@ -11,7 +14,6 @@ import {
   commitPondPropPlacement,
   type PondNodeChanges,
   type PondSceneNodes,
-  type PondSceneWriter,
 } from './actions'
 import { POND_KIND, PondNode, type PondProp } from './schema'
 
@@ -53,12 +55,20 @@ function sceneWith(nodes: readonly unknown[]) {
     }),
   ) as unknown as PondSceneNodes
   const changes: PondNodeChanges[] = []
-  const scene: PondSceneWriter = {
-    nodes: nodeRecord,
-    rootNodeIds: ['site_pond_actions' as AnyNodeId],
-    applyNodeChanges: (nextChanges) => changes.push(nextChanges),
+  const store: SceneStoreLike = {
+    getState: () => ({
+      nodes: nodeRecord as Record<AnyNodeId, AnyNode>,
+      rootNodeIds: ['site_pond_actions' as AnyNodeId],
+      dirtyNodes: new Set<AnyNodeId>(),
+      createNode() {},
+      updateNode() {},
+      deleteNode() {},
+      markDirty() {},
+      applyNodeChanges: (nextChanges) => changes.push(nextChanges),
+    }),
+    temporal: { getState: () => ({ pause() {}, resume() {} }) },
   }
-  return { scene, changes }
+  return { scene: createSceneApi(store), changes }
 }
 
 function target(pondId: string | null = null) {

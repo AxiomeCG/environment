@@ -6,7 +6,7 @@ import { Group, InstancedBufferAttribute, InstancedMesh, Matrix4, PlaneGeometry,
 import { abs, array, attribute, cameraPosition, clamp, max, min, positionGeometry, positionWorld, select, sin, smoothstep, vec2, vec3, vertexIndex } from 'three/tsl'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
 import type { Node } from 'three/webgpu'
-import { createSolarState, updateSolarState } from '../atmosphere/settings'
+import { createSolarState, updateSolarState } from '../atmosphere/solar'
 import { useEnvironmentStore } from '../store'
 import { houseBodyFrame, houseGarageOffset, type HousePlan } from './neighborhood'
 import type { TreePlan } from './neighborhood-decoration'

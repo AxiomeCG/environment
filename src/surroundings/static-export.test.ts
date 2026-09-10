@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { exportEnvironmentConfiguration } from '../presentation'
+import { exportEnvironmentConfiguration } from '../presentation-configuration'
 import {
   buildDistantBirdFlightPlan,
   createDistantBirdGeometry,

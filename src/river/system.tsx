@@ -4,9 +4,9 @@ import {
   SiteNode,
   useLiveNodeOverrides,
   useLiveTerrain,
-  useScene,
   type AnyNode,
   type AnyNodeId,
+  type SceneApi,
 } from '@pascal-app/core'
 import { useEffect } from 'react'
 import { RIVER_KIND, RiverNode } from './schema'
@@ -20,8 +20,8 @@ export type RiverSiteChange = Readonly<{
 }>
 
 export function riverSiteChanges(
-  currentNodes: Record<string, AnyNode>,
-  previousNodes: Record<string, AnyNode>,
+  currentNodes: Readonly<Record<string, AnyNode>>,
+  previousNodes: Readonly<Record<string, AnyNode>>,
 ): RiverSiteChange[] {
   const changes = new Map<string, RiverSiteChange>()
   const add = (siteId: string | null | undefined, flags: Omit<RiverSiteChange, 'siteId'>) => {
@@ -97,23 +97,19 @@ function riverGradingChanged(current: AnyNode | undefined, previous: AnyNode | u
   })
 }
 
-export default function RiverSystem() {
+export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
   useEffect(() => {
     let reconciling = false
 
     const reconcile = (siteIds: ReadonlySet<string>) => {
       if (reconciling || siteIds.size === 0) return
-      const scene = useScene.getState()
-      if (scene.readOnly) {
-        markRiversOfSites(siteIds)
-        return
-      }
+      const nodes = sceneApi.nodes()
       const updates: Array<{ id: AnyNodeId; data: Partial<AnyNode> }> = []
       for (const siteId of siteIds) {
-        const parsedSite = SiteNode.safeParse(scene.nodes[siteId as AnyNodeId])
+        const parsedSite = SiteNode.safeParse(nodes[siteId as AnyNodeId])
         if (!parsedSite.success) continue
         const site = parsedSite.data
-        const rivers = Object.values(scene.nodes)
+        const rivers = Object.values(nodes)
           .filter(
             (candidate) =>
               candidate.parentId === site.id && (candidate.type as string) === RIVER_KIND,
@@ -143,19 +139,23 @@ export default function RiverSystem() {
       if (updates.length > 0) {
         reconciling = true
         try {
-          scene.applyNodeChanges({ update: updates })
+          if (!sceneApi.applyChanges) {
+            throw new Error('RiverSystem requires SceneApi.applyChanges for reconciliation.')
+          }
+          sceneApi.applyChanges({ update: updates })
         } finally {
           reconciling = false
         }
       }
-      markRiversOfSites(siteIds)
+      markRiversOfSites(sceneApi, siteIds)
     }
 
-    const unsubscribeScene = useScene.subscribe((current, previous) => {
-      if (reconciling) return
-      const changes = riverSiteChanges(current.nodes, previous.nodes)
-      reconcile(new Set(changes.map((change) => change.siteId)))
-    })
+    const unsubscribeScene =
+      sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
+        if (reconciling) return
+        const changes = riverSiteChanges(currentNodes, previousNodes)
+        reconcile(new Set(changes.map((change) => change.siteId)))
+      }) ?? (() => {})
 
     const unsubscribeTerrain = useLiveTerrain.subscribe((current, previous) => {
       const siteIds = new Set([
@@ -172,7 +172,7 @@ export default function RiverSystem() {
           previous.strokes.get(siteId)?.field ?? previous.remoteStrokes.get(siteId)?.field
         if (currentField !== previousField) changed.add(siteId)
       }
-      markRiversOfSites(changed)
+      markRiversOfSites(sceneApi, changed)
     })
 
     const unsubscribeBoundary = useLiveNodeOverrides.subscribe((current, previous) => {
@@ -183,11 +183,11 @@ export default function RiverSystem() {
           changed.add(siteId)
         }
       }
-      markRiversOfSites(changed)
+      markRiversOfSites(sceneApi, changed)
     })
 
     const initialSites = new Set<string>()
-    for (const node of Object.values(useScene.getState().nodes)) {
+    for (const node of Object.values(sceneApi.nodes())) {
       if ((node.type as string) === RIVER_KIND && node.parentId)
         initialSites.add(node.parentId as string)
       if (
@@ -205,21 +205,20 @@ export default function RiverSystem() {
       unsubscribeTerrain()
       unsubscribeBoundary()
     }
-  }, [])
+  }, [sceneApi])
 
   return null
 }
 
-function markRiversOfSites(siteIds: ReadonlySet<string>): void {
+function markRiversOfSites(sceneApi: SceneApi, siteIds: ReadonlySet<string>): void {
   if (siteIds.size === 0) return
-  const scene = useScene.getState()
-  for (const node of Object.values(scene.nodes)) {
+  for (const node of Object.values(sceneApi.nodes())) {
     if (
       (node.type as string) === RIVER_KIND &&
       node.parentId &&
       siteIds.has(node.parentId as string)
     ) {
-      scene.markDirty(node.id as AnyNodeId)
+      sceneApi.markDirty(node.id as AnyNodeId)
     }
   }
 }

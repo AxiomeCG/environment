@@ -1,10 +1,7 @@
 import { type AnyNode, SiteNode } from '@pascal-app/core'
 import { beforeEach, describe, expect, test } from 'bun:test'
-import {
-  environmentPresentation,
-  exportEnvironmentConfiguration,
-  importEnvironmentConfiguration,
-} from './presentation'
+import { exportEnvironmentConfiguration, importEnvironmentConfiguration } from './presentation-configuration'
+import { environmentPresentation } from './presentation'
 import { useEnvironmentStore } from './store'
 
 describe('Environment presentation configuration', () => {

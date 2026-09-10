@@ -31,8 +31,8 @@ import {
   ENVIRONMENT_CONFIGURATION_VERSION,
   EnvironmentConfigurationSchema,
   importEnvironmentConfiguration,
-} from '../presentation'
-import type { EnvironmentConfiguration } from '../presentation'
+} from '../presentation-configuration'
+import type { EnvironmentConfiguration } from '../presentation-configuration'
 import { clearRiverAuthoring } from '../river/store'
 import { RiverNode } from '../river/schema'
 import type { RiverOutlet, RiverSource } from '../river/schema'

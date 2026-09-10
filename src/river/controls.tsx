@@ -1,6 +1,6 @@
 'use client'
 
-import { type AnyNodeId, useScene } from '@pascal-app/core'
+import { createSceneApi, type AnyNodeId, useScene } from '@pascal-app/core'
 import { useEditor } from '@pascal-app/editor'
 import { useViewer } from '@pascal-app/viewer'
 import { ArrowLeftRight, Check, MousePointer2, Plus, RotateCcw, Trash2, X } from 'lucide-react'
@@ -60,6 +60,7 @@ function RiverButton({
 }
 
 export function RiverControls() {
+  const sceneApi = useMemo(() => createSceneApi(useScene), [])
   const nodes = useScene((state) => state.nodes)
   const rootNodeIds = useScene((state) => state.rootNodeIds)
   const selection = useViewer((state) => state.selection)
@@ -79,17 +80,22 @@ export function RiverControls() {
     () => deriveLandscapeRegion(surroundingsSeed).coast !== null,
     [surroundingsSeed],
   )
-  const selectedRiver = useMemo(
-    () =>
-      selection.selectedIds.length === 1
-        ? riverNodeOf(nodes[selection.selectedIds[0] as AnyNodeId])
-        : null,
-    [nodes, selection.selectedIds],
-  )
   const activeSite = useMemo(
-    () => resolveActiveRiverSite(nodes, rootNodeIds, selection),
+    () =>
+      resolveActiveRiverSite(nodes, rootNodeIds, {
+        ...selection,
+        selectedIds:
+          selection.levelId || selection.buildingId || selection.zoneId
+            ? []
+            : selection.selectedIds,
+      }),
     [nodes, rootNodeIds, selection],
   )
+  const selectedRiver = useMemo(() => {
+    if (selection.selectedIds.length !== 1) return null
+    const river = riverNodeOf(nodes[selection.selectedIds[0] as AnyNodeId])
+    return river?.parentId === activeSite?.id ? river : null
+  }, [activeSite, nodes, selection.selectedIds])
   const values: RiverSettings = selectedRiver
     ? {
         width: selectedRiver.width,
@@ -159,10 +165,19 @@ export function RiverControls() {
 
   const startNewRiver = () => {
     cancelRiverInteraction()
+    const currentSelection = useViewer.getState().selection
     const site = resolveActiveRiverSite(
       useScene.getState().nodes,
       useScene.getState().rootNodeIds,
-      useViewer.getState().selection,
+      {
+        ...currentSelection,
+        selectedIds:
+          currentSelection.levelId ||
+          currentSelection.buildingId ||
+          currentSelection.zoneId
+            ? []
+            : currentSelection.selectedIds,
+      },
     )
     if (!site) {
       useRiverStore.getState().setFeedback('Select a Site before drawing a river.')
@@ -192,7 +207,7 @@ export function RiverControls() {
     state.setSettings(patch)
     const selected = selectedRiver
     if (selected && !state.draft) {
-      const result = updateRiver(useScene.getState(), selected.id, patch)
+      const result = updateRiver(sceneApi, selected.id, patch)
       if (result.river) state.adoptRiverSettings(result.river)
       state.setFeedback(result.ok ? describeSettingChange(patch) : result.message)
       return
@@ -203,7 +218,7 @@ export function RiverControls() {
       patch.source !== undefined ||
       patch.outlet !== undefined
     ) {
-      refreshRiverDraftTerrain()
+      refreshRiverDraftTerrain(sceneApi)
     }
   }
 
@@ -213,7 +228,7 @@ export function RiverControls() {
       state.setFeedback('There are no river points to remove.')
       return
     }
-    refreshRiverDraftTerrain()
+    refreshRiverDraftTerrain(sceneApi)
     const remaining = useRiverStore.getState().draft?.points.length ?? 0
     state.setFeedback(
       remaining === 0
@@ -225,7 +240,7 @@ export function RiverControls() {
   const removeSelectedRiver = () => {
     if (!selectedRiver) return
     cancelRiverInteraction()
-    const result = deleteRiver(useScene.getState(), selectedRiver.id)
+    const result = deleteRiver(sceneApi, selectedRiver.id)
     if (result.ok) useViewer.getState().setSelection({ selectedIds: [] })
     useRiverStore.getState().setFeedback(result.message)
   }
@@ -249,7 +264,7 @@ export function RiverControls() {
   }
 
   const finish = () => {
-    const result = finishRiverDraft()
+    const result = finishRiverDraft(sceneApi)
     if (!result.ok) useRiverStore.getState().setFeedback(result.message)
   }
 

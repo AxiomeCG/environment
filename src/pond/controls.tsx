@@ -1,6 +1,6 @@
 'use client'
 
-import { terrainFieldOf, type AnyNodeId, useScene } from '@pascal-app/core'
+import { createSceneApi, terrainFieldOf, type AnyNodeId, useScene } from '@pascal-app/core'
 import { useViewer } from '@pascal-app/viewer'
 import {
   type LucideIcon,
@@ -102,6 +102,7 @@ function PondButton({
 }
 
 export function PondControls({ onSculptTerrain }: { onSculptTerrain: () => void }) {
+  const sceneApi = useMemo(() => createSceneApi(useScene), [])
   const nodes = useScene((state) => state.nodes)
   const rootNodeIds = useScene((state) => state.rootNodeIds)
   const selection = useViewer((state) => state.selection)
@@ -113,18 +114,26 @@ export function PondControls({ onSculptTerrain }: { onSculptTerrain: () => void 
   const setQuality = useEnvironmentStore((state) => state.setPondQuality)
   const setMode = useEnvironmentStore((state) => state.setPondToolMode)
   const setFeedback = useEnvironmentStore((state) => state.setPondFeedback)
+  const site = useMemo(
+    () =>
+      resolveActivePondSite(nodes, rootNodeIds, {
+        ...selection,
+        selectedIds:
+          selection.levelId || selection.buildingId || selection.zoneId
+            ? []
+            : selection.selectedIds,
+      }),
+    [nodes, rootNodeIds, selection],
+  )
   const selectedTarget = useMemo(
     () => selectedPondTarget(nodes, selection.selectedIds),
     [nodes, selection.selectedIds],
   )
-  const target =
+  const candidateTarget =
     selectedTarget ?? (selection.selectedIds.length === 0 ? storedTarget : null)
+  const target = candidateTarget?.siteId === site?.id ? candidateTarget : null
   const info = useMemo(() => inspectPondTarget(nodes, target), [nodes, target])
   const levelStep = info?.basin.levelStep ?? POND_LEVEL_STEP
-  const site = useMemo(
-    () => resolveActivePondSite(nodes, rootNodeIds, selection),
-    [nodes, rootNodeIds, selection],
-  )
   const hasTerrain = Boolean(site && terrainFieldOf(site))
   const selectedQuality = info?.pond?.quality ?? quality
   const props = info?.pond?.props ?? []
@@ -136,7 +145,7 @@ export function PondControls({ onSculptTerrain }: { onSculptTerrain: () => void 
 
   const commitLevel = (action: PondLevelAction) => {
     const store = useEnvironmentStore.getState()
-    const result = commitPondLevelAction(useScene.getState(), target, action, store.pondQuality)
+    const result = commitPondLevelAction(sceneApi, target, action, store.pondQuality)
     if (result.target) setTarget(result.target)
     if (result.ok && result.target?.pondId) {
       useViewer.getState().setSelection({
@@ -148,13 +157,13 @@ export function PondControls({ onSculptTerrain }: { onSculptTerrain: () => void 
 
   const changeQuality = (nextQuality: WaterQuality) => {
     setQuality(nextQuality)
-    const result = commitPondQuality(useScene.getState(), target, nextQuality)
+    const result = commitPondQuality(sceneApi, target, nextQuality)
     if (result.target) setTarget(result.target)
     setFeedback(result.message)
   }
 
   const changeShoreline = (shoreline: PondShoreline) => {
-    const result = commitPondShoreline(useScene.getState(), target, shoreline)
+    const result = commitPondShoreline(sceneApi, target, shoreline)
     if (result.target) setTarget(result.target)
     setFeedback(result.message)
   }
@@ -165,7 +174,7 @@ export function PondControls({ onSculptTerrain }: { onSculptTerrain: () => void 
   }
 
   const clearProps = () => {
-    const result = commitClearPondProps(useScene.getState(), target)
+    const result = commitClearPondProps(sceneApi, target)
     if (result.target) setTarget(result.target)
     setFeedback(result.message)
   }

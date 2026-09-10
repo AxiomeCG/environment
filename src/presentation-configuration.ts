@@ -1,16 +1,10 @@
-import { SceneAtmosphere, SceneGroundReplacement } from '@pascal-app/viewer'
-import type {
-  ViewerPresentationContribution,
-  ViewerPresentationExportContext,
-} from '@pascal-app/viewer'
+import type { ViewerPresentationConfiguration } from '@pascal-app/viewer'
 import { z } from 'zod'
-import AtmosphereLayer from './atmosphere/layer'
 import type { SkySettings } from './atmosphere/settings'
-import { type EnvironmentStore, useEnvironmentStore } from './store'
+import { useEnvironmentStore } from './store'
+import type { EnvironmentStore } from './store'
 import type { FrontageContexts } from './surroundings/frontages'
 import type { SurroundingsPresetId } from './surroundings/presets'
-import { buildStaticSurroundings } from './surroundings/static-export'
-import SurroundingsLayer from './surroundings/layer'
 
 export const ENVIRONMENT_CONFIGURATION_VERSION = 2 as const
 
@@ -228,34 +222,9 @@ function subscribeEnvironmentConfiguration(onChange: () => void): () => void {
   })
 }
 
-export default function EnvironmentPresentation() {
-  return (
-    <>
-      <AtmosphereLayer atmosphereComponent={SceneAtmosphere} />
-      <SurroundingsLayer groundReplacementComponent={SceneGroundReplacement} />
-    </>
-  )
-}
-
-export const environmentPresentation: ViewerPresentationContribution = {
-  id: 'pascal:environment:presentation',
-  pluginId: 'pascal:environment',
-  component: () => import('./presentation'),
-  staticExport: {
-    label: 'Surroundings',
-    build: (context: ViewerPresentationExportContext) => {
-      const birdsEnabled = useEnvironmentStore.getState().birdsEnabled
-      return buildStaticSurroundings(
-        context,
-        EnvironmentConfigurationSchema.parse(context.configuration) as EnvironmentConfiguration,
-        birdsEnabled,
-      )
-    },
-  },
-  configuration: {
-    getSnapshot: exportEnvironmentConfiguration,
-    restore: importEnvironmentConfiguration,
-    reset: resetEnvironmentConfiguration,
-    subscribe: subscribeEnvironmentConfiguration,
-  },
-}
+export const environmentPresentationConfiguration = {
+  getSnapshot: exportEnvironmentConfiguration,
+  restore: importEnvironmentConfiguration,
+  reset: resetEnvironmentConfiguration,
+  subscribe: subscribeEnvironmentConfiguration,
+} satisfies ViewerPresentationConfiguration

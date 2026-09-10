@@ -1,7 +1,9 @@
 import type { NodeDefinition } from '@pascal-app/core'
+import type { FloorplanNodeExtension } from '@pascal-app/editor'
 import { buildPondFloorplan } from './floorplan'
 import { buildPondBakeGeometry, buildPondBakeGeometryAsync, buildPondGeometry } from './geometry'
 import { POND_KIND, PondNode } from './schema'
+import type { PondNode as PondNodeValue } from './schema'
 
 type PondDefinition = Omit<NodeDefinition<typeof PondNode>, 'capabilities' | 'floorplanScope'> &
   Record<string, unknown> & {
@@ -48,6 +50,12 @@ export const pondDefinition: PondDefinition = {
   floorplanScope: 'site',
   system: { module: () => import('./system'), priority: 1 },
   tool: () => import('./tool'),
+  extensions: {
+    'pascal:editor/floorplan': {
+      tool: () => import('./floorplan-tool'),
+      availableModes: ['default', 'expert'],
+    } satisfies FloorplanNodeExtension,
+  },
   toolHints: [
     { key: 'Click', label: 'Select a terrain depression' },
     { key: 'Esc', label: 'Cancel basin / stop tool' },

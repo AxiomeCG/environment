@@ -23,6 +23,12 @@ Brush controls remain transient. Painted results and authored water parameters
 belong to nodes, not the presentation sidecar. Surroundings' sea and rivers
 remain separate, presentation-only water.
 
+Ground Cover coverage/color/height painting, Surface painting, pond basin and
+prop editing, and river drafting/control-point editing have native 2D tools in
+both default and expert modes. Activating a tool preserves the current 2D, 3D,
+or Split view. Split panes share gesture ownership; cancelled previews do not
+persist, and a river path edit plus its terrain grading is one undoable change.
+
 The plugin ID is `pascal:environment`. `GrassFieldNode` retains its original name;
 `GroundCoverNode` is an exported alias, not another node kind.
 
@@ -55,7 +61,7 @@ Read the module for your current question, not the whole repository.
 
 | Question | Entry point |
 |---|---|
-| What does the plugin expose? | [`src/index.ts`](./src/index.ts) |
+| What does the plugin expose without loading presentation runtime? | [`src/index.ts`](./src/index.ts), [`presentation.ts`](./src/presentation.ts), and [`presentation-configuration.ts`](./src/presentation-configuration.ts) |
 | What grass data is saved, and how does it reach each representation? | [`ground-cover/schema.ts`](./src/ground-cover/schema.ts), then [`definition.ts`](./src/ground-cover/definition.ts) |
 | Where does a grass root get its height? | [`field-context.ts`](./src/ground-cover/field-context.ts) → [`scatter.ts`](./src/ground-cover/scatter.ts) → `buildGrassFieldGeometry` in [`geometry.ts`](./src/ground-cover/geometry.ts) |
 | What updates grass after a scene or Terrain change? | [`ground-cover/system.tsx`](./src/ground-cover/system.tsx) |
@@ -64,6 +70,8 @@ Read the module for your current question, not the whole repository.
 | How do rivers preview, commit, and restore terrain? | [`river/tool.tsx`](./src/river/tool.tsx), [`actions.ts`](./src/river/actions.ts), and [`terrain.ts`](./src/river/terrain.ts) |
 | Where are the exterior world and sky composed? | [`surroundings/layer.tsx`](./src/surroundings/layer.tsx), [`atmosphere/layer.tsx`](./src/atmosphere/layer.tsx) |
 | Where are the controls and temporary settings? | [`panel.tsx`](./src/panel.tsx), [`store.ts`](./src/store.ts) |
+| What mounts the live presentation? | [`presentation-runtime.tsx`](./src/presentation-runtime.tsx) |
+| What runs only for an explicit static surroundings export? | [`presentation-static-export.ts`](./src/presentation-static-export.ts), then [`surroundings/static-export.ts`](./src/surroundings/static-export.ts) |
 
 For the first grass walkthrough, follow only the Terrain input to a root's Y
 coordinate. Leave wind, paint sampling, obstacles, and export for separate steps.
@@ -72,10 +80,15 @@ coordinate. Leave wind, paint sampling, obstacles, and export for separate steps
 
 A host loads `environmentPlugin` through plugin discovery, registers
 `environmentHostPanel` through the editor host-panel registry, and registers
-`environmentPresentation` through the viewer presentation registry. The reusable
-Editor mounts registered presentations once in its normal and preview viewers.
-The Environment contribution supplies `SceneGroundReplacement` and
-`SceneAtmosphere`; application routes no longer mount plugin layers directly.
+the metadata-only `environmentPresentation` through the viewer presentation
+registry. Importing the package entry point does not load the live Environment
+layers, sky provider, or static surroundings builder. The viewer calls the
+presentation's component loader when an installed project mounts registered
+presentations; the host calls its separate static-export loader only after the
+user includes Surroundings in a GLB or USDZ export. The reusable Editor mounts
+registered presentations once in its normal and preview viewers. Direct live
+layer and sky-provider factory exports are intentionally not part of the
+package entry point; safe sky constants and types remain available.
 
 The candidate peer range starts at Pascal `1.0.0-beta.6`. Beta.5 does not provide
 the host APIs required by the current plugin. Site-scoped floorplan output,
@@ -88,6 +101,60 @@ Until those requirements are met, use the local Editor workflow below; do not in
 publication readiness from a local demo or typecheck.
 Presentation configuration remains versioned and project-local in browser storage.
 Cloud/share synchronization remains out of scope.
+
+## External assets and network requests
+
+Environment has no analytics, telemetry endpoint, cloud account, or implicit
+project upload. Its project-side presentation configuration remains in the
+host-owned browser sidecar. Thunder is synthesized with the Web Audio API and
+does not download an audio file.
+
+The following requests can occur:
+
+- The panel, live presentation, and static-export implementations are separate
+  JavaScript chunks served by the host's deployment asset origin. They are
+  requested only when the panel opens, a registered Environment presentation
+  mounts, or an explicitly selected static surroundings export starts,
+  respectively.
+- The plugin logo, illustrated selector, and Surface material WebP files ship
+  in this package. The bundler resolves their final URLs against the deployment
+  asset origin. The logo is used when the host displays plugin metadata; the
+  selector SVG is fetched when the Site View mounts; Surface preview and PBR
+  images load when their panel, live material, live surroundings, or an
+  applicable export first needs them. The selector's raster artwork is embedded
+  as `data:` images inside the bundled SVG, so it adds no image origins.
+- Live Surroundings loads the Pascal catalog's current `hydrant` GLB from
+  `https://byrpxoiotywskoojsrzd.supabase.co/storage/v1/object/public/items/system/hydrant/model.glb`.
+  The static surroundings builder requests the same GLB only when an opted-in
+  regional export contains a hydrant. The host `resolveAssetUrl` contract
+  preserves absolute HTTP(S) URLs, resolves `asset://` values from browser
+  IndexedDB, and prefixes relative paths with `NEXT_PUBLIC_ASSETS_CDN_URL`
+  (falling back to `https://editor.pascal.app`); the current hydrant entry is
+  already absolute and is therefore preserved unchanged.
+- Both the live GLTF hook and the static export configure Draco decoder version
+  1.5.5 at
+  `https://www.gstatic.com/draco/versioned/decoders/1.5.5/`. When the GLB
+  requires Draco, Three.js requests `draco_wasm_wrapper.js` and
+  `draco_decoder.wasm`, or `draco_decoder.js` on the JavaScript fallback. The
+  live hook also configures KTX2/Basis support from
+  `https://cdn.jsdelivr.net/gh/pmndrs/drei-assets@master/basis/`; a model using
+  KTX2 textures causes requests for `basis_transcoder.js` and
+  `basis_transcoder.wasm`. Meshopt decoding is bundled and adds no decoder
+  origin.
+- Plugin-manager links point to `https://github.com/pascalorg`; they request
+  GitHub only when followed. Executable-lab source links point to
+  `https://github.com/AxiomeCG` and use `rel="noreferrer"`; they likewise make
+  no request until followed.
+
+Those origins and the host serving bundled assets receive ordinary connection
+and HTTP request metadata when a request is made, such as the client IP,
+timestamp, requested URL, TLS and browser headers, and any `Origin` or
+`Referer` header allowed by browser policy. A `Referer` can expose the host page
+origin or route under that policy. Environment does not control that browser
+header, and it does not append scene nodes, presentation settings, project
+identifiers, or user identifiers to asset URLs. Hosts, proxies, and the listed
+providers may retain their normal access logs; the plugin adds no reporting
+request of its own.
 
 ## Development
 
@@ -368,10 +435,11 @@ to reproduce. Public atmospheric-rendering references include
 this lightweight approximation does not implement their full scattering solvers.
 
 Sky and weather settings are saved per project in the local browser sidecar and
-do not create scene nodes or history entries. Bootstrap registers
-`environmentPresentation`; the reusable Editor mounts it through the public
-viewer contribution seam. Publication still depends on `ENV-HOST-006` and
-`ENV-HOST-007`.
+do not create scene nodes or history entries. Bootstrap registers the safe
+contribution object from [`presentation.ts`](./src/presentation.ts); a viewer
+mount loads [`presentation-runtime.tsx`](./src/presentation-runtime.tsx)
+through the public viewer contribution seam. Publication still depends on
+`ENV-HOST-006` and `ENV-HOST-007`.
 Configuration exports use version 2. Importing a valid version 1 snapshot drops
 the removed `godRays` setting while preserving its other environment settings.
 
@@ -394,10 +462,22 @@ const fixture = createEnvironmentLabFixture('living-landscape', 'daylight')
 initializeEnvironmentLabFixture('living-landscape', fixture)
 ```
 
-With the integration host running on port 3001, open the local [Environment lab](http://localhost:3001/environment-lab) at `/environment-lab`.
+The standalone testbed lives in [`lab/`](./lab), in this Environment repository—not
+in the main Pascal editor app. Install and run it from the Environment root:
 
-The host owns routes, scratch persistence, scene replacement, camera UI, and review
-downloads. Start with the [executable lab guide](./docs/lab/README.md), then use
+```sh
+bun install --cwd lab
+bun run dev:lab
+```
+
+Open the [Environment lab](http://localhost:3011/environment-lab). The dedicated
+origin keeps its browser preferences and presentation sidecars separate from the
+main editor. Scene saves remain in memory and navigation discards scratch edits.
+
+The lab app owns routes, scratch persistence, scene replacement, camera UI, and
+review downloads. It consumes the real Pascal editor/viewer packages and current
+Environment source; its app code is not shipped in the plugin package.
+Start with the [executable lab guide](./docs/lab/README.md), then use
 its [case guide](./docs/lab/cases.md) and
 [reproducibility contract](./docs/lab/reproducibility.md). Catalog source links
 target the private `AxiomeCG/environment` repository and require repository access.

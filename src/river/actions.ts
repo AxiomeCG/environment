@@ -1,4 +1,10 @@
-import { generateId, type AnyNode, type AnyNodeId, type SiteNode } from '@pascal-app/core'
+import {
+  generateId,
+  type AnyNode,
+  type AnyNodeId,
+  type SceneApi,
+  type SiteNode,
+} from '@pascal-app/core'
 import type { PondShoreline, WaterQuality } from '../pond/schema'
 import { rebuildRiverTerrain } from './terrain'
 import {
@@ -17,11 +23,7 @@ export type RiverNodeChanges = {
   delete?: AnyNodeId[]
 }
 
-export type RiverSceneWriter = {
-  nodes: Record<AnyNodeId, AnyNode>
-  rootNodeIds: AnyNodeId[]
-  applyNodeChanges: (changes: RiverNodeChanges) => void
-}
+export type RiverSceneWriter = SceneApi
 
 export type RiverSelectionContext = {
   buildingId: string | null
@@ -47,16 +49,22 @@ export type RiverActionResult = {
   message: string
   river?: RiverNode
 }
+function applyRiverChanges(sceneApi: RiverSceneWriter, changes: RiverNodeChanges): void {
+  if (!sceneApi.applyChanges) {
+    throw new Error('River edits require SceneApi.applyChanges for an atomic commit.')
+  }
+  sceneApi.applyChanges(changes)
+}
 
 function nodeAt(
-  nodes: Readonly<RiverSceneWriter['nodes']>,
+  nodes: Readonly<Record<AnyNodeId, AnyNode>>,
   id: string | null,
 ): AnyNode | undefined {
   return id ? nodes[id as AnyNodeId] : undefined
 }
 
 function siteAncestor(
-  nodes: Readonly<RiverSceneWriter['nodes']>,
+  nodes: Readonly<Record<AnyNodeId, AnyNode>>,
   startId: string | null,
 ): SiteNode | null {
   let node = nodeAt(nodes, startId)
@@ -70,7 +78,7 @@ function siteAncestor(
 }
 
 export function resolveActiveRiverSite(
-  nodes: Readonly<RiverSceneWriter['nodes']>,
+  nodes: Readonly<Record<AnyNodeId, AnyNode>>,
   rootNodeIds: readonly AnyNodeId[],
   selection: RiverSelectionContext,
 ): SiteNode | null {
@@ -95,7 +103,7 @@ export function riverNodeOf(node: unknown): RiverNode | null {
 }
 
 export function riversForSite(
-  nodes: Readonly<RiverSceneWriter['nodes']>,
+  nodes: Readonly<Record<AnyNodeId, AnyNode>>,
   siteId: string,
 ): RiverNode[] {
   const rivers: RiverNode[] = []
@@ -122,8 +130,8 @@ function validatePoints(points: readonly RiverPoint[]): string | null {
   return null
 }
 
-function siteForMutation(scene: RiverSceneWriter, siteId: string): SiteNode | null {
-  const node = nodeAt(scene.nodes, siteId)
+function siteForMutation(nodes: Readonly<Record<AnyNodeId, AnyNode>>, siteId: string): SiteNode | null {
+  const node = nodeAt(nodes, siteId)
   return node?.type === 'site' ? (node as SiteNode) : null
 }
 
@@ -145,7 +153,8 @@ export function createRiver(
 ): RiverActionResult {
   const pointError = validatePoints(parameters.points)
   if (pointError) return { ok: false, message: pointError }
-  const site = siteForMutation(scene, siteId)
+  const nodes = scene.nodes()
+  const site = siteForMutation(nodes, siteId)
   if (!site) {
     return { ok: false, message: 'Select a Site before drawing a river.' }
   }
@@ -159,8 +168,8 @@ export function createRiver(
   if (!parsed.success)
     return { ok: false, message: 'River settings are outside their allowed range.' }
   const river = parsed.data
-  const rivers = [...riversForSite(scene.nodes, site.id), river]
-  scene.applyNodeChanges({
+  const rivers = [...riversForSite(nodes, site.id), river]
+  applyRiverChanges(scene, {
     create: [
       {
         node: river as unknown as AnyNode,
@@ -177,10 +186,11 @@ export function updateRiver(
   riverId: string,
   patch: Partial<RiverParameters>,
 ): RiverActionResult {
-  const current = riverNodeOf(nodeAt(scene.nodes, riverId))
+  const nodes = scene.nodes()
+  const current = riverNodeOf(nodeAt(nodes, riverId))
   if (!current || !current.parentId)
     return { ok: false, message: 'The selected river no longer exists.' }
-  const site = siteForMutation(scene, String(current.parentId))
+  const site = siteForMutation(nodes, String(current.parentId))
   if (!site) return { ok: false, message: 'The river Site no longer exists.' }
   const parsed = RiverNodeSchema.safeParse({
     ...current,
@@ -206,28 +216,29 @@ export function updateRiver(
     patch.source !== undefined ||
     patch.outlet !== undefined
   if (!excavationChanged) {
-    scene.applyNodeChanges({ update: [riverUpdate] })
+    applyRiverChanges(scene, { update: [riverUpdate] })
     return { ok: true, message: 'River updated.', river }
   }
-  const rivers = riversForSite(scene.nodes, site.id).map((candidate) =>
+  const rivers = riversForSite(nodes, site.id).map((candidate) =>
     candidate.id === river.id ? river : candidate,
   )
-  scene.applyNodeChanges({
+  applyRiverChanges(scene, {
     update: [riverUpdate, siteTerrainUpdate(site, rivers)],
   })
   return { ok: true, message: 'River updated.', river }
 }
 
 export function deleteRiver(scene: RiverSceneWriter, riverId: string): RiverActionResult {
-  const river = riverNodeOf(nodeAt(scene.nodes, riverId))
+  const nodes = scene.nodes()
+  const river = riverNodeOf(nodeAt(nodes, riverId))
   if (!river || !river.parentId)
     return { ok: false, message: 'The selected river no longer exists.' }
-  const site = siteForMutation(scene, String(river.parentId))
+  const site = siteForMutation(nodes, String(river.parentId))
   if (!site) return { ok: false, message: 'The river Site no longer exists.' }
-  const remaining = riversForSite(scene.nodes, site.id).filter(
+  const remaining = riversForSite(nodes, site.id).filter(
     (candidate) => candidate.id !== river.id,
   )
-  scene.applyNodeChanges({
+  applyRiverChanges(scene, {
     update: [siteTerrainUpdate(site, remaining)],
     delete: [river.id as AnyNodeId],
   })

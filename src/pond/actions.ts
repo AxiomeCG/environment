@@ -2,6 +2,7 @@ import {
   type AnyNode,
   type AnyNodeId,
   generateId,
+  type SceneApi,
   type SiteNode,
   terrainFieldOf,
   type TerrainField,
@@ -40,7 +41,7 @@ export type PondSelectionContext = {
   selectedIds: readonly string[]
 }
 
-export type PondSceneNodes = Record<AnyNodeId, AnyNode>
+export type PondSceneNodes = Readonly<Record<AnyNodeId, AnyNode>>
 
 export type PondNodeChanges = {
   create?: { node: AnyNode; parentId?: AnyNodeId }[]
@@ -48,11 +49,7 @@ export type PondNodeChanges = {
   delete?: AnyNodeId[]
 }
 
-export type PondSceneWriter = {
-  nodes: PondSceneNodes
-  rootNodeIds: AnyNodeId[]
-  applyNodeChanges: (changes: PondNodeChanges) => void
-}
+export type PondSceneWriter = SceneApi
 
 export type PondTargetInfo = {
   site: SiteNode
@@ -69,6 +66,12 @@ export type PondActionResult = {
   ok: boolean
   message: string
   target?: PondToolTarget
+}
+function applyPondChanges(sceneApi: PondSceneWriter, changes: PondNodeChanges): void {
+  if (!sceneApi.applyChanges) {
+    throw new Error('Pond edits require SceneApi.applyChanges for an atomic commit.')
+  }
+  sceneApi.applyChanges(changes)
 }
 
 function nodeAt(nodes: PondSceneNodes, id: string | null): AnyNode | undefined {
@@ -240,7 +243,7 @@ function updatePrimary(
 ): void {
   if (!info.pond) return
   const duplicates = duplicateIds(info)
-  scene.applyNodeChanges({
+  applyPondChanges(scene, {
     update: [
       {
         id: info.pond.id as AnyNodeId,
@@ -261,10 +264,11 @@ export function commitPondLevelAction(
   action: PondLevelAction,
   creationQuality: WaterQuality,
 ): PondActionResult {
-  const info = inspectPondTarget(scene.nodes, target)
+  const nodes = scene.nodes()
+  const info = inspectPondTarget(nodes, target)
   if (!target) return { ok: false, message: 'Select a terrain depression first.' }
   if (!info) {
-    const site = nodeAt(scene.nodes, target.siteId)
+    const site = nodeAt(nodes, target.siteId)
     return {
       ok: false,
       message:
@@ -287,7 +291,7 @@ export function commitPondLevelAction(
       quality: creationQuality,
       props: [],
     })
-    scene.applyNodeChanges({
+    applyPondChanges(scene, {
       create: [
         {
           node: pond as unknown as AnyNode,
@@ -331,7 +335,7 @@ export function commitPondQuality(
   target: PondToolTarget | null,
   quality: WaterQuality,
 ): PondActionResult {
-  const info = inspectPondTarget(scene.nodes, target)
+  const info = inspectPondTarget(scene.nodes(), target)
   if (!info?.pond) {
     return { ok: false, message: 'Quality saved for the next pond you fill.' }
   }
@@ -355,7 +359,7 @@ export function commitPondShoreline(
   target: PondToolTarget | null,
   shoreline: PondShoreline,
 ): PondActionResult {
-  const info = inspectPondTarget(scene.nodes, target)
+  const info = inspectPondTarget(scene.nodes(), target)
   if (!info?.pond) return { ok: false, message: 'Add water before choosing its bank treatment.' }
   if ((info.pond.shoreline ?? 'soft') === shoreline && info.connectedPonds.length === 1) {
     return { ok: false, message: 'This bank treatment is already selected.' }
@@ -378,7 +382,7 @@ export function commitPondPropPlacement(
   kind: PondPropKind,
   position: readonly [number, number],
 ): PondActionResult {
-  const info = inspectPondTarget(scene.nodes, target)
+  const info = inspectPondTarget(scene.nodes(), target)
   if (!info?.pond || info.surface.level === null) {
     return { ok: false, message: 'Fill a selected pond before placing water props.' }
   }
@@ -426,7 +430,7 @@ export function commitPondPropRemoval(
   target: PondToolTarget | null,
   position: readonly [number, number],
 ): PondActionResult {
-  const info = inspectPondTarget(scene.nodes, target)
+  const info = inspectPondTarget(scene.nodes(), target)
   if (!info?.pond) return { ok: false, message: 'Select a pond with props first.' }
   const props = mergedProps(info.pond, info.connectedPonds)
   let nearest = -1
@@ -457,7 +461,7 @@ export function commitClearPondProps(
   scene: PondSceneWriter,
   target: PondToolTarget | null,
 ): PondActionResult {
-  const info = inspectPondTarget(scene.nodes, target)
+  const info = inspectPondTarget(scene.nodes(), target)
   if (!info?.pond || mergedProps(info.pond, info.connectedPonds).length === 0) {
     return { ok: false, message: 'This pond has no props to clear.' }
   }

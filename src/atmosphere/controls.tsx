@@ -5,14 +5,13 @@ import { useId, useMemo, useState, useSyncExternalStore } from 'react'
 import { ParameterRange } from '../parameter-range'
 import { useEnvironmentStore, type WeatherSettings } from '../store'
 import {
-  createSolarState,
   DEFAULT_SKY_SETTINGS,
   SKY_PRESETS,
   skyPeriod,
-  updateSolarState,
   type SkyDebug,
   type SkySettings,
 } from './settings'
+import { createSolarState, updateSolarState } from './solar'
 import TimeOrbit from './time-orbit'
 import {
   enableThunderAudioFromGesture,

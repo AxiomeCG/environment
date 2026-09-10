@@ -4,9 +4,9 @@ import {
   sceneRegistry,
   useLiveNodeOverrides,
   useLiveTerrain,
-  useScene,
   type AnyNode,
   type AnyNodeId,
+  type SceneApi,
 } from '@pascal-app/core'
 import { useViewer } from '@pascal-app/viewer'
 import { useFrame, useThree } from '@react-three/fiber'
@@ -27,8 +27,8 @@ export type PondSiteChange = {
 }
 
 export function pondSiteChanges(
-  currentNodes: Record<string, AnyNode>,
-  previousNodes: Record<string, AnyNode>,
+  currentNodes: Readonly<Record<string, AnyNode>>,
+  previousNodes: Readonly<Record<string, AnyNode>>,
 ): PondSiteChange[] {
   const changes: PondSiteChange[] = []
   for (const node of Object.values(currentNodes)) {
@@ -56,26 +56,27 @@ export function pondSiteChanges(
   return changes
 }
 
-export default function PondSystem() {
+export default function PondSystem({ sceneApi }: { sceneApi: SceneApi }) {
   const elapsed = useRef(0)
   const registeredRoots = useRef<RegisteredPondRoot[]>([])
   const registryRevision = useRef(-1)
   const renderPaused = useViewer((state) => state.renderPaused)
   const getThree = useThree((state) => state.get)
   useEffect(() => {
-    const unsubscribeScene = useScene.subscribe((current, previous) => {
-      for (const change of pondSiteChanges(current.nodes, previous.nodes)) {
-        current.markDirty(change.id as AnyNodeId)
-      }
+    const unsubscribeScene =
+      sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
+        for (const change of pondSiteChanges(currentNodes, previousNodes)) {
+          sceneApi.markDirty(change.id as AnyNodeId)
+        }
 
       const changedPondSites = new Set<string>()
       const nodeIds = new Set([
-        ...Object.keys(current.nodes),
-        ...Object.keys(previous.nodes),
+        ...Object.keys(currentNodes),
+        ...Object.keys(previousNodes),
       ])
       for (const nodeId of nodeIds) {
-        const currentNode = current.nodes[nodeId as AnyNodeId]
-        const previousNode = previous.nodes[nodeId as AnyNodeId]
+        const currentNode = currentNodes[nodeId as AnyNodeId]
+        const previousNode = previousNodes[nodeId as AnyNodeId]
         if (currentNode === previousNode) continue
         if (currentNode && (currentNode.type as string) === POND_KIND && currentNode.parentId) {
           changedPondSites.add(currentNode.parentId as string)
@@ -84,8 +85,8 @@ export default function PondSystem() {
           changedPondSites.add(previousNode.parentId as string)
         }
       }
-      markPondsOfSites(changedPondSites)
-    })
+      markPondsOfSites(sceneApi, changedPondSites)
+    }) ?? (() => {})
 
     const unsubscribeTerrain = useLiveTerrain.subscribe((current, previous) => {
       const siteIds = new Set([
@@ -102,7 +103,7 @@ export default function PondSystem() {
           ?? previous.remoteStrokes.get(siteId)?.field
         if (currentField !== previousField) changedSiteIds.add(siteId)
       }
-      markPondsOfSites(changedSiteIds)
+      markPondsOfSites(sceneApi, changedSiteIds)
     })
 
     const unsubscribeBoundary = useLiveNodeOverrides.subscribe((current, previous) => {
@@ -113,7 +114,7 @@ export default function PondSystem() {
         const previousPolygon = previous.overrides.get(siteId)?.polygon
         if (currentPolygon !== previousPolygon) changedSiteIds.add(siteId)
       }
-      markPondsOfSites(changedSiteIds)
+      markPondsOfSites(sceneApi, changedSiteIds)
     })
 
     return () => {
@@ -126,7 +127,7 @@ export default function PondSystem() {
       unsubscribeTerrain()
       unsubscribeBoundary()
     }
-  }, [])
+  }, [sceneApi])
 
   useEffect(() => {
     if (!renderPaused) {
@@ -160,33 +161,26 @@ export default function PondSystem() {
     }
 
     let moving = false
-    let pendingBuild = false
-    const scene = useScene.getState()
-    const nodes = scene.nodes
+    const nodes = sceneApi.nodes()
     for (let index = 0; index < roots.length; index += 1) {
       const entry = roots[index]
       if (!entry) continue
       const node = nodes[entry.id as AnyNodeId]
-      if (scene.dirtyNodes.has(entry.id as AnyNodeId)) pendingBuild = true
-      if (
-        node?.visible !== false
-        && updatePondKoiMotion(entry.root, elapsed.current)
-      ) {
+      if (node?.visible !== false && updatePondKoiMotion(entry.root, elapsed.current)) {
         moving = true
       }
     }
-    if ((moving || pendingBuild) && state.frameloop === 'demand') state.invalidate()
+    if (moving && state.frameloop === 'demand') state.invalidate()
   })
 
   return null
 }
 
-function markPondsOfSites(siteIds: ReadonlySet<string>): void {
+function markPondsOfSites(sceneApi: SceneApi, siteIds: ReadonlySet<string>): void {
   if (siteIds.size === 0) return
-  const scene = useScene.getState()
-  for (const node of Object.values(scene.nodes)) {
+  for (const node of Object.values(sceneApi.nodes())) {
     if ((node.type as string) === POND_KIND && siteIds.has(node.parentId as string)) {
-      scene.markDirty(node.id)
+      sceneApi.markDirty(node.id)
     }
   }
 }

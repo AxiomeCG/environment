@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "incremental": true,
+    "types": ["node", "bun"],
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@pascal-app/core": ["../../editor/packages/core"],
+      "@pascal-app/editor": ["../../editor/packages/editor/src/index.tsx"],
+      "@pascal-app/editor/catalog": [
+        "../../editor/packages/editor/src/components/ui/item-catalog/catalog-items.tsx"
+      ],
+      "@pascal-app/nodes": ["../../editor/packages/nodes"],
+      "@pascal-app/viewer": ["../../editor/packages/viewer"],
+      "@react-three/fiber": ["./node_modules/@react-three/fiber"],
+      "@react-three/drei": ["./node_modules/@react-three/drei"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"],
+      "three": ["./node_modules/@types/three"],
+      "three/*": ["./node_modules/@types/three/*"],
+      "@/*": ["./*"],
+      "@pascal-app/plugin-environment": ["../src/index.ts"],
+      "@pascal-app/plugin-environment/lab": ["../src/lab/index.ts"],
+      "@pascal-app/plugin-environment/lab/catalog": ["../src/lab/catalog.ts"]
+    },
+    "allowJs": true
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "next-env.d.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}

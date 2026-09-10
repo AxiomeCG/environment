@@ -5,6 +5,7 @@ import {
   type AnyNodeId,
   type SiteNode,
   sceneRegistry,
+  type SceneApi,
   useLiveTerrain,
   useScene,
 } from '@pascal-app/core'
@@ -62,8 +63,8 @@ export type GrassFieldSiteChange = {
 }
 
 export function grassFieldSiteChanges(
-  currentNodes: Record<string, AnyNode>,
-  previousNodes: Record<string, AnyNode>,
+  currentNodes: Readonly<Record<string, AnyNode>>,
+  previousNodes: Readonly<Record<string, AnyNode>>,
 ): GrassFieldSiteChange[] {
   const changes: GrassFieldSiteChange[] = []
 
@@ -100,15 +101,15 @@ export function grassFieldSiteChanges(
   return changes
 }
 
-export default function GrassFieldSystem() {
+export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
   const previousNodesRef = useRef(new Map<string, GrassFieldNode>())
 
   useEffect(() => {
-    const unsubscribeScene = useScene.subscribe((current, previous) => {
-      const changes = grassFieldSiteChanges(current.nodes, previous.nodes)
+    const unsubscribeScene = sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
+      const changes = grassFieldSiteChanges(currentNodes, previousNodes)
       for (const change of changes) {
-        const node = current.nodes[change.id as AnyNodeId]
-        const site = node?.parentId ? current.nodes[node.parentId as AnyNodeId] : undefined
+        const node = currentNodes[change.id as AnyNodeId]
+        const site = node?.parentId ? currentNodes[node.parentId as AnyNodeId] : undefined
         const group = sceneRegistry.nodes.get(change.id)
         if (
           !change.boundaryChanged &&
@@ -119,11 +120,11 @@ export default function GrassFieldSystem() {
         ) {
           continue
         }
-        current.markDirty(change.id as AnyNodeId)
+        sceneApi.markDirty(change.id as AnyNodeId)
       }
-      const obstacleSiteIds = changedGrassObstacleSiteIds(current.nodes, previous.nodes)
+      const obstacleSiteIds = changedGrassObstacleSiteIds(currentNodes, previousNodes)
       if (obstacleSiteIds.size > 0) {
-        for (const candidate of Object.values(current.nodes)) {
+        for (const candidate of Object.values(currentNodes)) {
           if (
             (candidate.type as string) !== GRASS_FIELD_KIND ||
             !obstacleSiteIds.has(candidate.parentId as string)
@@ -131,13 +132,13 @@ export default function GrassFieldSystem() {
             continue
           }
           const field = candidate as unknown as GrassFieldNode
-          const site = field.parentId ? current.nodes[field.parentId as AnyNodeId] : undefined
+          const site = field.parentId ? currentNodes[field.parentId as AnyNodeId] : undefined
           if (
             (field.flowerDensity ?? 0) > 0 ||
             site?.type !== 'site' ||
-            !updateGrassFieldObstacles(field, site, current.nodes)
+            !updateGrassFieldObstacles(field, site, currentNodes)
           ) {
-            current.markDirty(field.id as AnyNodeId)
+            sceneApi.markDirty(field.id as AnyNodeId)
           }
         }
       }
@@ -161,8 +162,8 @@ export default function GrassFieldSystem() {
       }
 
       if (changedSiteIds.size > 0) {
-        const scene = useScene.getState()
-        for (const node of Object.values(scene.nodes)) {
+        const nodes = sceneApi.nodes()
+        for (const node of Object.values(nodes)) {
           if (
             (node.type as string) !== GRASS_FIELD_KIND ||
             !changedSiteIds.has(node.parentId as string)
@@ -170,22 +171,22 @@ export default function GrassFieldSystem() {
             continue
           }
 
-          const site = scene.nodes[node.parentId as AnyNodeId]
+          const site = nodes[node.parentId as AnyNodeId]
           const group = sceneRegistry.nodes.get(node.id)
           if (
             site?.type !== 'site' ||
             !group ||
             !updateGrassFieldTerrain(group, site as SiteNode)
           ) {
-            scene.markDirty(node.id)
+            sceneApi.markDirty(node.id)
           }
-          if (site?.type === 'site' && siteHasWaterObstacles(site.id, scene.nodes)) {
+          if (site?.type === 'site' && siteHasWaterObstacles(site.id, nodes)) {
             const field = node as unknown as GrassFieldNode
             if (
               (field.flowerDensity ?? 0) > 0 ||
-              !updateGrassFieldObstacles(field, site, scene.nodes)
+              !updateGrassFieldObstacles(field, site, nodes)
             ) {
-              scene.markDirty(node.id)
+              sceneApi.markDirty(node.id)
             }
           }
         }
@@ -194,14 +195,15 @@ export default function GrassFieldSystem() {
 
     const previousNodes = previousNodesRef.current
     return () => {
-      unsubscribeScene()
+      unsubscribeScene?.()
       unsubscribeLiveTerrain()
       previousNodes.clear()
     }
-  }, [])
+  }, [sceneApi])
 
   useFrame(({ camera, size, gl }) => {
-    const { clearDirty, dirtyNodes, nodes } = useScene.getState()
+    const { clearDirty, dirtyNodes } = useScene.getState()
+    const nodes = sceneApi.nodes()
     const previousNodes = previousNodesRef.current
     const registeredByType = sceneRegistry.byType as Record<string, Set<string> | undefined>
     const fieldIds = registeredByType[GRASS_FIELD_KIND]

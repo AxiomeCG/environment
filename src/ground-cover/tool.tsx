@@ -2,6 +2,7 @@
 
 import {
   type AnyNode,
+  type BuildingNode,
   type AnyNodeId,
   emitter,
   pointInPolygon2D,
@@ -9,26 +10,15 @@ import {
   type SiteNode,
   terrainFieldOf,
   type TerrainField,
-  useScene,
 } from '@pascal-app/core'
-import { markToolCancelConsumed, useEditor, useInteractionScope } from '@pascal-app/editor'
-import { useViewer } from '@pascal-app/viewer'
+import { markToolCancelConsumed, useRegistryToolContext } from '@pascal-app/editor'
 import { useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import { Plane, Raycaster, Vector2, Vector3 } from 'three'
-import {
-  type GroundCoverBrushTool,
-  useEnvironmentStore,
-} from '../store'
-import {
-  cancelEnvironmentPaintToolFor2D,
-  type GroundCoverToolActionTarget,
-} from '../pascal-tool-actions'
+import { useEnvironmentStore } from '../store'
+import { useSceneApiNodes } from '../use-scene-api-nodes'
 import GrassFieldBrushCursor from './brush-cursor'
-import {
-  grassHeightTargetColor,
-  resolveGrassHeightField,
-} from './height-field'
+import { resolveGrassHeightField } from './height-field'
 import {
   getGrassHeightRuntime,
   updateGrassHeightTexture,
@@ -40,16 +30,24 @@ import {
   siteBounds,
   type GrassPaintField,
 } from './paint-field'
+import { groundCoverPaintSettings } from './paint-settings'
 import {
   advancePaintStroke,
   beginPaintStroke,
   currentPaintField,
   detachPaintStrokeAnchor,
   type PaintStroke,
-  type PaintStrokeSettings,
 } from './paint-stroke'
+import { resolveActivePaintSite } from './paint-target'
 import { getGrassPaintRuntime, updateGrassPaintTexture } from './paint-texture'
 import { getGrassObstacleRuntime } from './obstacle-texture'
+import {
+  claimEnvironmentPaintStroke,
+  isEnvironmentPaintScopeActive,
+  mountEnvironmentPaintBody,
+  releaseEnvironmentPaintStroke,
+  subscribeEnvironmentPaintScopeLoss,
+} from './paint-tool-lifecycle'
 import type { GrassFieldNode } from './schema'
 
 type PaintableGrassFieldNode = GrassFieldNode & {
@@ -58,6 +56,7 @@ type PaintableGrassFieldNode = GrassFieldNode & {
 }
 
 type PaintTarget = {
+  building: BuildingNode
   grassField: PaintableGrassFieldNode
   site: SiteNode
 }
@@ -70,24 +69,22 @@ type ActivePaintStroke = {
   terrain: TerrainField | null
 }
 
-function isGrassFieldNode(node: unknown): node is PaintableGrassFieldNode {
-  return (
-    typeof node === 'object' &&
-    node !== null &&
-    'type' in node &&
-    node.type === 'environment:ground-cover'
+function resolvePaintTarget(
+  nodes: Readonly<Record<AnyNodeId, AnyNode>>,
+  activeLevelId: AnyNodeId | null,
+): PaintTarget | null {
+  const activeSite = resolveActivePaintSite(nodes, activeLevelId)
+  if (!activeSite) return null
+  const grassFields = (Object.values(nodes) as unknown as PaintableGrassFieldNode[]).filter(
+    (node) => node.type === 'environment:ground-cover' && node.parentId === activeSite.site.id,
   )
-}
-
-function resolvePaintTarget(nodes: Record<AnyNodeId, AnyNode>): PaintTarget | null {
-  const grassFields = (Object.values(nodes) as unknown[]).filter(isGrassFieldNode)
-  if (grassFields.length !== 1) return null
-
-  const grassField = grassFields[0]
-  if (!grassField?.parentId) return null
-  const parent = nodes[grassField.parentId as AnyNodeId]
-  if (parent?.type !== 'site') return null
-  return { grassField, site: parent }
+  return grassFields.length === 1
+    ? {
+        building: activeSite.building,
+        grassField: grassFields[0]!,
+        site: activeSite.site,
+      }
+    : null
 }
 
 function pointInsideSite(site: SiteNode, x: number, z: number): boolean {
@@ -95,41 +92,27 @@ function pointInsideSite(site: SiteNode, x: number, z: number): boolean {
 }
 
 export function GrassFieldPaintTool() {
+  const { activeLevelId, isCameraDragging, sceneApi } = useRegistryToolContext()
   const { camera, gl } = useThree()
-  const nodes = useScene((state) => state.nodes)
+  const nodes = useSceneApiNodes(sceneApi)
   const settings = useEnvironmentStore((state) => state.groundCoverBrush)
   const brushTool = useEnvironmentStore((state) => state.groundCoverTool)
   const heightAmount = useEnvironmentStore(
     (state) => state.groundCoverHeightAmount,
   )
-  const target = useMemo(() => resolvePaintTarget(nodes), [nodes])
+  const target = useMemo(() => resolvePaintTarget(nodes, activeLevelId), [activeLevelId, nodes])
 
   const latest = useRef({ target, settings, brushTool, heightAmount })
   latest.current = { target, settings, brushTool, heightAmount }
 
   const activeStrokeRef = useRef<ActivePaintStroke | null>(null)
+  const ownerRef = useRef(Symbol('environment-ground-cover-paint'))
   const raycaster = useRef(new Raycaster())
   const pointer = useRef(new Vector2())
   const flatGround = useRef(new Plane(new Vector3(0, 1, 0), 0))
   const flatHit = useRef(new Vector3())
 
-  useEffect(() => {
-    useInteractionScope.getState().begin({ kind: 'painting' })
-    return () => {
-      const scope = useInteractionScope.getState()
-      if (scope.scope.kind === 'painting') scope.end()
-    }
-  }, [])
-
-  useEffect(
-    () =>
-      useEditor.subscribe((editor) => {
-        cancelEnvironmentPaintToolFor2D(
-          editor as unknown as GroundCoverToolActionTarget,
-        )
-      }),
-    [],
-  )
+  useEffect(() => mountEnvironmentPaintBody(), [])
 
   useEffect(() => {
     const canvas = gl.domElement
@@ -176,6 +159,7 @@ export function GrassFieldPaintTool() {
       const active = activeStrokeRef.current
       if (!active) return false
       activeStrokeRef.current = null
+      releaseEnvironmentPaintStroke(ownerRef.current)
       releasePointer(active.pointerId)
       if (active.kind === 'height') {
         updateGrassHeightTexture(active.grassFieldId, active.stroke.snapshot)
@@ -184,15 +168,18 @@ export function GrassFieldPaintTool() {
       }
       return true
     }
+    const unsubscribeScope = subscribeEnvironmentPaintScopeLoss(() => {
+      abandonStroke()
+    })
 
     const applyDab = (event: PointerEvent) => {
       const active = activeStrokeRef.current
       if (!active || event.pointerId !== active.pointerId) return
-      if (useInteractionScope.getState().scope.kind !== 'painting') {
+      if (!isEnvironmentPaintScopeActive()) {
         abandonStroke()
         return
       }
-      if (useViewer.getState().cameraDragging) {
+      if (isCameraDragging()) {
         detachPaintStrokeAnchor(active.stroke)
         return
       }
@@ -203,7 +190,10 @@ export function GrassFieldPaintTool() {
         return
       }
       const point = groundPoint(event, currentTarget.site, active.terrain)
-      if (!point) return
+      if (!point) {
+        detachPaintStrokeAnchor(active.stroke)
+        return
+      }
       const field = advancePaintStroke(active.stroke, point[0], point[1])
       if (!field) return
       if (active.kind === 'height') {
@@ -215,14 +205,14 @@ export function GrassFieldPaintTool() {
 
     const handlePointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return
-      if (useInteractionScope.getState().scope.kind !== 'painting') return
+      if (!isEnvironmentPaintScopeActive()) return
 
       const active = activeStrokeRef.current
       if (active) {
         if (event.pointerId !== active.pointerId) abandonStroke()
         return
       }
-      if (useViewer.getState().cameraDragging) return
+      if (isCameraDragging()) return
 
       const currentTarget = latest.current.target
       if (!currentTarget) return
@@ -230,6 +220,7 @@ export function GrassFieldPaintTool() {
       const terrain = terrainFieldOf(site)
       const point = groundPoint(event, site, terrain)
       if (!point) return
+      if (!claimEnvironmentPaintStroke(ownerRef.current)) return
 
       const kind = latest.current.brushTool.endsWith('-height')
         ? 'height'
@@ -250,7 +241,7 @@ export function GrassFieldPaintTool() {
       const stroke = beginPaintStroke({
         field,
         boundary: site.polygon.points,
-        settings: settingsForGroundCoverTool(
+        settings: groundCoverPaintSettings(
           latest.current.brushTool,
           latest.current.settings,
           latest.current.heightAmount,
@@ -278,11 +269,19 @@ export function GrassFieldPaintTool() {
     const handlePointerUp = (event: PointerEvent) => {
       const active = activeStrokeRef.current
       if (!active || event.pointerId !== active.pointerId) return
+      if (
+        !isEnvironmentPaintScopeActive() ||
+        latest.current.target?.grassField.id !== active.grassFieldId
+      ) {
+        abandonStroke()
+        return
+      }
       activeStrokeRef.current = null
+      releaseEnvironmentPaintStroke(ownerRef.current)
       releasePointer(event.pointerId)
 
       const field = currentPaintField(active.stroke)
-      useScene.getState().updateNode(
+      sceneApi.update(
         active.grassFieldId as AnyNodeId,
         (active.kind === 'height'
           ? { heightMap: encodeGrassPaintField(field) }
@@ -293,6 +292,19 @@ export function GrassFieldPaintTool() {
     const handlePointerCancel = (event: PointerEvent) => {
       if (activeStrokeRef.current?.pointerId === event.pointerId) abandonStroke()
     }
+    const handlePointerLeave = () => {
+      const active = activeStrokeRef.current
+      if (active) detachPaintStrokeAnchor(active.stroke)
+    }
+
+    const handleLostPointerCapture = (event: PointerEvent) => {
+      if (activeStrokeRef.current?.pointerId === event.pointerId) abandonStroke()
+    }
+
+    const handleWindowBlur = () => {
+      abandonStroke()
+    }
+
 
     const handleToolCancel = () => {
       if (abandonStroke()) markToolCancelConsumed()
@@ -302,6 +314,9 @@ export function GrassFieldPaintTool() {
     canvas.addEventListener('pointermove', handlePointerMove)
     canvas.addEventListener('pointerup', handlePointerUp)
     canvas.addEventListener('pointercancel', handlePointerCancel)
+    canvas.addEventListener('pointerleave', handlePointerLeave)
+    canvas.addEventListener('lostpointercapture', handleLostPointerCapture)
+    window.addEventListener('blur', handleWindowBlur)
     emitter.on('tool:cancel', handleToolCancel)
 
     return () => {
@@ -309,38 +324,23 @@ export function GrassFieldPaintTool() {
       canvas.removeEventListener('pointermove', handlePointerMove)
       canvas.removeEventListener('pointerup', handlePointerUp)
       canvas.removeEventListener('pointercancel', handlePointerCancel)
+      canvas.removeEventListener('pointerleave', handlePointerLeave)
+      canvas.removeEventListener('lostpointercapture', handleLostPointerCapture)
+      window.removeEventListener('blur', handleWindowBlur)
       emitter.off('tool:cancel', handleToolCancel)
+      unsubscribeScope()
       abandonStroke()
     }
-  }, [camera, gl])
+  }, [camera, gl, isCameraDragging, sceneApi])
 
   if (!target) return null
   return (
     <GrassFieldBrushCursor
-      settings={settingsForGroundCoverTool(brushTool, settings, heightAmount)}
+      building={target.building}
+      settings={groundCoverPaintSettings(brushTool, settings, heightAmount)}
       site={target.site}
     />
   )
-}
-
-function settingsForGroundCoverTool(
-  tool: GroundCoverBrushTool,
-  brush: PaintStrokeSettings,
-  heightAmount: number,
-): PaintStrokeSettings {
-  if (tool === 'paint-density') return { ...brush, mode: 'paint' }
-  if (tool === 'erase-density') return { ...brush, mode: 'erase' }
-  if (tool === 'smooth-density') return { ...brush, mode: 'smooth' }
-  if (tool === 'smooth-height') return { ...brush, mode: 'smooth' }
-
-  const direction = tool === 'raise-height' ? 'raise' : 'lower'
-  return {
-    ...brush,
-    mode: 'paint',
-    color: grassHeightTargetColor(direction, heightAmount),
-    targetDensity: 1,
-    premultiplyColorByDensity: false,
-  }
 }
 
 export default GrassFieldPaintTool

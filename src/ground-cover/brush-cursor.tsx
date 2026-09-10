@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  type BuildingNode,
   pointInPolygon2D,
   raycastTerrain,
   type SiteNode,
@@ -27,6 +28,7 @@ const RING_LIFT = 0.02
 const NO_RAYCAST = () => null
 
 export type GrassFieldBrushCursorProps = {
+  building: BuildingNode
   settings: Partial<PaintStrokeSettings>
   site: SiteNode
 }
@@ -37,7 +39,11 @@ function cursorColor(settings: Partial<PaintStrokeSettings>): string {
   return settings.color ?? DEFAULT_PAINT_STROKE_SETTINGS.color
 }
 
-export function GrassFieldBrushCursor({ settings, site }: GrassFieldBrushCursorProps) {
+export function GrassFieldBrushCursor({
+  building,
+  settings,
+  site,
+}: GrassFieldBrushCursorProps) {
   const { camera, gl } = useThree()
   const lineRef = useRef<Line>(null)
   const centerRef = useRef<Group>(null)
@@ -137,6 +143,11 @@ export function GrassFieldBrushCursor({ settings, site }: GrassFieldBrushCursorP
     const position = line.geometry.getAttribute('position')
     const values = position.array as Float32Array
 
+    const cosBuilding = Math.cos(building.rotation[1])
+    const sinBuilding = Math.sin(building.rotation[1])
+    const buildingX = building.position[0]
+    const buildingY = building.position[1]
+    const buildingZ = building.position[2]
     for (let index = 0; index <= RING_SEGMENTS; index += 1) {
       const angle = (index / RING_SEGMENTS) * Math.PI * 2
       const cos = Math.cos(angle)
@@ -145,14 +156,23 @@ export function GrassFieldBrushCursor({ settings, site }: GrassFieldBrushCursorP
         shape === 'square' ? 1 / Math.max(Math.abs(cos), Math.abs(sin), Number.EPSILON) : 1
       const ringX = x + cos * radius * shapeScale
       const ringZ = z + sin * radius * shapeScale
-      values[index * 3] = ringX
-      values[index * 3 + 1] = (terrain ? surfaceHeightAt(terrain, ringX, ringZ) : 0) + RING_LIFT
-      values[index * 3 + 2] = ringZ
+      const deltaX = ringX - buildingX
+      const deltaZ = ringZ - buildingZ
+      values[index * 3] = deltaX * cosBuilding - deltaZ * sinBuilding
+      values[index * 3 + 1] =
+        (terrain ? surfaceHeightAt(terrain, ringX, ringZ) : 0) - buildingY + RING_LIFT
+      values[index * 3 + 2] = deltaX * sinBuilding + deltaZ * cosBuilding
     }
 
     position.needsUpdate = true
     line.geometry.computeBoundingSphere()
-    center.position.set(x, (terrain ? surfaceHeightAt(terrain, x, z) : 0) + RING_LIFT, z)
+    const centerDeltaX = x - buildingX
+    const centerDeltaZ = z - buildingZ
+    center.position.set(
+      centerDeltaX * cosBuilding - centerDeltaZ * sinBuilding,
+      (terrain ? surfaceHeightAt(terrain, x, z) : 0) - buildingY + RING_LIFT,
+      centerDeltaX * sinBuilding + centerDeltaZ * cosBuilding,
+    )
   })
 
   return (

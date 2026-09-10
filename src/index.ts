@@ -59,21 +59,15 @@ export {
   type RiverPoint,
   type RiverSource,
 } from './river/schema'
+export { DEFAULT_SKY_SETTINGS, SKY_PRESETS, type SkySettings } from './atmosphere/settings'
+export type { SkyProvider } from './atmosphere/sky-provider'
 export {
   ENVIRONMENT_CONFIGURATION_VERSION,
   EnvironmentConfigurationSchema,
   type EnvironmentConfiguration,
   type EnvironmentConfigurationV2,
-  environmentPresentation,
   exportEnvironmentConfiguration,
   importEnvironmentConfiguration,
-} from './presentation'
+} from './presentation-configuration'
+export { environmentPresentation } from './presentation'
 export { SurfaceMaterialNode } from './surface-material/schema'
-export { default as SurroundingsLayer } from './surroundings/layer'
-export { default as AtmosphereLayer } from './atmosphere/layer'
-export {
-  createSkyProvider,
-  createCubemapSkyProvider,
-  type SkyProvider,
-} from './atmosphere/sky-provider'
-export { DEFAULT_SKY_SETTINGS, SKY_PRESETS, type SkySettings } from './atmosphere/settings'

@@ -1,22 +1,16 @@
 'use client'
 
-import {
-  type AnyNodeId,
-  emitter,
-  raycastTerrain,
-  terrainFieldOf,
-  useScene,
-} from '@pascal-app/core'
+import { type AnyNodeId, emitter, raycastTerrain, terrainFieldOf } from '@pascal-app/core'
 import {
   markToolCancelConsumed,
-  useEditor,
   useInteractionScope,
+  useRegistryToolContext,
 } from '@pascal-app/editor'
 import { useViewer } from '@pascal-app/viewer'
 import { useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import { Raycaster, Vector2 } from 'three'
-import { cancelEnvironmentPaintToolFor2D, type GroundCoverToolActionTarget } from '../pascal-tool-actions'
+import { useSceneApiNodes } from '../use-scene-api-nodes'
 import { useEnvironmentStore, type PondToolTarget } from '../store'
 import {
   commitPondPropPlacement,
@@ -28,6 +22,14 @@ import {
   type PondPropKind,
 } from './actions'
 import { PondContours } from './contours'
+import {
+  claimPondGesture,
+  ensurePondToolScope,
+  ownsPondGesture,
+  releasePondGesture,
+  ownsPondToolScope,
+  retainPondToolScope,
+} from './interaction'
 import { POND_LEVEL_STEP } from './schema'
 
 const CLICK_TOLERANCE_SQUARED = 25
@@ -50,39 +52,45 @@ function targetKey(target: PondToolTarget | null): string {
 
 export function PondTool() {
   const { camera, gl } = useThree()
-  const nodes = useScene((state) => state.nodes)
-  const rootNodeIds = useScene((state) => state.rootNodeIds)
+  const { activeLevelId, isCameraDragging, sceneApi, selectNode } = useRegistryToolContext()
+  const nodes = useSceneApiNodes(sceneApi)
   const selection = useViewer((state) => state.selection)
   const mode = useEnvironmentStore((state) => state.pondToolMode)
   const target = useEnvironmentStore((state) => state.pondTarget)
   const activeSite = useMemo(
-    () => resolveActivePondSite(nodes, rootNodeIds, selection),
-    [nodes, rootNodeIds, selection],
+    () =>
+      resolveActivePondSite(nodes, [], {
+        ...selection,
+        selectedIds: activeLevelId ? [] : selection.selectedIds,
+        levelId: activeLevelId ? String(activeLevelId) : selection.levelId,
+      }),
+    [activeLevelId, nodes, selection],
   )
   const info = useMemo(() => inspectPondTarget(nodes, target), [nodes, target])
-  const latest = useRef({ activeSite, mode, selection, target })
-  latest.current = { activeSite, mode, selection, target }
+  const latest = useRef({ activeSite, isCameraDragging, mode, selection, target })
+  latest.current = { activeSite, isCameraDragging, mode, selection, target }
   const pointerStart = useRef<PointerStart | null>(null)
+  const gestureOwner = useRef(Symbol('pond-3d-gesture'))
   const raycaster = useRef(new Raycaster())
   const pointer = useRef(new Vector2())
-
   useEffect(() => {
-    useInteractionScope.getState().begin({ kind: 'painting' })
+    const releaseScope = retainPondToolScope()
+    const unsubscribeScope = useInteractionScope.subscribe(() => {
+      if (ownsPondToolScope()) return
+      if (pointerStart.current) {
+        pointerStart.current = null
+        releasePondGesture(gestureOwner.current)
+      }
+      ensurePondToolScope()
+    })
     return () => {
       pointerStart.current = null
-      const scope = useInteractionScope.getState()
-      if (scope.scope.kind === 'painting') scope.end()
+      releasePondGesture(gestureOwner.current)
+      unsubscribeScope()
+      releaseScope()
       useEnvironmentStore.getState().resetPondTool()
     }
   }, [])
-
-  useEffect(
-    () =>
-      useEditor.subscribe((editor) => {
-        cancelEnvironmentPaintToolFor2D(editor as unknown as GroundCoverToolActionTarget)
-      }),
-    [],
-  )
 
   useEffect(() => {
     const selected =
@@ -151,13 +159,15 @@ export function PondTool() {
 
     const cancelPointer = () => {
       pointerStart.current = null
+      releasePondGesture(gestureOwner.current)
     }
 
     const handlePointerDown = (event: PointerEvent) => {
-      if (event.button !== 0 || pointerStart.current || useViewer.getState().cameraDragging) return
-      if (useInteractionScope.getState().scope.kind !== 'painting') return
+      if (event.button !== 0 || pointerStart.current || latest.current.isCameraDragging()) return
+      if (!claimPondGesture(gestureOwner.current)) return
       const current = latest.current
       if (!current.activeSite) {
+        releasePondGesture(gestureOwner.current)
         useEnvironmentStore.getState().setPondFeedback('Add or select a Site before creating water.')
         return
       }
@@ -177,7 +187,7 @@ export function PondTool() {
       if (!start || start.pointerId !== event.pointerId || start.moved) return
       const dx = event.clientX - start.clientX
       const dy = event.clientY - start.clientY
-      if (dx * dx + dy * dy > CLICK_TOLERANCE_SQUARED || useViewer.getState().cameraDragging) {
+      if (dx * dx + dy * dy > CLICK_TOLERANCE_SQUARED || latest.current.isCameraDragging()) {
         start.moved = true
       }
     }
@@ -186,14 +196,16 @@ export function PondTool() {
       const start = pointerStart.current
       if (!start || start.pointerId !== event.pointerId) return
       pointerStart.current = null
+      const ownedGesture = ownsPondGesture(gestureOwner.current)
+      releasePondGesture(gestureOwner.current)
       const current = latest.current
       if (
+        !ownedGesture ||
         start.moved ||
-        useViewer.getState().cameraDragging ||
+        current.isCameraDragging() ||
         current.activeSite?.id !== start.siteId ||
         current.mode !== start.mode ||
-        targetKey(current.target) !== start.targetKey ||
-        useInteractionScope.getState().scope.kind !== 'painting'
+        targetKey(current.target) !== start.targetKey
       ) {
         return
       }
@@ -209,7 +221,7 @@ export function PondTool() {
       }
 
       if (start.mode === 'select-basin') {
-        const resolved = targetPondAtSeed(useScene.getState().nodes, current.activeSite, point)
+        const resolved = targetPondAtSeed(sceneApi.nodes(), current.activeSite, point)
         if (!resolved) {
           store.setPondTarget(null)
           store.setPondFeedback('No contained depression here. Sculpt a deeper enclosed basin first.')
@@ -219,7 +231,7 @@ export function PondTool() {
         store.setPondTarget(resolved.target)
         if (resolved.pond) {
           store.setPondQuality(resolved.pond.quality)
-          useViewer.getState().setSelection({ selectedIds: [resolved.pond.id as AnyNodeId] })
+          selectNode(resolved.pond.id as AnyNodeId)
           store.setPondFeedback('Existing pond selected.')
         } else {
           useViewer.getState().setSelection({ selectedIds: [] })
@@ -228,11 +240,14 @@ export function PondTool() {
         return
       }
 
-      const scene = useScene.getState()
+      if (!current.target || current.target.siteId !== current.activeSite.id) {
+        store.setPondFeedback('Select a pond on the active Site before editing its props.')
+        return
+      }
       const result =
         start.mode === 'remove-prop'
-          ? commitPondPropRemoval(scene, current.target, point)
-          : commitPondPropPlacement(scene, current.target, start.mode, point)
+          ? commitPondPropRemoval(sceneApi, current.target, point)
+          : commitPondPropPlacement(sceneApi, current.target, start.mode, point)
       if (result.target) store.setPondTarget(result.target)
       store.setPondFeedback(result.message)
     }
@@ -241,12 +256,12 @@ export function PondTool() {
       const store = useEnvironmentStore.getState()
       const hadTarget = Boolean(store.pondTarget)
       if (!pointerStart.current && !store.pondTarget && store.pondToolMode === 'select-basin') return
-      pointerStart.current = null
+      cancelPointer()
       store.resetPondTool()
       const viewer = useViewer.getState()
       if (
         hadTarget &&
-        viewer.selection.selectedIds.some((id) => pondNodeOf(useScene.getState().nodes[id as AnyNodeId]))
+        viewer.selection.selectedIds.some((id) => pondNodeOf(sceneApi.get(id as AnyNodeId)))
       ) {
         viewer.setSelection({ selectedIds: [] })
       }
@@ -268,7 +283,7 @@ export function PondTool() {
       emitter.off('tool:cancel', handleToolCancel)
       cancelPointer()
     }
-  }, [camera, gl])
+  }, [camera, gl, sceneApi, selectNode])
 
   return activeSite ? (
     <PondContours site={activeSite} levelStep={info?.basin.levelStep ?? POND_LEVEL_STEP} selectedLevel={info?.level} />

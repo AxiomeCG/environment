@@ -9,13 +9,8 @@ import {
 } from 'three/webgpu'
 import * as TSL from 'three/tsl'
 
-import {
-  createSolarState,
-  updateSolarState,
-  type SkyDebug,
-  type SkySettings,
-  type SolarState,
-} from './settings'
+import type { SkyDebug, SkySettings } from './settings'
+import { createSolarState, updateSolarState, type SolarState } from './solar'
 import {
   createEffectiveSkyWeather,
   updateEffectiveSkyWeather,

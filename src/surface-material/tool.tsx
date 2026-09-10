@@ -3,20 +3,25 @@
 import {
   type AnyNode,
   type AnyNodeId,
+  type BuildingNode,
   emitter,
   pointInPolygon2D,
   raycastTerrain,
   type SiteNode,
   terrainFieldOf,
   type TerrainField,
-  useScene,
 } from '@pascal-app/core'
-import { markToolCancelConsumed, useEditor, useInteractionScope } from '@pascal-app/editor'
-import { useViewer } from '@pascal-app/viewer'
+import { markToolCancelConsumed, useRegistryToolContext } from '@pascal-app/editor'
 import { useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import { Plane, Raycaster, Vector2, Vector3 } from 'three'
-import { cancelEnvironmentPaintToolFor2D, type GroundCoverToolActionTarget } from '../pascal-tool-actions'
+import {
+  claimEnvironmentPaintStroke,
+  isEnvironmentPaintScopeActive,
+  mountEnvironmentPaintBody,
+  releaseEnvironmentPaintStroke,
+  subscribeEnvironmentPaintScopeLoss,
+} from '../ground-cover/paint-tool-lifecycle'
 import GrassFieldBrushCursor from '../ground-cover/brush-cursor'
 import { rgbToHex } from '../ground-cover/paint-field'
 import {
@@ -27,13 +32,19 @@ import {
   type PaintStroke,
 } from '../ground-cover/paint-stroke'
 import { siteBounds } from '../ground-cover/paint-field'
+import { resolveActivePaintSite } from '../ground-cover/paint-target'
 import { useEnvironmentStore } from '../store'
+import { useSceneApiNodes } from '../use-scene-api-nodes'
 import { encodeSurfaceMaterialField, resolveSurfaceMaterialField, type SurfaceMaterialField } from './field'
 import { SURFACE_MATERIAL_PAINT_COLOR } from './material-types'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from './schema'
 import { updateSurfacePaintTextures } from './texture'
 
-type PaintTarget = { surface: SurfaceMaterialNode; site: SiteNode }
+type PaintTarget = {
+  building: BuildingNode
+  site: SiteNode
+  surface: SurfaceMaterialNode
+}
 type ActiveStroke = {
   surfaceId: string
   pointerId: number
@@ -41,42 +52,37 @@ type ActiveStroke = {
   terrain: TerrainField | null
 }
 
-function resolvePaintTarget(nodes: Record<AnyNodeId, AnyNode>): PaintTarget | null {
-  const surface = Object.values(nodes).find(
-    (node) => (node.type as string) === SURFACE_MATERIAL_KIND,
-  ) as unknown as SurfaceMaterialNode | undefined
-  if (!surface?.parentId) return null
-  const site = nodes[surface.parentId as AnyNodeId]
-  return site?.type === 'site' ? { surface, site } : null
+function resolvePaintTarget(
+  nodes: Readonly<Record<AnyNodeId, AnyNode>>,
+  activeLevelId: AnyNodeId | null,
+): PaintTarget | null {
+  const activeSite = resolveActivePaintSite(nodes, activeLevelId)
+  if (!activeSite) return null
+  const surfaces = (Object.values(nodes) as unknown as SurfaceMaterialNode[]).filter(
+    (node) => node.type === SURFACE_MATERIAL_KIND && node.parentId === activeSite.site.id,
+  )
+  return surfaces.length === 1
+    ? { building: activeSite.building, site: activeSite.site, surface: surfaces[0]! }
+    : null
 }
 
 export default function SurfaceMaterialPaintTool() {
+  const { activeLevelId, isCameraDragging, sceneApi } = useRegistryToolContext()
   const { camera, gl } = useThree()
-  const nodes = useScene((state) => state.nodes)
+  const nodes = useSceneApiNodes(sceneApi)
   const settings = useEnvironmentStore((state) => state.surfaceBrush)
   const selectedMaterial = useEnvironmentStore((state) => state.surfaceMaterial)
-  const target = useMemo(() => resolvePaintTarget(nodes), [nodes])
+  const target = useMemo(() => resolvePaintTarget(nodes, activeLevelId), [activeLevelId, nodes])
   const latest = useRef({ target, settings, selectedMaterial })
   latest.current = { target, settings, selectedMaterial }
   const activeStroke = useRef<ActiveStroke | null>(null)
+  const ownerRef = useRef(Symbol('environment-surface-paint'))
   const raycaster = useRef(new Raycaster())
   const pointer = useRef(new Vector2())
   const flatGround = useRef(new Plane(new Vector3(0, 1, 0), 0))
   const flatHit = useRef(new Vector3())
 
-  useEffect(() => {
-    useInteractionScope.getState().begin({ kind: 'painting' })
-    return () => {
-      if (useInteractionScope.getState().scope.kind === 'painting') useInteractionScope.getState().end()
-    }
-  }, [])
-  useEffect(
-    () =>
-      useEditor.subscribe((editor) => {
-        cancelEnvironmentPaintToolFor2D(editor as unknown as GroundCoverToolActionTarget)
-      }),
-    [],
-  )
+  useEffect(() => mountEnvironmentPaintBody(), [])
 
   useEffect(() => {
     const canvas = gl.domElement
@@ -87,10 +93,14 @@ export default function SurfaceMaterialPaintTool() {
       const active = activeStroke.current
       if (!active) return false
       activeStroke.current = null
+      releaseEnvironmentPaintStroke(ownerRef.current)
       release(active.pointerId)
       updateSurfacePaintTextures(active.surfaceId, active.stroke.snapshot)
       return true
     }
+    const unsubscribeScope = subscribeEnvironmentPaintScopeLoss(() => {
+      abandon()
+    })
     const groundPoint = (event: PointerEvent, site: SiteNode, terrain: TerrainField | null) => {
       const rect = canvas.getBoundingClientRect()
       pointer.current.set(
@@ -111,24 +121,28 @@ export default function SurfaceMaterialPaintTool() {
     const dab = (event: PointerEvent) => {
       const active = activeStroke.current
       if (!active || event.pointerId !== active.pointerId) return
-      if (useInteractionScope.getState().scope.kind !== 'painting' || useViewer.getState().cameraDragging) {
+      if (!isEnvironmentPaintScopeActive() || isCameraDragging()) {
         detachPaintStrokeAnchor(active.stroke)
         return
       }
       const current = latest.current.target
       if (!current || current.surface.id !== active.surfaceId) return abandon()
       const point = groundPoint(event, current.site, active.terrain)
-      if (!point) return
+      if (!point) {
+        detachPaintStrokeAnchor(active.stroke)
+        return
+      }
       const field = advancePaintStroke(active.stroke, point[0], point[1])
       if (field) updateSurfacePaintTextures(active.surfaceId, field)
     }
     const down = (event: PointerEvent) => {
-      if (event.button !== 0 || activeStroke.current || useViewer.getState().cameraDragging) return
+      if (event.button !== 0 || activeStroke.current || isCameraDragging()) return
       const current = latest.current.target
-      if (!current || useInteractionScope.getState().scope.kind !== 'painting') return
+      if (!current || !isEnvironmentPaintScopeActive()) return
       const terrain = terrainFieldOf(current.site)
       const point = groundPoint(event, current.site, terrain)
       if (!point) return
+      if (!claimEnvironmentPaintStroke(ownerRef.current)) return
       const field: SurfaceMaterialField = resolveSurfaceMaterialField(
         current.surface.paintMap,
         siteBounds(current.site.polygon.points),
@@ -155,12 +169,35 @@ export default function SurfaceMaterialPaintTool() {
     const up = (event: PointerEvent) => {
       const active = activeStroke.current
       if (!active || active.pointerId !== event.pointerId) return
+      if (
+        !isEnvironmentPaintScopeActive() ||
+        latest.current.target?.surface.id !== active.surfaceId
+      ) {
+        abandon()
+        return
+      }
       activeStroke.current = null
+      releaseEnvironmentPaintStroke(ownerRef.current)
       release(event.pointerId)
-      useScene.getState().updateNode(
+      sceneApi.update(
         active.surfaceId as AnyNodeId,
-        { paintMap: encodeSurfaceMaterialField(currentPaintField(active.stroke)) } as Partial<AnyNode>,
+        {
+          paintMap: encodeSurfaceMaterialField(currentPaintField(active.stroke)),
+        } as unknown as Partial<AnyNode>,
       )
+    }
+    const handlePointerCancel = (event: PointerEvent) => {
+      if (activeStroke.current?.pointerId === event.pointerId) abandon()
+    }
+    const handlePointerLeave = () => {
+      const active = activeStroke.current
+      if (active) detachPaintStrokeAnchor(active.stroke)
+    }
+    const handleLostPointerCapture = (event: PointerEvent) => {
+      if (activeStroke.current?.pointerId === event.pointerId) abandon()
+    }
+    const handleWindowBlur = () => {
+      abandon()
     }
     const cancel = () => {
       if (abandon()) markToolCancelConsumed()
@@ -168,17 +205,26 @@ export default function SurfaceMaterialPaintTool() {
     canvas.addEventListener('pointerdown', down)
     canvas.addEventListener('pointermove', dab)
     canvas.addEventListener('pointerup', up)
-    canvas.addEventListener('pointercancel', abandon)
+    canvas.addEventListener('pointercancel', handlePointerCancel)
+    canvas.addEventListener('pointerleave', handlePointerLeave)
+    canvas.addEventListener('lostpointercapture', handleLostPointerCapture)
+    window.addEventListener('blur', handleWindowBlur)
     emitter.on('tool:cancel', cancel)
     return () => {
       canvas.removeEventListener('pointerdown', down)
       canvas.removeEventListener('pointermove', dab)
       canvas.removeEventListener('pointerup', up)
-      canvas.removeEventListener('pointercancel', abandon)
+      canvas.removeEventListener('pointercancel', handlePointerCancel)
+      canvas.removeEventListener('pointerleave', handlePointerLeave)
+      canvas.removeEventListener('lostpointercapture', handleLostPointerCapture)
+      window.removeEventListener('blur', handleWindowBlur)
       emitter.off('tool:cancel', cancel)
+      unsubscribeScope()
       abandon()
     }
-  }, [camera, gl])
+  }, [camera, gl, isCameraDragging, sceneApi])
 
-  return target ? <GrassFieldBrushCursor settings={settings} site={target.site} /> : null
+  return target ? (
+    <GrassFieldBrushCursor building={target.building} settings={settings} site={target.site} />
+  ) : null
 }
