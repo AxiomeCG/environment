@@ -368,6 +368,9 @@ per-pole lights, shadow maps, interior lighting, or illumination of nearby walls
 Coastal lighthouses add a rotating spotlight and a soft visible beam at night.
 The beacon completes one sweep every 20 seconds, follows the same solar fade,
 and stops rotating while the viewer is paused. It remains presentation-only.
+The beacon stays mounted and its spotlight remains registered throughout day/night
+changes. Uniform masks hide the beam and lens by day while light intensity is zero,
+avoiding scene-wide shader rebuilds when crossing the solar night boundary.
 
 Distant birds are visible and animated by default, including after restoring an
 environment configuration. **Animate distant birds** pauses their flight; the

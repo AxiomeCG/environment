@@ -19,7 +19,8 @@ export function LighthouseBeacon({ plan }: { plan: LighthousePlan }) {
     root.name = 'environment-lighthouse-beacon'
     root.position.set(plan.position[0], plan.position[1] + plan.height + 2, plan.position[2])
     root.rotation.y = plan.rotationY
-    root.visible = false
+    // Hiding a light ancestor changes Three.js's light cache key and rebuilds scene shaders.
+    // Keep the light registered; night uniforms hide the visuals and zero its intensity.
     root.userData.pascalExport = 'strip'
 
     const head = new Group()
@@ -49,6 +50,7 @@ export function LighthouseBeacon({ plan }: { plan: LighthousePlan }) {
 
     const lensGeometry = new SphereGeometry(0.38, 12, 8)
     const lensMaterial = new MeshBasicNodeMaterial({ color: '#fff0c5', toneMapped: false })
+    lensMaterial.maskNode = SURROUNDINGS_NIGHT_FACTOR.greaterThan(0)
     const lens = new Mesh(lensGeometry, lensMaterial)
     lens.position.z = 2
     lens.raycast = () => {}
@@ -78,7 +80,6 @@ export function LighthouseBeacon({ plan }: { plan: LighthousePlan }) {
   }, [getThree, renderPaused, resources])
   useFrame((state, delta) => {
     const night = SURROUNDINGS_NIGHT_FACTOR.value
-    resources.root.visible = night > 0
     resources.light.intensity = 80_000 * night
     if (night <= 0 || renderPaused) return
     resources.root.rotation.y = (resources.root.rotation.y + Math.min(delta, 0.1) * ROTATION_SPEED) % (Math.PI * 2)
