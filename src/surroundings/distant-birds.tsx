@@ -51,7 +51,12 @@ export type DistantBirdFlight = Readonly<{
   glidePhase: number
   wingPhase: number
   minimumClearance: number
-  formation: Readonly<{ rank: number; side: -1 | 0 | 1; lateral: number; driftPhase: number }> | null
+  formation: Readonly<{
+    rank: number
+    side: -1 | 0 | 1
+    lateral: number
+    driftPhase: number
+  }> | null
 }>
 
 export type DistantBirdFlightPlan = Readonly<{
@@ -97,10 +102,7 @@ function routePoint(
   const localZ = Math.sin(theta) * radii[1]
   const cosine = Math.cos(rotation)
   const sine = Math.sin(rotation)
-  return [
-    center[0] + localX * cosine - localZ * sine,
-    center[1] + localX * sine + localZ * cosine,
-  ]
+  return [center[0] + localX * cosine - localZ * sine, center[1] + localX * sine + localZ * cosine]
 }
 
 function peakTerrainAlongRoute(
@@ -111,22 +113,29 @@ function peakTerrainAlongRoute(
   halfWidth = 0,
 ): number {
   let peak = 0
-  const cosine = Math.cos(rotation), sine = Math.sin(rotation)
+  const cosine = Math.cos(rotation),
+    sine = Math.sin(rotation)
   for (let sample = 0; sample < TERRAIN_PATH_SAMPLES; sample += 1) {
-    const theta = sample / TERRAIN_PATH_SAMPLES * TWO_PI
+    const theta = (sample / TERRAIN_PATH_SAMPLES) * TWO_PI
     const [x, z] = routePoint(center, radii, rotation, theta)
     const dx = -Math.sin(theta) * radii[0] * cosine - Math.cos(theta) * radii[1] * sine
     const dz = -Math.sin(theta) * radii[0] * sine + Math.cos(theta) * radii[1] * cosine
     const length = Math.hypot(dx, dz)
     for (let side = halfWidth > 0 ? -1 : 0; side <= (halfWidth > 0 ? 1 : 0); side++) {
-      const height = heightAt(x + dz / length * halfWidth * side, z - dx / length * halfWidth * side)
+      const height = heightAt(
+        x + (dz / length) * halfWidth * side,
+        z - (dx / length) * halfWidth * side,
+      )
       if (Number.isFinite(height)) peak = Math.max(peak, height)
     }
   }
   return peak
 }
 
-function rotatedEllipseExtents(radii: readonly [number, number], rotation: number): readonly [number, number] {
+function rotatedEllipseExtents(
+  radii: readonly [number, number],
+  rotation: number,
+): readonly [number, number] {
   const cosine = Math.cos(rotation)
   const sine = Math.sin(rotation)
   return [
@@ -157,8 +166,9 @@ export function buildDistantBirdFlightPlan({
     if (leader) {
       const rank = Math.ceil(index / 2)
       const side = index % 2 === 1 ? -1 : 1
-      const speed = TWO_PI * Math.sqrt((leader.radii[0] ** 2 + leader.radii[1] ** 2) / 2) / leader.duration
-      const lag = rank * trailing / speed + (side === 1 ? 0.065 : 0)
+      const speed =
+        (TWO_PI * Math.sqrt((leader.radii[0] ** 2 + leader.radii[1] ** 2) / 2)) / leader.duration
+      const lag = (rank * trailing) / speed + (side === 1 ? 0.065 : 0)
       bird = {
         ...leader,
         // Delayed leader path, not a rigid translated V: turns reach each row later.
@@ -168,7 +178,8 @@ export function buildDistantBirdFlightPlan({
         wingPhase: seededRange(seed, `${domain}:wing-phase`, 0, TWO_PI),
         glidePhase: leader.glidePhase + seededRange(seed, `${domain}:glide-phase`, -0.35, 0.35),
         formation: {
-          rank, side,
+          rank,
+          side,
           lateral: side * (rank * spacing + seededRange(seed, `${domain}:spacing`, -0.12, 0.12)),
           driftPhase: seededRange(seed, `${domain}:drift`, 0, TWO_PI),
         },
@@ -187,9 +198,19 @@ export function buildDistantBirdFlightPlan({
       const scale = seededRange(seed, `${domain}:scale`, 0.9, 1.25)
       const verticalAmplitude = seededRange(seed, `${domain}:vertical-amplitude`, 1.5, 4.5)
       const minimumClearance = seededRange(seed, `${domain}:clearance`, 28, 42)
-      const terrainPeak = peakTerrainAlongRoute(center, radii, pathRotation, heightAt, index === 0 ? flockHalfWidth : 0)
-      const altitude = terrainPeak + TERRAIN_SAMPLE_MARGIN + minimumClearance
-        + verticalAmplitude + BIRD_LOCAL_RADIUS * scale
+      const terrainPeak = peakTerrainAlongRoute(
+        center,
+        radii,
+        pathRotation,
+        heightAt,
+        index === 0 ? flockHalfWidth : 0,
+      )
+      const altitude =
+        terrainPeak +
+        TERRAIN_SAMPLE_MARGIN +
+        minimumClearance +
+        verticalAmplitude +
+        BIRD_LOCAL_RADIUS * scale
       const duration = seededRange(seed, `${domain}:duration`, 38, 58)
       const direction = seededUnit(seed, `${domain}:direction`) < 0.5 ? -1 : 1
       bird = {
@@ -197,7 +218,7 @@ export function buildDistantBirdFlightPlan({
         radii,
         phase: seededRange(seed, `${domain}:phase`, 0, TWO_PI),
         duration,
-        angularVelocity: direction * TWO_PI / duration,
+        angularVelocity: (direction * TWO_PI) / duration,
         direction,
         altitude,
         pathCosine: Math.cos(pathRotation),
@@ -217,7 +238,10 @@ export function buildDistantBirdFlightPlan({
     }
     birds.push(bird)
 
-    const [extentX, extentZ] = rotatedEllipseExtents(bird.radii, Math.atan2(bird.pathSine, bird.pathCosine))
+    const [extentX, extentZ] = rotatedEllipseExtents(
+      bird.radii,
+      Math.atan2(bird.pathSine, bird.pathCosine),
+    )
     const silhouetteRadius = BIRD_LOCAL_RADIUS * bird.scale
     const lateralExtent = bird.formation?.rank ? Math.abs(bird.formation.lateral) + 0.22 : 0
     minimum[0] = Math.min(minimum[0], bird.center[0] - extentX - lateralExtent - silhouetteRadius)
@@ -233,11 +257,8 @@ export function buildDistantBirdFlightPlan({
     (minimum[1] + maximum[1]) / 2,
     (minimum[2] + maximum[2]) / 2,
   ]
-  const radius = Math.hypot(
-    maximum[0] - minimum[0],
-    maximum[1] - minimum[1],
-    maximum[2] - minimum[2],
-  ) / 2
+  const radius =
+    Math.hypot(maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2]) / 2
   return { birds, bounds: { min: minimum, max: maximum, center, radius } }
 }
 
@@ -266,8 +287,12 @@ export function evaluateDistantBirdFlight(
   const sineRotation = bird.pathSine
   const localX = cosineTheta * bird.radii[0]
   const localZ = sineTheta * bird.radii[1]
-  let dx = (-sineTheta * bird.radii[0] * cosineRotation - cosineTheta * bird.radii[1] * sineRotation) * angularVelocity
-  let dz = (-sineTheta * bird.radii[0] * sineRotation + cosineTheta * bird.radii[1] * cosineRotation) * angularVelocity
+  let dx =
+    (-sineTheta * bird.radii[0] * cosineRotation - cosineTheta * bird.radii[1] * sineRotation) *
+    angularVelocity
+  let dz =
+    (-sineTheta * bird.radii[0] * sineRotation + cosineTheta * bird.radii[1] * cosineRotation) *
+    angularVelocity
   const verticalAngle = theta * 2 + bird.verticalPhase
   const dy = Math.cos(verticalAngle) * bird.verticalAmplitude * 2 * angularVelocity
   target.position[0] = bird.center[0] + localX * cosineRotation - localZ * sineRotation
@@ -276,7 +301,9 @@ export function evaluateDistantBirdFlight(
   if (bird.formation?.rank) {
     const driftAngle = theta * 3 + bird.formation.driftPhase
     const lateral = bird.formation.lateral + Math.sin(driftAngle) * 0.22
-    const speed = Math.hypot(dx, dz), rightX = dz / speed, rightZ = -dx / speed
+    const speed = Math.hypot(dx, dz),
+      rightX = dz / speed,
+      rightZ = -dx / speed
     target.position[0] += rightX * lateral
     target.position[2] += rightZ * lateral
     const ddx = (-localX * cosineRotation + localZ * sineRotation) * angularVelocity ** 2
@@ -288,10 +315,13 @@ export function evaluateDistantBirdFlight(
   }
   target.rotation[0] = -Math.atan2(dy, Math.hypot(dx, dz))
   target.rotation[1] = Math.atan2(dx, dz)
-  target.rotation[2] = -bird.direction * bird.bank * (0.82 + Math.sin(theta + bird.bankPhase) * 0.18)
+  target.rotation[2] =
+    -bird.direction * bird.bank * (0.82 + Math.sin(theta + bird.bankPhase) * 0.18)
   const beatEnvelope = smoothstep(-0.2, 0.4, Math.sin(theta * bird.glideCycles + bird.glidePhase))
-  target.wingLift = Math.max(0.04, Math.min(1, 0.56
-    + Math.sin(theta * bird.wingbeats + bird.wingPhase) * beatEnvelope * 0.44))
+  target.wingLift = Math.max(
+    0.04,
+    Math.min(1, 0.56 + Math.sin(theta * bird.wingbeats + bird.wingPhase) * beatEnvelope * 0.44),
+  )
   target.scale = bird.scale
   return target
 }
@@ -373,11 +403,10 @@ export function updateDistantBirdInstances(
     context.rotation.set(pose.rotation[0], pose.rotation[1], pose.rotation[2], 'YXZ')
     context.quaternion.setFromEuler(context.rotation)
     context.scale.setScalar(pose.scale)
-    mesh.setMatrixAt(index, context.matrix.compose(
-      context.position,
-      context.quaternion,
-      context.scale,
-    ))
+    mesh.setMatrixAt(
+      index,
+      context.matrix.compose(context.position, context.quaternion, context.scale),
+    )
     context.morphSource.morphTargetInfluences![0] = pose.wingLift
     mesh.setMorphAt(index, context.morphSource)
   }
@@ -400,10 +429,7 @@ export function createDistantBirdInstances(plan: DistantBirdFlightPlan): Instanc
     new Vector3().fromArray(plan.bounds.min),
     new Vector3().fromArray(plan.bounds.max),
   )
-  mesh.boundingSphere = new Sphere(
-    new Vector3().fromArray(plan.bounds.center),
-    plan.bounds.radius,
-  )
+  mesh.boundingSphere = new Sphere(new Vector3().fromArray(plan.bounds.center), plan.bounds.radius)
   mesh.userData = {
     birdCount: plan.birds.length,
     drawCallCount: 1,

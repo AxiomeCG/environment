@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Running wind isolation</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        color: #e8edf2;
+        background: #101418;
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+      pre[data-status='pass'] {
+        color: #8ee6a5;
+      }
+      pre[data-status='fail'],
+      pre[data-status='unsupported'] {
+        color: #ff9b9b;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="output">RUNNING: real GPU blade and flower wind replay</pre>
+    <script type="module" src="./ground-cover-wind-isolation.browser.ts"></script>
+  </body>
+</html>

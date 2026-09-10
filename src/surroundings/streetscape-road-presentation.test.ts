@@ -478,6 +478,71 @@ describe('pinned Streetscape road-network presentation', () => {
     }
   })
 
+  test('keeps the carriageway continuous across an eight-metre connector between T junctions', () => {
+    const network = deriveRuntimeRoadNetwork(
+      { corridors: [], neighborCells: [], roadJunctions: [] },
+      [
+        {
+          id: 'short-connector-road',
+          separator: 'secondary-road',
+          centerline: [[-20, 0], [20, 0]],
+          corridorIds: [],
+          junctionIds: [],
+        },
+        {
+          id: 'west-t-branch',
+          separator: 'secondary-road',
+          centerline: [[-4, 0], [-4, 20]],
+          corridorIds: [],
+          junctionIds: [],
+        },
+        {
+          id: 'east-t-branch',
+          separator: 'secondary-road',
+          centerline: [[4, 0], [4, 20]],
+          corridorIds: [],
+          junctionIds: [],
+        },
+      ],
+    )
+    const junctionNodeIds = new Set(
+      Object.values(network.junctions).map(({ nodeId }) => nodeId),
+    )
+    const connector = Object.values(network.edges).find(
+      ({ sourceRoadId, startNodeId, endNodeId }) =>
+        sourceRoadId === 'short-connector-road'
+        && junctionNodeIds.has(startNodeId)
+        && junctionNodeIds.has(endNodeId),
+    )
+    expect(connector).toBeDefined()
+    const start = network.graphNodes[connector!.startNodeId]!.position
+    const end = network.graphNodes[connector!.endNodeId]!.position
+    expect(Math.hypot(end[0] - start[0], end[2] - start[2])).toBeCloseTo(8)
+
+    const plan = buildRoadPresentationPlan(network)
+    const carriageway = plan.surfaces.find(
+      ({ id }) => id === `${connector!.id}:carriageway`,
+    )
+    expect(carriageway).toBeDefined()
+    const midpoint = [(start[0] + end[0]) / 2, (start[2] + end[2]) / 2] as const
+    const triangles = Array.from(
+      { length: carriageway!.geometry.indices.length / 3 },
+      (_, triangleIndex) => carriageway!.geometry.indices
+        .slice(triangleIndex * 3, triangleIndex * 3 + 3)
+        .map((vertex) => [
+          carriageway!.geometry.positions[vertex * 3]!,
+          carriageway!.geometry.positions[vertex * 3 + 2]!,
+        ] as const),
+    )
+
+    expect(triangles.length).toBeGreaterThan(0)
+    expect(triangles.some((triangle) => pointInTriangle(midpoint, triangle))).toBe(true)
+    expect(triangles.every((triangle) => {
+      const upwardArea = -planCross(triangle[0]!, triangle[1]!, triangle[2]!)
+      return Number.isFinite(upwardArea) && upwardArea > 1e-9
+    })).toBe(true)
+  })
+
   test('joins mixed widths at the production outer-road extension without crossing side bands or paint', () => {
     const layout = deriveSurroundingsLayout(
       deriveBoundarySegments({

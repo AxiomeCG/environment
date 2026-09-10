@@ -13,16 +13,8 @@ import {
   MeshPhysicalMaterial,
 } from 'three'
 import { POND_WATER_APPEARANCE, type PondWaterAppearance } from './appearance'
-import {
-  analyzePondBasin,
-  buildPondSurface,
-  type PondBasin,
-  type PondSurface,
-} from './basin'
-import {
-  buildPondShoreGeometry,
-  createPondShoreDistances,
-} from './shoreline'
+import { analyzePondBasin, buildPondSurface, type PondBasin, type PondSurface } from './basin'
+import { buildPondShoreGeometry, createPondShoreDistances } from './shoreline'
 import { buildPondPropGeometry } from './props'
 import {
   POND_KIND,
@@ -31,7 +23,8 @@ import {
   type PondProp,
   type WaterQuality,
 } from './schema'
-import { createWaterMaterial } from '../surroundings/water-material'
+import { bakeWaterMaterial, type BakedWaterMaterial } from '../export/water-material-bake'
+import { createWaterMaterial, type WaterMaterialOptions } from '../surroundings/water-material'
 
 const POND_WATER_MESH_NAME = 'environment-pond-water'
 
@@ -58,16 +51,17 @@ export function resolvePond(node: PondNode, context: GeometryContext): ResolvedP
     if ((sibling.type as string) !== POND_KIND) continue
     const parsed = PondNodeSchema.safeParse(sibling)
     if (
-      parsed.success
-      && parsed.data.id !== node.id
-      && pondSurfaceContainsSeed(spillSurface, parsed.data.seed)
+      parsed.success &&
+      parsed.data.visible &&
+      parsed.data.id !== node.id &&
+      pondSurfaceContainsSeed(spillSurface, parsed.data.seed)
     ) {
       connected.push(parsed.data)
     }
   }
   connected.sort((left, right) => {
-    const levelOrder = (right.waterLevel ?? Number.NEGATIVE_INFINITY)
-      - (left.waterLevel ?? Number.NEGATIVE_INFINITY)
+    const levelOrder =
+      (right.waterLevel ?? Number.NEGATIVE_INFINITY) - (left.waterLevel ?? Number.NEGATIVE_INFINITY)
     return levelOrder || String(left.id).localeCompare(String(right.id))
   })
   if (connected[0]?.id !== node.id) return null
@@ -76,10 +70,7 @@ export function resolvePond(node: PondNode, context: GeometryContext): ResolvedP
   const props: PondProp[] = []
   const propIds = new Set<string>()
   for (const pond of connected) {
-    if (
-      pond.waterLevel !== null
-      && (requestedLevel === null || pond.waterLevel > requestedLevel)
-    ) {
+    if (pond.waterLevel !== null && (requestedLevel === null || pond.waterLevel > requestedLevel)) {
       requestedLevel = pond.waterLevel
     }
     for (const prop of pond.props) {
@@ -115,21 +106,9 @@ export function buildPondGeometry(node: PondNode, context: GeometryContext): Gro
 
   const shoreFadeDistance = Math.max(0.22, Math.min(1.2, terrain.spacing * 1.4))
   const geometry = createPondSurfaceGeometry(surface, shoreFadeDistance)
-  const material = createWaterMaterial({
-    name: `environment-pond-water-${node.quality}`,
-    color: appearance.shallowColor,
-    deepColor: appearance.deepColor,
-    foamColor: appearance.foamColor,
-    foamStrength: appearance.foamStrength,
-    depthRange: appearance.depthRange,
-    roughness: appearance.roughness,
-    shoreRoughness: appearance.shoreRoughness,
-    rippleStrength: appearance.rippleStrength,
-    waveScale: appearance.waveScale,
-    speedScale: appearance.speedScale,
-    shoreFade: [shoreFadeDistance, appearance.shoreAbsorptionDepth],
-    opacity: appearance.opacity,
-  })
+  const material = createWaterMaterial(
+    pondWaterMaterialOptions(node, appearance, shoreFadeDistance),
+  )
   const water = new Mesh(geometry, material)
   water.name = POND_WATER_MESH_NAME
   water.castShadow = false
@@ -143,7 +122,7 @@ export function buildPondGeometry(node: PondNode, context: GeometryContext): Gro
   return group
 }
 
-/** Portable, single-pass water and expanded prop geometry for generic GLB export. */
+/** Synchronous geometry-only path for printing and non-material callers. */
 export function buildPondBakeGeometry(node: PondNode, context: GeometryContext): Group {
   const group = new Group()
   group.name = node.name || 'Pond'
@@ -164,10 +143,14 @@ export function buildPondBakeGeometry(node: PondNode, context: GeometryContext):
     const depth = surface.depths[index]!
     const depthMix = smoothStep(appearance.depthRange[0], appearance.depthRange[1], depth)
     color.lerpColors(shallow, deep, depthMix)
-    const baseOpacity = appearance.opacity[0]
-      + (appearance.opacity[1] - appearance.opacity[0]) * depthMix
+    const baseOpacity =
+      appearance.opacity[0] + (appearance.opacity[1] - appearance.opacity[0]) * depthMix
     const opticalCoverage = 1 - Math.exp(-depth / appearance.shoreAbsorptionDepth)
-    const edgeCoverage = smoothStep(0, shoreFadeDistance, shoreDistances?.getX(index) ?? shoreFadeDistance)
+    const edgeCoverage = smoothStep(
+      0,
+      shoreFadeDistance,
+      shoreDistances?.getX(index) ?? shoreFadeDistance,
+    )
     colors[index * 4] = color.r
     colors[index * 4 + 1] = color.g
     colors[index * 4 + 2] = color.b
@@ -197,6 +180,50 @@ export function buildPondBakeGeometry(node: PondNode, context: GeometryContext):
   return group
 }
 
+export async function buildPondBakeGeometryAsync(
+  node: PondNode,
+  context: GeometryContext,
+): Promise<Group> {
+  const group = new Group()
+  group.name = node.name || 'Pond'
+  const resolved = resolvePond(node, context)
+  if (!resolved || resolved.surface.level === null || resolved.surface.positions.length === 0) {
+    return group
+  }
+
+  const { surface, appearance, terrain } = resolved
+  const shoreFadeDistance = Math.max(0.22, Math.min(1.2, terrain.spacing * 1.4))
+  const geometry = createPondSurfaceGeometry(surface, shoreFadeDistance)
+  let baked: BakedWaterMaterial
+  try {
+    baked = await bakeWaterMaterial(
+      geometry,
+      pondWaterMaterialOptions(node, appearance, shoreFadeDistance),
+    )
+  } catch (cause) {
+    geometry.dispose()
+    throw new Error(`Unable to bake export materials for Pond ${String(node.id)}`, { cause })
+  }
+  const water = new Mesh(geometry, baked.material)
+  water.name = 'Pond water'
+  water.castShadow = false
+  water.receiveShadow = false
+  water.userData.materialBake = {
+    backend: baked.backend,
+    height: baked.height,
+    pixelsPerMeter: baked.pixelsPerMeter,
+    phaseSeconds: baked.phaseSeconds,
+    tileSize: baked.tileSize,
+    width: baked.width,
+  }
+  group.add(water)
+  if (node.shoreline === 'rocky') {
+    group.add(buildPondShoreGeometry(surface, terrain, String(node.id), true))
+  }
+  group.add(buildPondPropGeometry(resolved.props, surface, true))
+  return group
+}
+
 export function createPondSurfaceGeometry(
   surface: PondSurface,
   shoreFadeDistance = 0,
@@ -218,14 +245,33 @@ export function createPondSurfaceGeometry(
   return geometry
 }
 
+function pondWaterMaterialOptions(
+  node: PondNode,
+  appearance: PondWaterAppearance,
+  shoreFadeDistance: number,
+): WaterMaterialOptions {
+  return {
+    name: `environment-pond-water-${node.quality}`,
+    color: appearance.shallowColor,
+    deepColor: appearance.deepColor,
+    foamColor: appearance.foamColor,
+    foamStrength: appearance.foamStrength,
+    depthRange: appearance.depthRange,
+    roughness: appearance.roughness,
+    shoreRoughness: appearance.shoreRoughness,
+    rippleStrength: appearance.rippleStrength,
+    waveScale: appearance.waveScale,
+    speedScale: appearance.speedScale,
+    shoreFade: [shoreFadeDistance, appearance.shoreAbsorptionDepth],
+    opacity: appearance.opacity,
+  }
+}
+
 function isWaterQuality(value: string): value is WaterQuality {
   return value === 'pure' || value === 'clear' || value === 'deep' || value === 'swampy'
 }
 
-function pondSurfaceContainsSeed(
-  surface: PondSurface,
-  seed: readonly [number, number],
-): boolean {
+function pondSurfaceContainsSeed(surface: PondSurface, seed: readonly [number, number]): boolean {
   if (surface.level === null) return false
   for (let offset = 0; offset < surface.positions.length; offset += 9) {
     const ax = surface.positions[offset]!
@@ -238,8 +284,8 @@ function pondSurfaceContainsSeed(
     const second = (cx - bx) * (seed[1] - bz) - (cz - bz) * (seed[0] - bx)
     const third = (ax - cx) * (seed[1] - cz) - (az - cz) * (seed[0] - cx)
     if (
-      (first >= -1e-7 && second >= -1e-7 && third >= -1e-7)
-      || (first <= 1e-7 && second <= 1e-7 && third <= 1e-7)
+      (first >= -1e-7 && second >= -1e-7 && third >= -1e-7) ||
+      (first <= 1e-7 && second <= 1e-7 && third <= 1e-7)
     ) {
       return true
     }
@@ -251,4 +297,3 @@ function smoothStep(first: number, second: number, value: number): number {
   const amount = Math.min(1, Math.max(0, (value - first) / Math.max(1e-6, second - first)))
   return amount * amount * (3 - 2 * amount)
 }
-

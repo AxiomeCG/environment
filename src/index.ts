@@ -63,7 +63,7 @@ export {
   ENVIRONMENT_CONFIGURATION_VERSION,
   EnvironmentConfigurationSchema,
   type EnvironmentConfiguration,
-  type EnvironmentConfigurationV1,
+  type EnvironmentConfigurationV2,
   environmentPresentation,
   exportEnvironmentConfiguration,
   importEnvironmentConfiguration,

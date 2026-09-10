@@ -24,20 +24,7 @@ import pavedRoadNormal from '../assets/surface-materials/paved-road-normal.webp'
 import pavedRoadArm from '../assets/surface-materials/paved-road-arm.webp'
 import type { SurfaceMaterialId } from './material-types'
 
-const {
-  dFdx,
-  dFdy,
-  floor,
-  fract,
-  hash,
-  max,
-  mix,
-  normalMap,
-  smoothstep,
-  texture,
-  vec2,
-  vec3,
-} = TSL
+const { dFdx, dFdy, floor, fract, hash, max, mix, normalMap, smoothstep, texture, vec2, vec3 } = TSL
 const SURFACE_MATERIAL_WORLD_SCALE = 2
 type TextureGradients = readonly [Node<'vec2'>, Node<'vec2'>]
 
@@ -48,12 +35,16 @@ export type SurfaceMaterialTextureSet = {
   worldScale: number
 }
 
-export type SurfaceMaterialNodes = {
+export type SurfaceMaterialChannelNodes = {
   color: Node<'vec3'>
   ao: Node<'float'>
-  normal: Node<'vec3'>
+  rawNormal: Node<'vec3'>
   roughness: Node<'float'>
   coverage: Node<'float'>
+}
+
+export type SurfaceMaterialNodes = Omit<SurfaceMaterialChannelNodes, 'rawNormal'> & {
+  normal: Node<'vec3'>
 }
 
 export type SurfaceUnderlayColorNodes = {
@@ -108,26 +99,24 @@ export const SURFACE_MATERIAL_PRESENTATION: ReadonlyArray<{
   },
 ]
 
-let textureSets: Record<SurfaceMaterialId, SurfaceMaterialTextureSet> | null = null
+type SurfaceMaterialTextureRuntime = {
+  sets: Record<SurfaceMaterialId, SurfaceMaterialTextureSet>
+  ready: Promise<Record<SurfaceMaterialId, SurfaceMaterialTextureSet>>
+}
+
+let textureRuntime: SurfaceMaterialTextureRuntime | null = null
 
 export function getSurfaceMaterialTextureSets(): Record<
   SurfaceMaterialId,
   SurfaceMaterialTextureSet
 > {
-  if (textureSets) return textureSets
-  const loader = new TextureLoader()
-  textureSets = {
-    'flowered-grass': loadSet(
-      loader,
-      floweredGrassBaseColor,
-      floweredGrassNormal,
-      floweredGrassArm,
-    ),
-    'road-path': loadSet(loader, roadBaseColor, roadNormal, roadArm),
-    'desert-ground': loadSet(loader, desertBaseColor, desertNormal, desertArm),
-    'paved-road': loadSet(loader, pavedRoadBaseColor, pavedRoadNormal, pavedRoadArm),
-  }
-  return textureSets
+  return getSurfaceMaterialTextureRuntime().sets
+}
+
+export async function loadSurfaceMaterialTextureSets(): Promise<
+  Record<SurfaceMaterialId, SurfaceMaterialTextureSet>
+> {
+  return getSurfaceMaterialTextureRuntime().ready
 }
 
 export type PresentationAlbedos = Readonly<{
@@ -145,25 +134,24 @@ export function loadPresentationAlbedos(): Promise<PresentationAlbedos> {
   const loader = new TextureLoader()
   presentationAlbedos = (async () => {
     const results = await Promise.allSettled(
-      [
-        floweredGrassBaseColor,
-        desertBaseColor,
-        roadBaseColor,
-        pavedRoadBaseColor,
-      ].map(async (asset) => {
-        const loaded: Texture = await loader.loadAsync(assetUrl(asset))
-        try {
-          const image = loaded.image as HTMLImageElement
-          const canvas = document.createElement('canvas')
-          const scale = Math.min(1, 512 / Math.max(image.width, image.height))
-          canvas.width = Math.round(image.width * scale)
-          canvas.height = Math.round(image.height * scale)
-          const context = canvas.getContext('2d')
-          if (!context) throw new Error('Unable to resize surroundings albedo')
-          context.drawImage(image, 0, 0, canvas.width, canvas.height)
-          return configureTexture(new CanvasTexture(canvas), SRGBColorSpace)
-        } finally { loaded.dispose() }
-      }),
+      [floweredGrassBaseColor, desertBaseColor, roadBaseColor, pavedRoadBaseColor].map(
+        async (asset) => {
+          const loaded: Texture = await loader.loadAsync(assetUrl(asset))
+          try {
+            const image = loaded.image as HTMLImageElement
+            const canvas = document.createElement('canvas')
+            const scale = Math.min(1, 512 / Math.max(image.width, image.height))
+            canvas.width = Math.round(image.width * scale)
+            canvas.height = Math.round(image.height * scale)
+            const context = canvas.getContext('2d')
+            if (!context) throw new Error('Unable to resize surroundings albedo')
+            context.drawImage(image, 0, 0, canvas.width, canvas.height)
+            return configureTexture(new CanvasTexture(canvas), SRGBColorSpace)
+          } finally {
+            loaded.dispose()
+          }
+        },
+      ),
     )
     const failure = results.find((result) => result.status === 'rejected')
     if (failure?.status === 'rejected') {
@@ -191,13 +179,12 @@ export function samplePresentationSurfaceAlbedos(
   textureSize: number | Node<'float'>,
   gradients: TextureGradients,
 ): Node<'vec3'> {
-  const scale = typeof textureSize === 'number'
-    ? SURFACE_MATERIAL_WORLD_SCALE * (textureSize / 100)
-    : textureSize.mul(SURFACE_MATERIAL_WORLD_SCALE / 100)
+  const scale =
+    typeof textureSize === 'number'
+      ? SURFACE_MATERIAL_WORLD_SCALE * (textureSize / 100)
+      : textureSize.mul(SURFACE_MATERIAL_WORLD_SCALE / 100)
   const uv = sitePosition.div(scale)
-  const scaledGradients: TextureGradients = [
-    gradients[0].div(scale), gradients[1].div(scale),
-  ]
+  const scaledGradients: TextureGradients = [gradients[0].div(scale), gradients[1].div(scale)]
   return TSL.Fn(() => {
     const color = vec3(0).toVar()
     TSL.If(weights.r.greaterThan(0), () => {
@@ -222,6 +209,22 @@ export function buildSurfaceMaterialNodes(
   field: SurfacePaintFieldTopology,
   textureSize: number,
 ): SurfaceMaterialNodes {
+  const channels = buildSurfaceMaterialChannelNodes(sitePosition, blendTexture, field, textureSize)
+  return {
+    color: channels.color,
+    ao: channels.ao,
+    normal: normalMap(channels.rawNormal, vec2(0.55, -0.55)) as unknown as Node<'vec3'>,
+    roughness: channels.roughness,
+    coverage: channels.coverage,
+  }
+}
+
+export function buildSurfaceMaterialChannelNodes(
+  sitePosition: Node<'vec2'>,
+  blendTexture: Texture,
+  field: SurfacePaintFieldTopology,
+  textureSize: number,
+): SurfaceMaterialChannelNodes {
   const sets = getSurfaceMaterialTextureSets()
   const blend = buildSurfaceBlendNodes(sitePosition, blendTexture, field)
   const grassSet = sampleTextureSet(sets['flowered-grass'], sitePosition, textureSize)
@@ -240,15 +243,11 @@ export function buildSurfaceMaterialNodes(
       .add(roadSet.ao.mul(blend.road))
       .add(desertSet.ao.mul(blend.desert))
       .add(pavedSet.ao.mul(blend.paved)),
-    // The source sets encode DirectX-style (-Y) tangent-space normals.
-    normal: normalMap(
-      grassSet.normal
-        .mul(blend.grass)
-        .add(roadSet.normal.mul(blend.road))
-        .add(desertSet.normal.mul(blend.desert))
-        .add(pavedSet.normal.mul(blend.paved)),
-      vec2(0.55, -0.55),
-    ) as unknown as Node<'vec3'>,
+    rawNormal: grassSet.normal
+      .mul(blend.grass)
+      .add(roadSet.normal.mul(blend.road))
+      .add(desertSet.normal.mul(blend.desert))
+      .add(pavedSet.normal.mul(blend.paved)),
     roughness: grassSet.roughness
       .mul(blend.grass)
       .add(roadSet.roughness.mul(blend.road))
@@ -268,36 +267,22 @@ export function buildSurfaceUnderlayColorNodes(
   const sets = getSurfaceMaterialTextureSets()
   const blend = buildSurfaceBlendNodes(sitePosition, blendTexture, field)
   return {
-    color: sampleBaseColor(
-      sets['flowered-grass'],
-      sitePosition,
-      textureSize,
-      derivativePosition,
-    )
+    color: sampleBaseColor(sets['flowered-grass'], sitePosition, textureSize, derivativePosition)
       .mul(blend.grass)
       .add(
-        sampleBaseColor(
-          sets['road-path'],
-          sitePosition,
-          textureSize,
-          derivativePosition,
-        ).mul(blend.road),
+        sampleBaseColor(sets['road-path'], sitePosition, textureSize, derivativePosition).mul(
+          blend.road,
+        ),
       )
       .add(
-        sampleBaseColor(
-          sets['desert-ground'],
-          sitePosition,
-          textureSize,
-          derivativePosition,
-        ).mul(blend.desert),
+        sampleBaseColor(sets['desert-ground'], sitePosition, textureSize, derivativePosition).mul(
+          blend.desert,
+        ),
       )
       .add(
-        sampleBaseColor(
-          sets['paved-road'],
-          sitePosition,
-          textureSize,
-          derivativePosition,
-        ).mul(blend.paved),
+        sampleBaseColor(sets['paved-road'], sitePosition, textureSize, derivativePosition).mul(
+          blend.paved,
+        ),
       ),
     coverage: blend.coverage,
   }
@@ -312,22 +297,14 @@ function buildSurfaceBlendNodes(
     Math.max((field.cols - 1) * field.spacing, field.spacing),
     Math.max((field.rows - 1) * field.spacing, field.spacing),
   )
-  const blendUv = sitePosition
-    .sub(vec2(field.origin[0], field.origin[1]))
-    .div(blendSize)
+  const blendUv = sitePosition.sub(vec2(field.origin[0], field.origin[1])).div(blendSize)
   const paint = texture(blendTexture, blendUv)
   const unpremultiplied = paint.rgb.div(max(paint.a, 1 / 255))
-  const pavedWeight = max(
-    unpremultiplied.dot(vec3(1)).sub(1).mul(0.5),
-    0,
-  )
+  const pavedWeight = max(unpremultiplied.dot(vec3(1)).sub(1).mul(0.5), 0)
   const grassWeight = max(unpremultiplied.r.sub(pavedWeight), 0)
   const roadWeight = max(unpremultiplied.g.sub(pavedWeight), 0)
   const desertWeight = max(unpremultiplied.b.sub(pavedWeight), 0)
-  const weightTotal = max(
-    grassWeight.add(roadWeight).add(desertWeight).add(pavedWeight),
-    1 / 255,
-  )
+  const weightTotal = max(grassWeight.add(roadWeight).add(desertWeight).add(pavedWeight), 1 / 255)
   return {
     grass: grassWeight.div(weightTotal),
     road: roadWeight.div(weightTotal),
@@ -359,9 +336,10 @@ function sampleBaseColorTexture(
   textureSize: number | Node<'float'>,
   derivativePosition: Node<'vec2'>,
 ): Node<'vec3'> {
-  const scale = typeof textureSize === 'number'
-    ? worldScale * (textureSize / 100)
-    : textureSize.mul(worldScale / 100)
+  const scale =
+    typeof textureSize === 'number'
+      ? worldScale * (textureSize / 100)
+      : textureSize.mul(worldScale / 100)
   const uv = sitePosition.div(scale)
   const derivativeUv = derivativePosition.div(scale)
   return stochasticSample(map, uv, derivativeUv).rgb
@@ -420,7 +398,10 @@ function sampleCell(
 ): Node<'vec4'> {
   // Float-to-uint conversion saturates negative cells to zero in WGSL.
   // Preserve their signed bits before mixing coordinates, in every quadrant.
-  const seed = cell.x.toInt().toUint().mul(TSL.uint(73856093))
+  const seed = cell.x
+    .toInt()
+    .toUint()
+    .mul(TSL.uint(73856093))
     .bitXor(cell.y.toInt().toUint().mul(TSL.uint(19349663)))
   const offset = vec2(hash(seed), hash(seed.bitXor(TSL.uint(0x9e3779b9))))
   const sampleUv = uv.sub(cell).add(offset)
@@ -430,26 +411,68 @@ function sampleCell(
   return sampleNode.grad(gradientX, gradientY)
 }
 
+function getSurfaceMaterialTextureRuntime(): SurfaceMaterialTextureRuntime {
+  if (textureRuntime) return textureRuntime
+  const loader = new TextureLoader()
+  const pending: Promise<void>[] = []
+  const sets = {
+    'flowered-grass': loadSet(
+      loader,
+      pending,
+      floweredGrassBaseColor,
+      floweredGrassNormal,
+      floweredGrassArm,
+    ),
+    'road-path': loadSet(loader, pending, roadBaseColor, roadNormal, roadArm),
+    'desert-ground': loadSet(loader, pending, desertBaseColor, desertNormal, desertArm),
+    'paved-road': loadSet(loader, pending, pavedRoadBaseColor, pavedRoadNormal, pavedRoadArm),
+  }
+  const ready = Promise.all(pending).then(() => sets)
+  ready.catch(() => {})
+  textureRuntime = { sets, ready }
+  return textureRuntime
+}
+
 function loadSet(
   loader: TextureLoader,
+  pending: Promise<void>[],
   baseColorAsset: string | { src: string },
   normalAsset: string | { src: string },
   armAsset: string | { src: string },
 ): SurfaceMaterialTextureSet {
   return {
-    baseColor: loadTexture(loader, baseColorAsset, SRGBColorSpace),
-    normal: loadTexture(loader, normalAsset, NoColorSpace),
-    arm: loadTexture(loader, armAsset, NoColorSpace),
+    baseColor: loadTexture(loader, pending, baseColorAsset, SRGBColorSpace),
+    normal: loadTexture(loader, pending, normalAsset, NoColorSpace),
+    arm: loadTexture(loader, pending, armAsset, NoColorSpace),
     worldScale: SURFACE_MATERIAL_WORLD_SCALE,
   }
 }
 
 function loadTexture(
   loader: TextureLoader,
+  pending: Promise<void>[],
   asset: string | { src: string },
   colorSpace: typeof SRGBColorSpace | typeof NoColorSpace,
 ): Texture {
-  return configureTexture(loader.load(assetUrl(asset)), colorSpace)
+  const url = assetUrl(asset)
+  let resolveLoad!: () => void
+  let rejectLoad!: (reason: unknown) => void
+  pending.push(
+    new Promise<void>((resolve, reject) => {
+      resolveLoad = resolve
+      rejectLoad = reject
+    }),
+  )
+  return configureTexture(
+    loader.load(
+      url,
+      () => resolveLoad(),
+      undefined,
+      (cause) =>
+        rejectLoad(new Error(`Unable to load surface material texture: ${url}`, { cause })),
+    ),
+    colorSpace,
+  )
 }
 
 function configureTexture(

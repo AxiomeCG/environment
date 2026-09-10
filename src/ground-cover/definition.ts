@@ -1,5 +1,5 @@
 import type { NodeDefinition } from '@pascal-app/core'
-import { buildGrassFieldBakeGeometry } from './bake-geometry'
+import { buildGrassFieldBakeGeometry, buildGrassFieldBakeGeometryAsync } from './bake-geometry'
 import { buildGrassFieldFloorplan } from './floorplan'
 import { buildGrassFieldGeometry } from './geometry'
 import { grassFieldParametrics } from './parametrics'
@@ -16,6 +16,7 @@ type GrassFieldDefinition = Omit<
 > &
   Record<string, unknown> & {
     bakeGeometry: typeof buildGrassFieldBakeGeometry
+    bakeGeometryAsync: typeof buildGrassFieldBakeGeometryAsync
     capabilities: NodeDefinition<typeof GrassFieldNode>['capabilities'] & {
       selectionHighlight?: boolean
     }
@@ -62,6 +63,7 @@ export const grassFieldDefinition: GrassFieldDefinition = {
   geometry: buildGrassFieldGeometry,
   bake: 'replace',
   bakeGeometry: buildGrassFieldBakeGeometry,
+  bakeGeometryAsync: buildGrassFieldBakeGeometryAsync,
   bakeReplaceRenderer: { module: () => import('./static-renderer') },
   floorplan: buildGrassFieldFloorplan,
   floorplanScope: 'site',

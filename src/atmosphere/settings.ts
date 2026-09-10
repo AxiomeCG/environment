@@ -26,7 +26,6 @@ export type SkySettings = {
   cloudSoftness: number
   cloudScale: number
   cloudSpeed: number
-  godRays: number
   moonPhase: number
   exposureCompensation: number
   fogStart: number
@@ -51,7 +50,6 @@ export const DEFAULT_SKY_SETTINGS: Readonly<SkySettings> = {
   cloudSoftness: 0.16,
   cloudScale: 1,
   cloudSpeed: 0.008,
-  godRays: 0,
   moonPhase: 1,
   exposureCompensation: 0,
   fogStart: 180,
@@ -91,7 +89,6 @@ const BOUNDS: Partial<Record<keyof SkySettings, readonly [number, number]>> = {
   cloudSoftness: [0.02, 0.4],
   cloudScale: [0.25, 4],
   cloudSpeed: [0, 0.04],
-  godRays: [0, 1],
   moonPhase: [0, 1],
   exposureCompensation: [-3, 3],
   fogStart: [0, 2000],

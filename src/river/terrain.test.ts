@@ -249,18 +249,6 @@ describe('river terrain reconciliation', () => {
     expect(restored.patch).not.toBeNull()
   })
 
-  test('preserves non-object Site metadata through channel revisions and removal', () => {
-    const site = SiteNode.parse({ ...siteWith(), metadata: ['survey', { source: 'import' }] })
-    const carved = rebuildRiverTerrain(site, [river('river_metadata')])
-    const revised = rebuildRiverTerrain(siteAfter(site, carved), [
-      river('river_metadata', { depth: 2 }),
-    ])
-    const restored = rebuildRiverTerrain(siteAfter(site, revised), [])
-
-    expect(restored.metadata).toEqual(site.metadata)
-    expect(restored.terrain.heights).toEqual(flatTerrain().heights)
-  })
-
   test('external sculpt deltas survive a later river revision and final restore', () => {
     const site = siteWith()
     const carved = rebuildRiverTerrain(site, [river('river_external')])

@@ -35,7 +35,7 @@ function shadowMaterial(): MeshBasicNodeMaterial {
   const extent = halfSize.add(abs(offset).mul(0.5)).add(style.z.mul(2))
   const point = positionGeometry.xz.mul(extent.mul(2)).add(offset.mul(0.5))
   const centered = abs(point.sub(offset.mul(0.5))).sub(halfSize.add(abs(offset).mul(0.5)))
-  const perpendicular = select(offset.length().greaterThan(0.001), vec2(offset.y.negate(), offset.x).div(max(offset.length(), 0.001)), vec2(1, 0))
+  const perpendicular = select<'vec2'>(offset.length().greaterThan(0.001), vec2(offset.y.negate(), offset.x).div(max(offset.length(), 0.001)), vec2(1, 0))
   // Support planes of a rectangle swept along the sun vector form the exact
   // six-sided silhouette of a cheap building mass, including its ground contact.
   const boxDistance = max(max(centered.x, centered.y), abs(point.dot(perpendicular)).sub(halfSize.dot(abs(perpendicular))))

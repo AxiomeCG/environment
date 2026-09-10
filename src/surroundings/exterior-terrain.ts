@@ -256,7 +256,7 @@ export function createTerrainSubdivisionSampler(
       const distance = Math.hypot(dx, dz)
       const segments = Math.max(
         terrainSectionSegments(source, address),
-        distance < 16 ? 40 : distance < 80 ? 20 : 10,
+        distance < 80 ? 20 : 10,
       )
       resolutions.set(address.key, segments)
       return segments

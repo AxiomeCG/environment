@@ -10,7 +10,6 @@ import {
 import { DoubleSide, type DataTexture, Group, Mesh, type Object3D } from 'three'
 import * as TSL from 'three/tsl'
 import { MeshStandardNodeMaterial, type Node } from 'three/webgpu'
-import { setGlobalWindStrength } from '../wind-node'
 import { buildSurfaceUnderlayColorNodes } from '../surface-material/materials'
 import {
   resolveSurfaceMaterial,
@@ -176,9 +175,6 @@ function createGroundPlane(
 }
 
 export function buildGrassFieldGeometry(node: GrassFieldNode, context: GeometryContext): Group {
-  const windStrength = (node.windStrength ?? 100) / 100
-  setGlobalWindStrength(windStrength)
-
   const fields = resolveGroundCoverFields(node, context)
   if (!fields) {
     console.warn('Parent is not site for grass field, rendering nothing')
@@ -200,6 +196,7 @@ export function buildGrassFieldGeometry(node: GrassFieldNode, context: GeometryC
   const grassFieldUniforms = {
     density: uniform(density),
     restBend: uniform(node.bladeRestBend ?? 0.22),
+    windStrength: uniform(Math.max(0, (node.windStrength ?? 100) / 100)),
     windInfluence: uniform((node.grassWindInfluence ?? 100) / 100),
     tintVariation: uniform(tintVariation),
     tipBrightness: uniform(tipBrightness),
@@ -295,6 +292,7 @@ export function buildGrassFieldGeometry(node: GrassFieldNode, context: GeometryC
   const curvedPosition = createGrassBladePosition({
     heightScale: effectiveHeightScale,
     restBend: grassFieldUniforms.restBend,
+    windStrength: grassFieldUniforms.windStrength,
     windInfluence: grassFieldUniforms.windInfluence,
     obstacleInfluence,
     obstacleDirection,
@@ -373,6 +371,7 @@ export function buildGrassFieldGeometry(node: GrassFieldNode, context: GeometryC
   group.add(
     createAnimatedFlowerBatches(
       collectFlowerPlacements(node, fields),
+      grassFieldUniforms.windStrength,
       grassFieldUniforms.windInfluence,
     ),
   )
@@ -447,6 +446,7 @@ export function updateGrassFieldUniforms(root: Object3D, node: GrassFieldNode): 
     | {
         density: { value: number }
         restBend: { value: number }
+        windStrength: { value: number }
         windInfluence: { value: number }
         tintVariation: { value: number }
         tipBrightness: { value: number }
@@ -465,6 +465,6 @@ export function updateGrassFieldUniforms(root: Object3D, node: GrassFieldNode): 
   uniforms.obstacleBendRadius.value = node.obstacleBendRadius ?? 0.75
   uniforms.obstacleBendStrength.value = node.obstacleBendStrength ?? 0.12
   uniforms.obstacleFlattening.value = (node.obstacleFlattening ?? 60) / 100
-  setGlobalWindStrength((node.windStrength ?? 100) / 100)
+  uniforms.windStrength.value = Math.max(0, (node.windStrength ?? 100) / 100)
   return true
 }

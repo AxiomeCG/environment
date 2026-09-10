@@ -44,6 +44,25 @@ export type WaterMaterialOptions = {
   opacity?: readonly [shallow: number, deep: number]
 }
 
+export type WaterMaterialNodeInputs = Readonly<{
+  position: Node<'vec2'>
+  depth: Node<'float'>
+  shoreDistance?: Node<'float'>
+  flow?: Readonly<{
+    tangent: Node<'vec2'>
+    course: Node<'vec2'>
+  }>
+  phase: Node<'float'>
+  far: Node<'float'>
+}>
+
+export type WaterMaterialNodes = Readonly<{
+  color: Node<'vec3'>
+  normal: Node<'vec3'>
+  opacity: Node<'float'> | null
+  roughness: Node<'float'>
+}>
+
 /**
  * Shared single-pass water material. All callers provide `waterDepth`;
  * `shoreFade` additionally reads `shoreDistance`; flowing water reads the
@@ -52,11 +71,6 @@ export type WaterMaterialOptions = {
  */
 export function createWaterMaterial(options: WaterMaterialOptions): PresentationPhysicalMaterial {
   const roughness = options.roughness ?? 0.28
-  const shoreRoughness = options.shoreRoughness ?? 0.8
-  const rippleStrength = options.rippleStrength ?? 1
-  const waveScale = options.waveScale ?? 1
-  const speedScale = options.speedScale ?? 1
-  const [depthStart, depthEnd] = options.depthRange ?? [0.15, 9]
   const material = new PresentationPhysicalMaterial({
     color: options.color,
     depthWrite: !options.opacity,
@@ -66,19 +80,54 @@ export function createWaterMaterial(options: WaterMaterialOptions): Presentation
     transparent: Boolean(options.opacity),
   })
   material.name = options.name
-
   const depth = attribute<'float'>('waterDepth', 'float').max(0)
+  const flow = options.flow
+    ? {
+        tangent: attribute<'vec2'>('waterFlow', 'vec2'),
+        course: attribute<'vec2'>('waterCourse', 'vec2'),
+      }
+    : undefined
+  const nodes = buildWaterMaterialNodes(options, {
+    position: positionWorld.xz,
+    depth,
+    shoreDistance: options.shoreFade
+      ? attribute<'float'>('shoreDistance', 'float').max(0)
+      : undefined,
+    flow,
+    phase: time,
+    far: smoothstep(100, 700, positionWorld.sub(cameraPosition).length()),
+  })
+  material.normalNode = nodes.normal.transformDirection(cameraViewMatrix)
+  material.colorNode = nodes.color
+  material.roughnessNode = nodes.roughness
+  if (nodes.opacity) material.opacityNode = nodes.opacity
+  return material
+}
+
+export function buildWaterMaterialNodes(
+  options: WaterMaterialOptions,
+  inputs: WaterMaterialNodeInputs,
+): WaterMaterialNodes {
+  const roughness = options.roughness ?? 0.28
+  const shoreRoughness = options.shoreRoughness ?? 0.8
+  const rippleStrength = options.rippleStrength ?? 1
+  const waveScale = options.waveScale ?? 1
+  const speedScale = options.speedScale ?? 1
+  const [depthStart, depthEnd] = options.depthRange ?? [0.15, 9]
+  const depth = inputs.depth.max(0)
   const deep = smoothstep(depthStart, depthEnd, depth)
-  const distance = positionWorld.sub(cameraPosition).length()
-  const far = smoothstep(100, 700, distance)
-  const world = positionWorld.xz.mul(waveScale)
+  const far = inputs.far
+  const world = inputs.position.mul(waveScale)
   const flowSpeed = options.flow ? Math.max(0, options.flow.speed) * options.flow.direction : 0
-  const clock = time.mul(options.flow ? flowSpeed : speedScale)
-  const rawFlow = options.flow ? attribute<'vec2'>('waterFlow', 'vec2') : null
+  const clock = inputs.phase.mul(options.flow ? flowSpeed : speedScale)
+  if (options.flow && !inputs.flow) {
+    throw new Error(`Flowing water material ${options.name} requires tangent and course inputs`)
+  }
+  const rawFlow = options.flow ? inputs.flow!.tangent : null
   const flowTangent = rawFlow ? rawFlow.div(rawFlow.length().max(1e-4)).toVar() : null
   const advected = options.flow
-    ? attribute<'vec2'>('waterCourse', 'vec2')
-        .sub(vec2(time.mul(flowSpeed), 0))
+    ? inputs
+        .flow!.course.sub(vec2(inputs.phase.mul(flowSpeed), 0))
         .mul(waveScale)
         .toVar()
     : world
@@ -115,7 +164,6 @@ export function createWaterMaterial(options: WaterMaterialOptions): Presentation
       .add(offset)
       .add(broadNoise.mul(3.2))
       .add(patchNoise.mul(1.8))
-    // Filter the warped phase, not just distance: grazing views undersample first.
     const resolved = smoothstep(0.4, 2, phase.fwidth()).oneMinus()
     const detailFade = wavelength < 5 ? far.oneMinus() : 1
     slopes = slopes.add(direction.mul(sin(phase).mul(strength).mul(resolved).mul(detailFade)))
@@ -125,7 +173,7 @@ export function createWaterMaterial(options: WaterMaterialOptions): Presentation
     .mul(mix(0.28, 1, deep))
     .mul(mix(1, 0.18, far))
     .mul(rippleStrength)
-  material.normalNode = vec3(tilt.x, 1, tilt.y).transformDirection(cameraViewMatrix)
+  const normal = vec3(tilt.x, 1, tilt.y).normalize()
 
   const shallowColor = new Color(options.color)
   const deepColor = options.deepColor
@@ -137,8 +185,6 @@ export function createWaterMaterial(options: WaterMaterialOptions): Presentation
     vec3(deepColor.r, deepColor.g, deepColor.b),
     deep,
   )
-  // Visible elongated streaks supplement subtle normal ripples. Only rivers
-  // get these transported cues; pond and coastal appearance remain unchanged.
   const current = flowTangent
     ? smoothstep(
         -0.5,
@@ -150,8 +196,6 @@ export function createWaterMaterial(options: WaterMaterialOptions): Presentation
   const currentFoam = current ? smoothstep(0.6, 0.9, current).mul(0.28) : 0
   const shore = smoothstep(0.08, 0.65, depth).oneMinus()
   const wash = shore.mul(patches.mul(0.28).add(0.16))
-  // Shallow depth causes foam; noise only breaks its edge and coverage.
-  // The phase moves toward shallower water instead of sliding along the bank.
   const foamPhase = depth.mul(9).add(clock.mul(0.65)).add(broadNoise.mul(2.8))
   const foamBand = smoothstep(0.02, 0.1, depth).mul(smoothstep(0.4, 1.3, depth).oneMinus())
   const foam = smoothstep(0.15, 0.8, sin(foamPhase))
@@ -159,23 +203,23 @@ export function createWaterMaterial(options: WaterMaterialOptions): Presentation
     .mul(mix(0.25, 1, patches))
     .mul(foamBand)
     .mul(options.foamStrength ?? 0.25)
-  const coverage = wash.max(foam).max(currentFoam).mul(far.oneMinus()).clamp(0, 1)
-  material.colorNode = mix(currentColor, vec3(foamColor.r, foamColor.g, foamColor.b), coverage)
-  material.roughnessNode = mix(far.mul(0.12).add(roughness), shoreRoughness, coverage)
+  const foamCoverage = wash.max(foam).max(currentFoam).mul(far.oneMinus()).clamp(0, 1)
+  const color = mix(currentColor, vec3(foamColor.r, foamColor.g, foamColor.b), foamCoverage)
+  const materialRoughness = mix(far.mul(0.12).add(roughness), shoreRoughness, foamCoverage)
+  let opacity: Node<'float'> | null = null
   if (options.opacity) {
-    let opacity: Node<'float'> = mix(options.opacity[0], options.opacity[1], deep)
+    opacity = mix(options.opacity[0], options.opacity[1], deep)
     if (options.shoreFade) {
+      if (!inputs.shoreDistance) {
+        throw new Error(`Water material ${options.name} requires a shore-distance input`)
+      }
       const [fadeDistance, absorptionDepth] = options.shoreFade
-      const shoreDistance = attribute<'float'>('shoreDistance', 'float').max(0)
-      // Optical coverage follows Beer-Lambert absorption through the shallow
-      // water column; the distance term antialiases the clipped terrain edge.
       const opticalCoverage = exp(depth.div(Math.max(1e-4, absorptionDepth)).negate()).oneMinus()
-      const edgeCoverage = smoothstep(0, Math.max(1e-4, fadeDistance), shoreDistance)
+      const edgeCoverage = smoothstep(0, Math.max(1e-4, fadeDistance), inputs.shoreDistance.max(0))
       opacity = opacity.mul(opticalCoverage).mul(edgeCoverage)
     }
-    material.opacityNode = opacity
   }
-  return material
+  return { color, normal, opacity, roughness: materialRoughness }
 }
 
 /** Opaque, normal-only distant water; the scene owns reflection lighting and fog. */

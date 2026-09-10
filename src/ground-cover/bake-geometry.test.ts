@@ -8,7 +8,7 @@ import {
   surfaceHeightAt,
 } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
-import { Box3, Color, InstancedMesh, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three'
+import { Box3, InstancedMesh, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { buildGrassFieldBakeGeometry } from './bake-geometry'
 import { resolveGroundCoverFields } from './field-context'
@@ -48,7 +48,7 @@ describe('Ground Cover static bake geometry', () => {
     )
     expect(
       Array.from(blades.geometry.getAttribute('color').array as ArrayLike<number>).every(
-        (component) => component >= 0 && component <= 1,
+        (component) => Number.isFinite(component) && component >= 0,
       ),
     ).toBe(true)
 
@@ -160,7 +160,7 @@ describe('Ground Cover static bake geometry', () => {
     expect(curvedBounds.max.y).toBeLessThan(straightBounds.max.y)
   })
 
-  test('bakes the painted RGB directly as glTF linear vertex colors', async () => {
+  test('bakes deterministic intrinsic tint, root shade, and tip brightness as vertex colors', async () => {
     const site = smallSite()
     const node = GrassFieldNode.parse({
       id: 'grass-field_color_bake',
@@ -184,15 +184,80 @@ describe('Ground Cover static bake geometry', () => {
     expect(blades.material.color.getHex()).toBe(0xffffff)
     expect(blades.material.emissive.getHex()).toBe(0)
     const colors = blades.geometry.getAttribute('color')
-    const expected = new Color('#204060')
-    for (let index = 0; index < colors.count; index += 1) {
-      expect(colors.getX(index)).toBeCloseTo(expected.r, 6)
-      expect(colors.getY(index)).toBeCloseTo(expected.g, 6)
-      expect(colors.getZ(index)).toBeCloseTo(expected.b, 6)
+    const positions = blades.geometry.getAttribute('position')
+    const yValues = Array.from({ length: positions.count }, (_, index) => positions.getY(index))
+    const minY = Math.min(...yValues)
+    const maxY = Math.max(...yValues)
+    const luminanceAt = (targetY: number) => {
+      let total = 0
+      let count = 0
+      for (let index = 0; index < colors.count; index += 1) {
+        if (Math.abs(positions.getY(index) - targetY) > 1e-6) continue
+        total +=
+          colors.getX(index) * 0.2126 + colors.getY(index) * 0.7152 + colors.getZ(index) * 0.0722
+        count += 1
+      }
+      expect(count).toBeGreaterThan(0)
+      return total / count
     }
+    const distinctColors = new Set(
+      Array.from(
+        { length: colors.count },
+        (_, index) =>
+          `${colors.getX(index).toFixed(5)},${colors.getY(index).toFixed(5)},${colors.getZ(index).toFixed(5)}`,
+      ),
+    )
+
+    expect(distinctColors.size).toBeGreaterThan(4)
+    expect(luminanceAt(maxY)).toBeGreaterThan(luminanceAt(minY))
+    const repeated = buildGrassFieldBakeGeometry(node, contextFor(site, [site]))
+    const repeatedBlades = repeated.getObjectByName('grass-field-static-blades') as Mesh
+    expect(Array.from(repeatedBlades.geometry.getAttribute('color').array)).toEqual(
+      Array.from(colors.array),
+    )
 
     const exported = await exportGltf(root)
     expect(exported.meshes?.[0]?.primitives[0]?.attributes.COLOR_0).toBeNumber()
+  })
+
+  test('bakes zero, partial, and full authored coverage as distinct populations', () => {
+    const site = SiteNode.parse({
+      id: 'site_coverage_bake',
+      children: [],
+      polygon: {
+        type: 'polygon',
+        points: [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+        ],
+      },
+    })
+    const vertexCount = (coverage: number) => {
+      const node = GrassFieldNode.parse({
+        id: `grass-field_coverage_${coverage}`,
+        parentId: site.id,
+        density: 100,
+        bladeHeightVariation: 0,
+        bladeWidthVariation: 0,
+        paintMap: encodeGrassPaintField(
+          createGrassPaintField({ minX: 0, maxX: 1, minZ: 0, maxZ: 1 }, '#315f2f', coverage),
+        ),
+      })
+      let count = 0
+      buildGrassFieldBakeGeometry(node, contextFor(site, [site])).traverse((object) => {
+        if (object instanceof Mesh) count += object.geometry.getAttribute('position').count
+      })
+      return count
+    }
+
+    const empty = vertexCount(0)
+    const partial = vertexCount(0.5)
+    const full = vertexCount(1)
+    expect(empty).toBe(0)
+    expect(partial).toBeGreaterThan(empty)
+    expect(partial).toBeLessThan(full)
   })
 
   test('splits large fields into 16-bit indexed baseline meshes', () => {

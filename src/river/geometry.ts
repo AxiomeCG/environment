@@ -15,11 +15,12 @@ import {
   ShapeUtils,
   Vector2,
 } from 'three'
-import { POND_WATER_APPEARANCE } from '../pond/appearance'
+import { bakeWaterMaterial, type BakedWaterMaterial } from '../export/water-material-bake'
+import { POND_WATER_APPEARANCE, type PondWaterAppearance } from '../pond/appearance'
 import type { PondSurface } from '../pond/basin'
 import type { WaterQuality } from '../pond/schema'
 import { buildPondShoreGeometry, createPondShoreDistances } from '../pond/shoreline'
-import { createWaterMaterial } from '../surroundings/water-material'
+import { createWaterMaterial, type WaterMaterialOptions } from '../surroundings/water-material'
 import type { RiverNode } from './schema'
 import {
   riverPathWidthScale,
@@ -224,25 +225,9 @@ function buildResolvedRiverGeometry(node: RiverNode, resolved: ResolvedRiver | n
   const appearance = POND_WATER_APPEARANCE[waterQuality(node.quality)]
   const shoreFadeDistance = Math.max(0.18, Math.min(0.9, resolved.terrain.spacing * 1.3))
   const geometry = createRiverSurfaceGeometry(resolved.surface, shoreFadeDistance)
-  const material = createWaterMaterial({
-    name: `environment-river-water-${node.quality}`,
-    color: appearance.shallowColor,
-    deepColor: appearance.deepColor,
-    foamColor: appearance.foamColor,
-    foamStrength: appearance.foamStrength,
-    flow: {
-      speed: node.flowSpeed,
-      direction: node.flowDirection === 'reverse' ? -1 : 1,
-    },
-    depthRange: appearance.depthRange,
-    roughness: appearance.roughness,
-    shoreRoughness: appearance.shoreRoughness,
-    rippleStrength: appearance.rippleStrength,
-    waveScale: appearance.waveScale,
-    speedScale: appearance.speedScale,
-    shoreFade: [shoreFadeDistance, appearance.shoreAbsorptionDepth],
-    opacity: appearance.opacity,
-  })
+  const material = createWaterMaterial(
+    riverWaterMaterialOptions(node, appearance, shoreFadeDistance),
+  )
   const water = new Mesh(geometry, material)
   water.name = 'environment-river-water'
   water.castShadow = false
@@ -259,7 +244,7 @@ function buildResolvedRiverGeometry(node: RiverNode, resolved: ResolvedRiver | n
   return group
 }
 
-/** Portable ordinary meshes/materials for generic GLB export. */
+/** Synchronous geometry-only path for printing and non-material callers. */
 export function buildRiverBakeGeometry(node: RiverNode, context: GeometryContext): Group {
   const group = new Group()
   group.name = node.name || 'River'
@@ -306,6 +291,46 @@ export function buildRiverBakeGeometry(node: RiverNode, context: GeometryContext
   water.name = 'River water'
   water.castShadow = false
   water.receiveShadow = false
+  group.add(water)
+  if (node.shoreline === 'rocky') {
+    group.add(buildPondShoreGeometry(resolved.surface, resolved.terrain, String(node.id), true))
+  }
+  return group
+}
+
+export async function buildRiverBakeGeometryAsync(
+  node: RiverNode,
+  context: GeometryContext,
+): Promise<Group> {
+  const group = new Group()
+  group.name = node.name || 'River'
+  const resolved = resolveRiver(node, context)
+  if (!resolved) return group
+  const appearance = POND_WATER_APPEARANCE[waterQuality(node.quality)]
+  const shoreFadeDistance = Math.max(0.18, Math.min(0.9, resolved.terrain.spacing * 1.3))
+  const geometry = createRiverSurfaceGeometry(resolved.surface, shoreFadeDistance)
+  let baked: BakedWaterMaterial
+  try {
+    baked = await bakeWaterMaterial(
+      geometry,
+      riverWaterMaterialOptions(node, appearance, shoreFadeDistance),
+    )
+  } catch (cause) {
+    geometry.dispose()
+    throw new Error(`Unable to bake export materials for River ${String(node.id)}`, { cause })
+  }
+  const water = new Mesh(geometry, baked.material)
+  water.name = 'River water'
+  water.castShadow = false
+  water.receiveShadow = false
+  water.userData.materialBake = {
+    backend: baked.backend,
+    height: baked.height,
+    pixelsPerMeter: baked.pixelsPerMeter,
+    phaseSeconds: baked.phaseSeconds,
+    tileSize: baked.tileSize,
+    width: baked.width,
+  }
   group.add(water)
   if (node.shoreline === 'rocky') {
     group.add(buildPondShoreGeometry(resolved.surface, resolved.terrain, String(node.id), true))
@@ -538,6 +563,32 @@ function boundsOverlap(
 
 function cross2(first: SurfaceVertex, second: SurfaceVertex, third: SurfaceVertex): number {
   return (second.x - first.x) * (third.z - first.z) - (second.z - first.z) * (third.x - first.x)
+}
+
+function riverWaterMaterialOptions(
+  node: RiverNode,
+  appearance: PondWaterAppearance,
+  shoreFadeDistance: number,
+): WaterMaterialOptions {
+  return {
+    name: `environment-river-water-${node.quality}`,
+    color: appearance.shallowColor,
+    deepColor: appearance.deepColor,
+    foamColor: appearance.foamColor,
+    foamStrength: appearance.foamStrength,
+    flow: {
+      speed: node.flowSpeed,
+      direction: node.flowDirection === 'reverse' ? -1 : 1,
+    },
+    depthRange: appearance.depthRange,
+    roughness: appearance.roughness,
+    shoreRoughness: appearance.shoreRoughness,
+    rippleStrength: appearance.rippleStrength,
+    waveScale: appearance.waveScale,
+    speedScale: appearance.speedScale,
+    shoreFade: [shoreFadeDistance, appearance.shoreAbsorptionDepth],
+    opacity: appearance.opacity,
+  }
 }
 
 function crossPoint(start: Vector2, end: Vector2, point: SurfaceVertex): number {

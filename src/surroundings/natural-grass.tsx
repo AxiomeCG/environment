@@ -118,6 +118,7 @@ function createNaturalGrassMaterial(
   const curvedPosition = createGrassBladePosition({
     heightScale,
     restBend: TSL.uniform(presetId === 'woodland-edge' ? 0.32 : 0.22),
+    windStrength: TSL.float(1),
     windInfluence,
   })
   const shading = createGrassBladeShading(tintRandom)

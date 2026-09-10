@@ -47,6 +47,24 @@ const context: GeometryContext = {
   }),
 }
 
+function expectFlowerResourcesUnchanged(
+  flowers: readonly InstancedMesh[],
+  geometries: readonly InstancedMesh['geometry'][],
+  materials: readonly InstancedMesh['material'][],
+) {
+  expect(flowers).toHaveLength(geometries.length)
+  for (let index = 0; index < flowers.length; index += 1) {
+    const flower = flowers[index]
+    const geometry = geometries[index]
+    const material = materials[index]
+    if (!flower || !geometry || !material) {
+      throw new Error(`Missing expected flower resource at index ${index}`)
+    }
+    expect(flower.geometry).toBe(geometry)
+    expect(flower.material).toBe(material)
+  }
+}
+
 test('missing controls receive defaults without replacing explicit zeroes', () => {
   expect(
     getMissingGrassFieldDefaults({
@@ -55,7 +73,7 @@ test('missing controls receive defaults without replacing explicit zeroes', () =
     }),
   ).toMatchObject({
     bladeWidth: 0.035,
-    bladeHeight: 0.15,
+    bladeHeight: 0.3,
   })
   expect(
     getMissingGrassFieldDefaults({
@@ -110,8 +128,96 @@ test('shader-only controls update mounted uniforms without replacing resources',
   })
 
   expect(updateGrassFieldUniforms(group, updated)).toBe(true)
-  expect(blade.geometry).toBe(geometry)
-  expect(blade.material).toBe(material)
+  const mountedBlade = group.getObjectByName('grass-field-blade')
+  expect(mountedBlade).toBeInstanceOf(InstancedMesh)
+  if (!(mountedBlade instanceof InstancedMesh)) {
+    throw new Error('Expected a mounted blade after the uniform update')
+  }
+  expect(mountedBlade).toBe(blade)
+  expect(mountedBlade.geometry).toBe(geometry)
+  expect(mountedBlade.material).toBe(material)
+})
+
+test('keeps live blade and flower wind resources node-local across sibling updates and removal', () => {
+  const fieldA = GrassFieldNode.parse({
+    id: 'grass-field_a',
+    flowerDensity: 100,
+    windStrength: 20,
+    grassWindInfluence: 100,
+  })
+  const fieldB = GrassFieldNode.parse({
+    id: 'grass-field_b',
+    flowerDensity: 100,
+    windStrength: 80,
+    grassWindInfluence: 100,
+  })
+  const groupA = buildGrassFieldGeometry(fieldA, context)
+  const groupB = buildGrassFieldGeometry(fieldB, context)
+  const bladeA = groupA.getObjectByName('grass-field-blade')
+  const bladeB = groupB.getObjectByName('grass-field-blade')
+  const flowersB = groupB
+    .getObjectByName('grass-field-flowers')
+    ?.children.filter((child): child is InstancedMesh => child instanceof InstancedMesh)
+
+  expect(bladeA).toBeInstanceOf(InstancedMesh)
+  expect(bladeB).toBeInstanceOf(InstancedMesh)
+  expect(flowersB?.length).toBeGreaterThan(0)
+  if (!(bladeA instanceof InstancedMesh) || !(bladeB instanceof InstancedMesh) || !flowersB) {
+    throw new Error('Expected populated blade and flower batches')
+  }
+
+  const bladeBGeometry = bladeB.geometry
+  const bladeBMaterial = bladeB.material
+  const flowerBGeometries = flowersB.map(({ geometry }) => geometry)
+  const flowerBMaterials = flowersB.map(({ material }) => material)
+
+  expect(
+    updateGrassFieldUniforms(
+      groupA,
+      GrassFieldNode.parse({ ...fieldA, windStrength: 150, grassWindInfluence: 250 }),
+    ),
+  ).toBe(true)
+  expect(bladeB.geometry).toBe(bladeBGeometry)
+  expect(bladeB.material).toBe(bladeBMaterial)
+  expectFlowerResourcesUnchanged(flowersB, flowerBGeometries, flowerBMaterials)
+
+  groupA.clear()
+  expect(groupB.getObjectByName('grass-field-blade')).toBe(bladeB)
+  const mountedFlowersB = groupB.getObjectByName('grass-field-flowers')?.children
+  expect(mountedFlowersB).toHaveLength(flowersB.length)
+  for (let index = 0; index < flowersB.length; index += 1) {
+    expect(mountedFlowersB?.[index]).toBe(flowersB[index])
+  }
+
+  expect(
+    updateGrassFieldUniforms(
+      groupB,
+      GrassFieldNode.parse({ ...fieldB, windStrength: 40, grassWindInfluence: 175 }),
+    ),
+  ).toBe(true)
+  const mountedBladeAfterOwnUpdate = groupB.getObjectByName('grass-field-blade')
+  const mountedFlowersAfterOwnUpdate = groupB
+    .getObjectByName('grass-field-flowers')
+    ?.children.filter((child): child is InstancedMesh => child instanceof InstancedMesh)
+  expect(mountedBladeAfterOwnUpdate).toBeInstanceOf(InstancedMesh)
+  expect(mountedFlowersAfterOwnUpdate).toHaveLength(flowersB.length)
+  if (
+    !(mountedBladeAfterOwnUpdate instanceof InstancedMesh) ||
+    !mountedFlowersAfterOwnUpdate
+  ) {
+    throw new Error('Expected mounted blade and flower batches after the uniform update')
+  }
+  expect(mountedBladeAfterOwnUpdate).toBe(bladeB)
+  expect(mountedBladeAfterOwnUpdate.geometry).toBe(bladeBGeometry)
+  expect(mountedBladeAfterOwnUpdate.material).toBe(bladeBMaterial)
+  for (let index = 0; index < flowersB.length; index += 1) {
+    expect(mountedFlowersAfterOwnUpdate[index]).toBe(flowersB[index])
+  }
+  expectFlowerResourcesUnchanged(
+    mountedFlowersAfterOwnUpdate,
+    flowerBGeometries,
+    flowerBMaterials,
+  )
 })
 
 test('separates shader-only controls from geometry inputs', () => {
