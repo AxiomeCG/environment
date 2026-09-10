@@ -37,7 +37,7 @@ export const environmentHostPanel: EditorHostPanel = {
     name: 'Pascal',
     url: 'https://github.com/pascalorg',
   },
-  pluginUrl: 'https://github.com/pascalorg/plugin-environment',
+  pluginUrl: 'https://github.com/AxiomeCG/environment',
   defaultInstalled: true,
 }
 

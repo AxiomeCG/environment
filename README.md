@@ -141,10 +141,10 @@ The following requests can occur:
   KTX2 textures causes requests for `basis_transcoder.js` and
   `basis_transcoder.wasm`. Meshopt decoding is bundled and adds no decoder
   origin.
-- Plugin-manager links point to `https://github.com/pascalorg`; they request
-  GitHub only when followed. Executable-lab source links point to
-  `https://github.com/AxiomeCG` and use `rel="noreferrer"`; they likewise make
-  no request until followed.
+- Plugin-manager links point to `https://github.com/pascalorg` for creator
+  information and `https://github.com/AxiomeCG/environment` for source. They
+  request GitHub only when followed. Executable-lab source links use the same
+  source repository with `rel="noreferrer"` and make no request until followed.
 
 Those origins and the host serving bundled assets receive ordinary connection
 and HTTP request metadata when a request is made, such as the client IP,
@@ -480,7 +480,7 @@ Environment source; its app code is not shipped in the plugin package.
 Start with the [executable lab guide](./docs/lab/README.md), then use
 its [case guide](./docs/lab/cases.md) and
 [reproducibility contract](./docs/lab/reproducibility.md). Catalog source links
-target the private `AxiomeCG/environment` repository and require repository access.
+target the public [`AxiomeCG/environment`](https://github.com/AxiomeCG/environment) repository.
 
 ## Documentation map
 

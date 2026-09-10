@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pascalorg/plugin-environment.git"
+    "url": "git+https://github.com/AxiomeCG/environment.git"
   },
   "main": "./src/index.ts",
   "devDependencies": {
@@ -55,7 +55,7 @@
     }
   },
   "bugs": {
-    "url": "https://github.com/pascalorg/plugin-environment/issues"
+    "url": "https://github.com/AxiomeCG/environment/issues"
   },
   "description": "Pascal plugin for terrain-dependent ground cover and future environment systems.",
   "files": [

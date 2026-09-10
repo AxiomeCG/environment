@@ -30,7 +30,7 @@ export type EnvironmentLabCase = {
 
 const SOURCE_ROOT = 'https://github.com/AxiomeCG/environment/blob/main/src'
 const source = (label: string, path: string) => ({
-  label: `${label} (repository access required)`,
+  label,
   url: `${SOURCE_ROOT}/${path}`,
 })
 const camera = (
@@ -1253,7 +1253,7 @@ export const ENVIRONMENT_LAB_CASES = [
     ],
     sources: [
       source('Plugin definitions', 'index.ts'),
-      source('Versioned presentation sidecar', 'presentation.tsx'),
+      source('Versioned presentation sidecar', 'presentation-configuration.ts'),
       source('Ground Cover bake', 'ground-cover/bake-geometry.ts'),
       source('Water static renderer', 'river/static-renderer.tsx'),
     ],
@@ -1350,7 +1350,7 @@ export const ENVIRONMENT_LAB_CASES = [
       },
     ],
     sources: [
-      source('Plugin presentation composition', 'presentation.tsx'),
+      source('Plugin presentation composition', 'presentation-runtime.tsx'),
       source('Ground Cover field context', 'ground-cover/field-context.ts'),
       source('River landscape bridge', 'surroundings/river-landscape.ts'),
       source('Atmosphere layer', 'atmosphere/layer.tsx'),
