@@ -3,7 +3,7 @@
 import { useThree } from '@react-three/fiber'
 import { useEffect, useLayoutEffect, useMemo } from 'react'
 import { Group, InstancedBufferAttribute, InstancedMesh, Matrix4, PlaneGeometry, Quaternion, Vector3 } from 'three'
-import { abs, array, attribute, cameraPosition, clamp, max, min, positionGeometry, positionWorld, select, sin, smoothstep, vec2, vec3, vertexIndex } from 'three/tsl'
+import { abs, array, attribute, cameraPosition, clamp, max, min, positionGeometry, positionLocal, positionWorld, select, sin, smoothstep, vec2, vec3, vertexIndex } from 'three/tsl'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
 import type { Node } from 'three/webgpu'
 import { createSolarState, updateSolarState } from '../atmosphere/solar'
@@ -62,7 +62,8 @@ function shadowMaterial(): MeshBasicNodeMaterial {
   material.colorNode = vec3(0)
   material.opacityNode = opacity
   material.maskNode = opacity.greaterThan(0.003)
-  material.positionNode = vec3(positionGeometry.x, ground.element(vertexIndex) as Node<'float'>, positionGeometry.z)
+  // positionLocal already includes the instance transform; preserve it when draping.
+  material.positionNode = positionLocal.add(vec3(0, ground.element(vertexIndex) as Node<'float'>, 0))
   sharedMaterial = material
   return material
 }

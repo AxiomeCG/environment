@@ -329,6 +329,8 @@ draw call. Soft projected footprints follow the sun and sample the terrain. Thei
 low-sun extent is capped, and they fade with distance; weak contact shading remains
 at night or when the procedural sky is disabled. They do not cast onto buildings or use shadow
 maps, render targets, or a blur pass.
+Terrain draping preserves each shadow instance's translation, rotation, and scale;
+the height offset is added after instancing, rather than replacing its position.
 
 Distant forest trees retain two draw calls and four triangles per tree. Shared
 four-variant, four-view canopy atlases provide asymmetric silhouettes and
