@@ -15,6 +15,7 @@ import {
   createTerrainSubdivisionSampler,
   deriveExteriorTerrainSectionAddresses,
   EXTERIOR_TERRAIN_SECTION_SEGMENTS,
+  type ExteriorTerrainSection,
   exteriorTerrainSectionAddressAt,
   mergeExteriorTerrainSections,
 } from './exterior-terrain'
@@ -59,12 +60,59 @@ function slopedTerrain(): TerrainField {
   return { ...field, heights }
 }
 
-function sectionSignature(section: ReturnType<typeof buildExteriorTerrainSection>) {
+function sectionSignature(section: ExteriorTerrainSection) {
   return {
     address: section.address,
     indices: Array.from(section.indices),
     normals: Array.from(section.normals),
     positions: Array.from(section.positions),
+  }
+}
+
+function buildExteriorCoverage(boundary: readonly Point2[], terrain: TerrainField | null) {
+  const sections = buildExteriorTerrainSections(
+    deriveExteriorTerrainSectionAddresses(boundary, 0),
+    { boundary, terrain },
+  )
+  const merged = mergeExteriorTerrainSections(sections)
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new BufferAttribute(merged.positions, 3))
+  geometry.setIndex(new BufferAttribute(merged.indices, 1))
+  const material = new MeshBasicMaterial()
+  const mesh = new Mesh(geometry, material)
+  const ray = new Raycaster(new Vector3(), new Vector3(0, -1, 0))
+  mesh.updateMatrixWorld()
+
+  return {
+    sections,
+    heightAt([x, z]: Point2) {
+      ray.ray.origin.set(x, 100, z)
+      return ray.intersectObject(mesh, false)[0]?.point.y
+    },
+    dispose() {
+      geometry.dispose()
+      material.dispose()
+    },
+  }
+}
+
+function expectNoExteriorAreaWithin(
+  sections: readonly ExteriorTerrainSection[],
+  footprint: readonly Point2[],
+) {
+  for (const section of sections) {
+    for (let offset = 0; offset < section.indices.length; offset += 3) {
+      const triangle = [0, 1, 2].map((corner) => {
+        const vertex = section.indices[offset + corner]! * 3
+        return [section.positions[vertex]!, section.positions[vertex + 2]!] as Point2
+      })
+      const overlap = clipConvexPolygon(triangle, footprint)
+      const doubledArea = overlap.reduce((sum, point, index) => {
+        const next = overlap[(index + 1) % overlap.length]!
+        return sum + point[0] * next[1] - next[0] * point[1]
+      }, 0)
+      expect(Math.abs(doubledArea)).toBeLessThan(1e-6)
+    }
   }
 }
 
@@ -184,6 +232,72 @@ describe('exterior Terrain sampling', () => {
         }, 0)
         expect(Math.abs(doubledArea)).toBeLessThan(1e-6)
       }
+    }
+  })
+
+  test('tracks the active cutout when Terrain is added, resized, or removed', () => {
+    const concaveSite = [
+      [83, -37],
+      [93, -37],
+      [93, -35],
+      [89, -35],
+      [89, -33],
+      [83, -33],
+    ] as const satisfies readonly Point2[]
+    const paddedTerrain = createTerrainField({
+      cols: 9,
+      origin: [80, -38],
+      rows: 4,
+      spacing: 2,
+      step: 0.01,
+    })
+    const paddedFootprint = [
+      [80, -38],
+      [96, -38],
+      [96, -32],
+      [80, -32],
+    ] as const satisfies readonly Point2[]
+    const resizedTerrain = createTerrainField({
+      cols: 13,
+      origin: [82, -38],
+      rows: 7,
+      spacing: 1,
+      step: 0.01,
+    })
+    const resizedFootprint = [
+      [82, -38],
+      [94, -38],
+      [94, -32],
+      [82, -32],
+    ] as const satisfies readonly Point2[]
+
+    const padded = buildExteriorCoverage(concaveSite, paddedTerrain)
+    const resized = buildExteriorCoverage(concaveSite, resizedTerrain)
+    const removed = buildExteriorCoverage(concaveSite, null)
+    try {
+      // A grid has (cols - 1) by (rows - 1) cells, so these literal
+      // rectangles are analytical oracles rather than candidate-derived output.
+      expectNoExteriorAreaWithin(padded.sections, paddedFootprint)
+      expect(padded.heightAt([91, -34])).toBeUndefined()
+      for (const point of [
+        [79.99, -35],
+        [96.01, -35],
+        [88, -38.01],
+        [88, -31.99],
+      ] as const satisfies readonly Point2[]) {
+        expect(padded.heightAt(point)).toBeDefined()
+      }
+
+      expectNoExteriorAreaWithin(resized.sections, resizedFootprint)
+      expect(resized.heightAt([82.25, -34])).toBeUndefined()
+      expect(resized.heightAt([94.01, -35])).toBeDefined()
+
+      expect(removed.heightAt([84, -36])).toBeUndefined()
+      expect(removed.heightAt([91, -34])).toBeDefined()
+    } finally {
+      padded.dispose()
+      resized.dispose()
+      removed.dispose()
     }
   })
 

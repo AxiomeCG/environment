@@ -63,6 +63,7 @@ import {
   createExteriorTerrainSampler,
   createRenderedTerrainSampler,
   createTerrainSubdivisionSampler,
+  deriveExteriorTerrainGroundBoundary,
   deriveExteriorTerrainSectionAddresses,
   mergeExteriorTerrainSections,
   EXTERIOR_TERRAIN_GROUND_OFFSET,
@@ -1201,6 +1202,7 @@ export async function buildStaticSurroundings(
       '[Environment] Static surroundings require a finite, non-degenerate Site boundary',
     )
   }
+  const groundBoundary = deriveExteriorTerrainGroundBoundary(boundary, terrainFieldOf(site))
   const state: TextureCloneState = { textures: new Map(), materials: new Map() }
   const regional = deriveLandscapeRegion(configuration.seed)
   const region =
@@ -1279,7 +1281,7 @@ export async function buildStaticSurroundings(
     throw new Error(`[Environment] Static surroundings albedo assets failed to load: ${message}`)
   }
   const terrainGeometry = mergeExteriorTerrainSections(
-    sections.map((address) => buildExteriorTerrainSection(address, renderedTerrain, boundary)),
+    sections.map((address) => buildExteriorTerrainSection(address, renderedTerrain, groundBoundary)),
   )
   categories.terrain.add(
     await meshFromExteriorTerrain(terrainGeometry, thirdRing.fields, region, albedos),

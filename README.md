@@ -313,9 +313,12 @@ exclusions.
 Only painted Surface materials feather beyond the property boundary, over six
 metres. Unpainted areas retain the surrounding terrain; the editor theme's plain
 ground color is not extended into the neighborhood.
-Terrain clips to the actual property polygon rather than dropping whole
-intersecting cells. A narrow boundary skirt closes the road-clearance offset
-without covering the editable Site.
+Exterior terrain clips to the actual rendered ground footprint rather than
+dropping whole intersecting cells: the editable Terrain's full rectangular
+sample-grid extent when present, and the Site polygon for flat polygon-only
+Sites. A narrow boundary skirt closes the road-clearance offset without covering
+either ground. Live terrain grid creation, cancellation, and resizing keep the
+cutout coherent; height-only dabs do not rebuild the surrounding landscape.
 
 Compatible road surfaces share batches across color variations using vertex
 colors; primary and secondary roads retain their individual colors.

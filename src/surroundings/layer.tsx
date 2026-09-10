@@ -1,6 +1,6 @@
 'use client'
 
-import { terrainFieldOf, useScene } from '@pascal-app/core'
+import { terrainFieldOf, useLiveTerrain, useScene } from '@pascal-app/core'
 import type { AnyNodeId, SiteNode } from '@pascal-app/core'
 import { useThree } from '@react-three/fiber'
 import { useViewer } from '@pascal-app/viewer'
@@ -31,6 +31,7 @@ import {
   EXTERIOR_TERRAIN_GROUND_OFFSET,
   createExteriorTerrainSampler,
   createRenderedTerrainSampler,
+  deriveExteriorTerrainGroundBoundary,
   deriveExteriorTerrainSectionAddresses,
   createTerrainSubdivisionSampler,
   type ExteriorTerrainSectionAddress,
@@ -38,7 +39,7 @@ import {
   mergeExteriorTerrainSections,
 } from './exterior-terrain'
 import { deriveBoundarySegments } from './frontages'
-import type { BoundarySegment } from './frontages'
+import type { BoundarySegment, Point2 } from './frontages'
 import { deriveHorizonFoliagePlan } from './horizon-foliage'
 import { buildTerrainRoadGeometry } from './terrain-road-geometry'
 import { useSurfaceMesh } from './surface-mesh'
@@ -159,6 +160,36 @@ const EMPTY_PRESENTED_LAYOUT: PresentedLayout = {
 
 function disableRaycast(): void {}
 
+function useLiveTerrainGridKey(siteId: string | undefined): string | null {
+  // Primitive selectors keep height-only dabs out of React while still observing
+  // every field property that can change the host ground footprint.
+  const originX = useLiveTerrain((state) =>
+    siteId ? state.strokeOf(siteId)?.field.origin[0] : undefined,
+  )
+  const originZ = useLiveTerrain((state) =>
+    siteId ? state.strokeOf(siteId)?.field.origin[1] : undefined,
+  )
+  const spacing = useLiveTerrain((state) =>
+    siteId ? state.strokeOf(siteId)?.field.spacing : undefined,
+  )
+  const cols = useLiveTerrain((state) =>
+    siteId ? state.strokeOf(siteId)?.field.cols : undefined,
+  )
+  const rows = useLiveTerrain((state) =>
+    siteId ? state.strokeOf(siteId)?.field.rows : undefined,
+  )
+  if (
+    originX === undefined ||
+    originZ === undefined ||
+    spacing === undefined ||
+    cols === undefined ||
+    rows === undefined
+  ) {
+    return null
+  }
+  return `${originX}:${originZ}:${spacing}:${cols}:${rows}`
+}
+
 function roadSurfaceBatchKey(surface: RoadPresentationSurface | RoadSurfaceBatch): string {
   return JSON.stringify([
     surface.material,
@@ -242,6 +273,7 @@ export function buildRoadSurfaceBatches(
 }
 
 function ExteriorGroundMesh({
+  groundBoundary,
   sampler,
   sections,
   site,
@@ -250,6 +282,7 @@ function ExteriorGroundMesh({
   fields,
   propertyTransition,
 }: {
+  groundBoundary: readonly Point2[]
   sampler: ExteriorTerrainSampler
   sections: readonly ExteriorTerrainSectionAddress[]
   site: SiteNode
@@ -262,10 +295,10 @@ function ExteriorGroundMesh({
     () =>
       mergeExteriorTerrainSections(
         sections.map((address) =>
-          buildExteriorTerrainSection(address, sampler, site.polygon.points),
+          buildExteriorTerrainSection(address, sampler, groundBoundary),
         ),
       ),
-    [sections, sampler, site.polygon.points],
+    [groundBoundary, sections, sampler],
   )
   const [albedos, setAlbedos] = useState<PresentationAlbedos | null>(null)
   useEffect(() => {
@@ -386,6 +419,24 @@ export default function SurroundingsLayer({
     return siteId ? (state.nodes[siteId] as SiteNode) : undefined
   })
   const boundary = site?.polygon.points
+  const persistedTerrain = useMemo(
+    () => (site ? terrainFieldOf(site) : null),
+    [site?.id, site?.terrain],
+  )
+  const liveTerrainGridKey = useLiveTerrainGridKey(site?.id)
+  const persistedTerrainGridKey = persistedTerrain
+    ? `${persistedTerrain.origin[0]}:${persistedTerrain.origin[1]}:${persistedTerrain.spacing}:${persistedTerrain.cols}:${persistedTerrain.rows}`
+    : null
+  const activeTerrainGridKey = liveTerrainGridKey ?? persistedTerrainGridKey
+  // The cutout depends on the terrain grid, not its height buffer. Reading the
+  // live field here catches first-stroke mounting and grid replacement without
+  // rebuilding the surrounding landscape for each sculpt dab.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeTerrainGridKey is the complete terrain-footprint signature.
+  const exteriorGroundBoundary = useMemo(() => {
+    if (!boundary || !site) return null
+    const terrain = useLiveTerrain.getState().strokeOf(site.id)?.field ?? persistedTerrain
+    return deriveExteriorTerrainGroundBoundary(boundary, terrain)
+  }, [boundary, site?.id, activeTerrainGridKey])
   const rivers = useScene(
     useShallow((state) => {
       const result: RiverNode[] = []
@@ -661,7 +712,14 @@ export default function SurroundingsLayer({
       presentedLayout.neighborCells.length > 0 ||
       roadSurfaceBatches.length > 0)
 
-  if (!hasPresentation || !site || !distantLandscape || !propertyTransition) return null
+  if (
+    !hasPresentation ||
+    !site ||
+    !distantLandscape ||
+    !propertyTransition ||
+    !exteriorGroundBoundary
+  )
+    return null
 
   return (
     <group name="environment-surroundings-root" userData={{ presetId }}>
@@ -669,6 +727,7 @@ export default function SurroundingsLayer({
       <GroundReplacement />
       <group name="exterior-terrain-chunks">
         <ExteriorGroundMesh
+          groundBoundary={exteriorGroundBoundary}
           sampler={distantLandscape.sampler}
           sections={exteriorTerrainSections}
           site={site}

@@ -1,11 +1,11 @@
-import { SiteNode, useScene } from '@pascal-app/core'
+import { createTerrainField, SiteNode, useLiveTerrain, useScene } from '@pascal-app/core'
 import type { AnyNode } from '@pascal-app/core'
 import * as PascalViewer from '@pascal-app/viewer'
 import { act, create } from '@react-three/test-renderer'
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { Fragment, StrictMode } from 'react'
-import { DataTexture, Group } from 'three'
-import type { BufferAttribute, InstancedMesh, Mesh } from 'three'
+import { DataTexture, Group, Mesh, MeshBasicMaterial, Raycaster, Vector3 } from 'three'
+import type { BufferAttribute, InstancedMesh } from 'three'
 import { useEnvironmentStore } from '../store'
 import * as SurfaceMaterials from '../surface-material/materials'
 import { createSurfaceMaterialField, encodeSurfaceMaterialField } from '../surface-material/field'
@@ -46,6 +46,7 @@ const OBJECT3D_ADD_ERROR = 'THREE.Object3D.add: object not an instance of THREE.
 let restoreAlbedos: () => void
 
 beforeEach(() => {
+  useLiveTerrain.getState().endAll()
   // Test the scene lifecycle with decoded textures, not browser image loading.
   const albedo = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1)
   const loader = spyOn(SurfaceMaterials, 'loadPresentationAlbedos')
@@ -63,6 +64,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  useLiveTerrain.getState().endAll()
   restoreAlbedos()
   useScene.setState({ nodes: {}, rootNodeIds: [] })
   useEnvironmentStore.setState({ frontageContexts: {}, surroundingsEnabled: true })
@@ -122,6 +124,64 @@ describe('Surroundings presentation layer', () => {
       expect(houses.userData.houseCount).toBeGreaterThan(0)
       expect(houses.children.length).toBeGreaterThan(0)
     } finally {
+      await renderer.unmount()
+    }
+  })
+
+  test('tracks the first live Terrain field mount and cancellation', async () => {
+    const boundary = [
+      [-15, -15],
+      [15, -15],
+      [15, 15],
+      [-15, 15],
+    ] as const
+    const liveTerrain = createTerrainField({
+      cols: 65,
+      origin: [-16, -16],
+      rows: 65,
+      spacing: 0.5,
+      step: 0.01,
+    })
+    const site = SiteNode.parse({
+      id: 'site_surroundings_live_terrain_footprint',
+      children: [],
+      polygon: { type: 'polygon', points: boundary },
+    })
+    useScene.setState({
+      nodes: { [site.id]: site },
+      rootNodeIds: [site.id],
+    })
+
+    const { default: SurroundingsLayer } = await import('./layer')
+    const renderer = await create(
+      <SurroundingsLayer groundReplacementComponent={Fragment} />,
+    )
+    const probeMaterial = new MeshBasicMaterial()
+    const exteriorHitAt = (x: number) => {
+      const ground = renderer.scene.findByProps({
+        name: 'environment-exterior-ground',
+      }).instance as Mesh
+      const probe = new Mesh(ground.geometry, probeMaterial)
+      probe.updateMatrixWorld()
+      const ray = new Raycaster(new Vector3(x, 100, 0), new Vector3(0, -1, 0))
+      return ray.intersectObject(probe, false)[0]
+    }
+    try {
+      expect(exteriorHitAt(15.5)).toBeDefined()
+
+      await act(async () => {
+        useLiveTerrain.getState().begin(site.id, liveTerrain)
+      })
+      expect(exteriorHitAt(15.5)).toBeUndefined()
+      expect(exteriorHitAt(16.01)).toBeDefined()
+
+      await act(async () => {
+        useLiveTerrain.getState().end(site.id)
+      })
+      expect(exteriorHitAt(15.5)).toBeDefined()
+    } finally {
+      useLiveTerrain.getState().end(site.id)
+      probeMaterial.dispose()
       await renderer.unmount()
     }
   })
