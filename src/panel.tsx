@@ -8,23 +8,32 @@ import {
   ArrowLeft,
   ArrowUpFromLine,
   Blend,
+  Bird,
   Brush,
   Circle,
   Check,
   ChevronDown,
   Eraser,
+  Flower2,
+  House,
   List,
   Map,
   PaintBucket,
+  Pause,
   RotateCcw,
   Square,
   Trash2,
+  Trees,
+  Waves,
+  Route,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import AtmosphereControls from './atmosphere/controls'
+import { BrushColorPicker } from './brush-color-picker'
 import { ParameterRange } from './parameter-range'
 import EnvironmentSelector, {
   EnvironmentCatalogue,
+  ENVIRONMENT_TOOL_ICONS,
   type EnvironmentTool,
 } from './environment-selector'
 import FrontageSelector from './surroundings/frontage-selector'
@@ -78,7 +87,7 @@ function WaterTabs({
       <div
         role="tablist"
         aria-label="Water type"
-        className="grid grid-cols-2 gap-1 rounded-lg border border-sidebar-border p-1"
+        className="grid grid-cols-2 gap-1 rounded-xl bg-sidebar-accent/50 p-1"
         onKeyDown={(event) => {
           let next: 'pond' | 'river'
           if (event.key === 'Home') next = 'pond'
@@ -87,6 +96,7 @@ function WaterTabs({
             next = value === 'pond' ? 'river' : 'pond'
           } else return
           event.preventDefault()
+          event.stopPropagation()
           onChange(next)
           event.currentTarget
             .querySelector<HTMLButtonElement>(`[data-water-tab="${next}"]`)
@@ -104,12 +114,13 @@ function WaterTabs({
             aria-controls={value === tab ? `${id}-panel` : undefined}
             tabIndex={value === tab ? 0 : -1}
             onClick={() => onChange(tab)}
-            className={`rounded-md px-3 py-2 font-medium text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
+            className={`flex min-h-9 items-center justify-center gap-2 rounded-lg px-3 py-2 font-medium text-xs transition-colors active:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
               value === tab
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm'
                 : 'text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
             }`}
           >
+            {tab === 'pond' ? <Waves aria-hidden size={16} /> : <Route aria-hidden size={16} />}
             {tab === 'pond' ? 'Pond' : 'River'}
           </button>
         ))}
@@ -135,6 +146,12 @@ export default function EnvironmentPanel() {
   const editorMode = useEditor((state) => state.mode)
   const activeSection = useEnvironmentStore((state) => state.activeSection)
   const setActiveSection = useEnvironmentStore((state) => state.setActiveSection)
+  const overviewHeading = useRef<HTMLHeadingElement>(null)
+  const previousSection = useRef(activeSection)
+  useEffect(() => {
+    if (previousSection.current && !activeSection) overviewHeading.current?.focus()
+    previousSection.current = activeSection
+  }, [activeSection])
   const catalogueView = useEnvironmentStore((state) => state.catalogueView)
   const setCatalogueView = useEnvironmentStore((state) => state.setCatalogueView)
   const waterTab = useEnvironmentStore((state) => state.waterTab)
@@ -231,6 +248,7 @@ export default function EnvironmentPanel() {
     return (
       <PaintPanel
         title="Ground Cover"
+        tool="ground-cover"
         description="Paint coverage, then shape the grass."
         active={groundCoverActive && groundCoverSelected}
         available={siteAvailable}
@@ -245,6 +263,7 @@ export default function EnvironmentPanel() {
     return (
       <PaintPanel
         title="Surface"
+        tool="path"
         description="Paint materials that follow your terrain."
         active={surfaceActive && surfaceSelected}
         available={siteAvailable}
@@ -259,6 +278,7 @@ export default function EnvironmentPanel() {
     return (
       <PaintPanel
         title="Water"
+        tool="water"
         description={
           waterTab === 'pond'
             ? 'Fill terrain depressions in contour steps, then dress the water.'
@@ -292,84 +312,77 @@ export default function EnvironmentPanel() {
   }
   if (activeSection === 'atmosphere') {
     return (
-      <div className="flex min-h-0 flex-col gap-4 overflow-y-auto p-4 text-sidebar-foreground">
-        <BackButton onClick={() => setActiveSection(undefined)} />
-        <header className="flex flex-col gap-2">
-          <h2 className="font-semibold text-base">Sky &amp; atmosphere</h2>
-          <p className="text-sidebar-foreground/60 text-xs">
-            Shape the daylight and the world beyond the Site.
-          </p>
-        </header>
+      <DetailPanel
+        tool="atmosphere"
+        title="Sky & atmosphere"
+        description="Shape the daylight, sky, and weather."
+        onBack={() => setActiveSection(undefined)}
+      >
         <AtmosphereControls />
-      </div>
+      </DetailPanel>
     )
   }
   if (activeSection === 'surroundings') {
     return (
-      <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden text-sidebar-foreground">
-        <header className="flex shrink-0 flex-col gap-2 px-4 pt-4">
-          <BackButton onClick={() => setActiveSection(undefined)} />
-          <h2 className="font-semibold text-base">Surroundings</h2>
-          <p className="text-sidebar-foreground/60 text-xs">
-            Set roads and landscape beyond your property.
-          </p>
-        </header>
-        <div
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4"
-          style={{
-            scrollbarWidth: 'thin',
-            scrollbarColor: 'var(--sidebar-border) transparent',
-          }}
-        >
-          <SurroundingsControls />
-        </div>
-      </div>
+      <DetailPanel
+        tool="surroundings"
+        title="Surroundings"
+        description="Set roads and landscape beyond your property."
+        onBack={() => setActiveSection(undefined)}
+      >
+        <SurroundingsControls />
+      </DetailPanel>
     )
   }
   return (
     <div className="flex h-full min-h-0 flex-col text-sidebar-foreground">
-      <header className="flex flex-col gap-2 px-4 pt-4 pb-3">
-        <h2 className="font-semibold text-base">Environment</h2>
-        <p className="text-sidebar-foreground/50 text-xs">
-          Choose an area of the environment to work on.
-        </p>
-      </header>
-      <div className="flex items-center justify-between gap-3 px-4 pb-3 text-xs">
-        <span className="text-sidebar-foreground/60">Browse</span>
+      <header className="flex shrink-0 flex-col gap-3 px-3 py-3">
+        <div className="flex items-center gap-2">
+          <Map aria-hidden className="text-sidebar-foreground/60" size={18} />
+          <h2
+            ref={overviewHeading}
+            tabIndex={-1}
+            className="rounded font-semibold text-sm focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            Environment
+          </h2>
+        </div>
+        <p className="text-sidebar-foreground/60 text-xs">Choose an area to shape your scene.</p>
         <div
           role="group"
           aria-label="Environment view"
-          className="flex gap-1 rounded-lg bg-sidebar-accent/50 p-1"
+          className="flex gap-1 rounded-xl bg-sidebar-accent/50 p-1"
           onKeyDownCapture={(event) => {
             // Keep Space on the view buttons instead of starting canvas panning.
             if (event.code === 'Space') event.stopPropagation()
           }}
         >
-          {([
-            { value: 'site', label: 'Site View', icon: Map },
-            { value: 'catalogue', label: 'Catalogue', icon: List },
-          ] as const).map(({ value, label, icon: Icon }) => (
+          {(
+            [
+              { value: 'site', label: 'Site View', icon: Map },
+              { value: 'catalogue', label: 'Catalogue', icon: List },
+            ] as const
+          ).map(({ value, label, icon: Icon }) => (
             <button
               key={value}
               type="button"
-              aria-label={label}
               aria-pressed={catalogueView === value}
-              title={label}
               onClick={() => setCatalogueView(value)}
-              className={`flex size-10 items-center justify-center rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-ring ${
+              className={`flex min-h-9 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-2 text-xs font-medium transition-colors active:bg-sidebar-accent focus-visible:outline-2 focus-visible:outline-ring ${
                 catalogueView === value
-                  ? 'bg-sidebar-accent text-primary ring-1 ring-inset ring-sidebar-border'
-                  : 'text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                  ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm'
+                  : 'text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
               }`}
             >
-              <Icon aria-hidden size={18} />
+              <Icon aria-hidden size={15} />
+              {label}
             </button>
           ))}
         </div>
-      </div>
+      </header>
       {catalogueView === 'catalogue' ? (
         <EnvironmentCatalogue
-          className="min-h-0 flex-1 overflow-y-auto px-4 pb-4"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3"
           onSelect={selectEnvironmentTool}
         />
       ) : (
@@ -385,14 +398,66 @@ export default function EnvironmentPanel() {
 function BackButton({ onClick }: { onClick: () => void }) {
   return (
     <button
-      className="flex min-h-9 self-start items-center gap-1.5 rounded-md text-sidebar-foreground/70 text-xs hover:text-sidebar-foreground focus-visible:outline-2 focus-visible:outline-ring"
-      style={{ minHeight: 36 }}
+      className="-ml-1.5 flex min-h-8 self-start items-center gap-1.5 rounded-lg px-1.5 text-sidebar-foreground/60 text-xs hover:bg-sidebar-accent/50 hover:text-sidebar-foreground active:bg-sidebar-accent focus-visible:outline-2 focus-visible:outline-ring"
       onClick={onClick}
       type="button"
     >
       <ArrowLeft aria-hidden size={14} />
       Environment
     </button>
+  )
+}
+
+function DetailPanel({
+  tool,
+  title,
+  description,
+  onBack,
+  status,
+  children,
+}: {
+  tool: EnvironmentTool
+  title: string
+  description: string
+  onBack: () => void
+  status?: ReactNode
+  children: ReactNode
+}) {
+  const Icon = ENVIRONMENT_TOOL_ICONS[tool]
+  const heading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    heading.current?.focus({ preventScroll: true })
+  }, [])
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden text-sidebar-foreground">
+      <header className="flex shrink-0 flex-col gap-3 border-b border-sidebar-border/70 px-3 pb-3 pt-2">
+        <BackButton onClick={onBack} />
+        <div className="flex items-center gap-2.5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-sidebar-accent/50 text-sidebar-foreground">
+            <Icon aria-hidden size={19} strokeWidth={1.75} />
+          </span>
+          <div className="min-w-0">
+            <h2
+              ref={heading}
+              tabIndex={-1}
+              className="rounded font-semibold text-sm focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              {title}
+            </h2>
+            <p className="mt-0.5 text-xs leading-relaxed text-sidebar-foreground/60">
+              {description}
+            </p>
+          </div>
+        </div>
+        {status}
+      </header>
+      <div
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain p-3"
+        style={{ scrollbarWidth: 'thin', scrollbarColor: 'var(--sidebar-border) transparent' }}
+      >
+        {children}
+      </div>
+    </div>
   )
 }
 
@@ -411,6 +476,7 @@ function ResumeButton({ label, onClick }: { label: string; onClick: () => void }
 
 function PaintPanel({
   title,
+  tool,
   description,
   active,
   available,
@@ -422,6 +488,7 @@ function PaintPanel({
   children,
 }: {
   title: string
+  tool: EnvironmentTool
   description: string
   active: boolean
   available: boolean
@@ -433,36 +500,47 @@ function PaintPanel({
   children: ReactNode
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden text-sidebar-foreground">
-      <header className="flex shrink-0 flex-col gap-2 px-4 pt-4">
-        <BackButton onClick={onBack} />
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="font-semibold text-base">{title}</h2>
-          <span
-            className={`rounded-full px-2 py-1 font-medium text-[11px] ${active ? 'bg-primary/15 text-primary' : 'bg-sidebar-accent text-sidebar-foreground/70'}`}
-          >
-            {active ? activeLabel : 'Paused'}
-          </span>
-        </div>
-        <p className="text-xs leading-relaxed text-sidebar-foreground/70">{description}</p>
-        {available && !active && <ResumeButton label={resumeLabel} onClick={onResume} />}
-      </header>
-      <div
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4"
-        style={{
-          scrollbarWidth: 'thin',
-          scrollbarColor: 'var(--sidebar-border) transparent',
-        }}
-      >
-        {!available ? (
-          <p role="status" className="rounded-md border border-sidebar-border p-3 text-xs">
-            {unavailableMessage}
-          </p>
-        ) : (
-          children
-        )}
-      </div>
-    </div>
+    <DetailPanel
+      tool={tool}
+      title={title}
+      description={description}
+      onBack={onBack}
+      status={
+        available ? (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span
+                className={`flex items-center gap-1.5 font-medium ${active ? 'text-primary' : 'text-sidebar-foreground/60'}`}
+              >
+                {active ? (
+                  <Circle aria-hidden size={6} fill="currentColor" />
+                ) : (
+                  <Pause aria-hidden size={12} />
+                )}
+                {active ? activeLabel : 'Paused'}
+              </span>
+              {active && (
+                <span className="text-sidebar-foreground/60">
+                  <kbd className="rounded border border-sidebar-border px-1 py-0.5 font-sans">
+                    Esc
+                  </kbd>{' '}
+                  to stop
+                </span>
+              )}
+            </div>
+            {!active && <ResumeButton label={resumeLabel} onClick={onResume} />}
+          </div>
+        ) : undefined
+      }
+    >
+      {!available ? (
+        <p role="status" className="rounded-lg bg-sidebar-accent/50 p-3 text-xs leading-relaxed">
+          {unavailableMessage}
+        </p>
+      ) : (
+        children
+      )}
+    </DetailPanel>
   )
 }
 
@@ -559,6 +637,8 @@ function GroundCoverPaintControls() {
       </div>
       <BrushSection title="Brush">
         <ParameterRange
+          presentation="radial"
+          radialVisual="radius"
           label="Radius"
           min={0.25}
           max={20}
@@ -568,28 +648,35 @@ function GroundCoverPaintControls() {
           value={brush.radius}
           onChange={(radius) => setBrush({ radius })}
         />
-        <ParameterRange
-          label="Strength"
-          min={1}
-          max={100}
-          step={1}
-          unit="%"
-          value={Math.round(brush.strength * 100)}
-          onChange={(strength) => setBrush({ strength: strength / 100 })}
-        />
-        <ParameterRange
-          label="Edge softness"
-          min={0}
-          max={100}
-          step={1}
-          unit="%"
-          value={Math.round(brush.falloff * 100)}
-          onChange={(falloff) => setBrush({ falloff: falloff / 100 })}
-        />
+        <div className="grid min-w-0 grid-cols-2 gap-2">
+          <ParameterRange
+            presentation="radial"
+            radialLayout="tile"
+            label="Strength"
+            min={1}
+            max={100}
+            step={1}
+            unit="%"
+            value={Math.round(brush.strength * 100)}
+            onChange={(strength) => setBrush({ strength: strength / 100 })}
+          />
+          <ParameterRange
+            presentation="radial"
+            radialLayout="tile"
+            label="Edge softness"
+            min={0}
+            max={100}
+            step={1}
+            unit="%"
+            value={Math.round(brush.falloff * 100)}
+            onChange={(falloff) => setBrush({ falloff: falloff / 100 })}
+          />
+        </div>
       </BrushSection>
       {tool === 'paint-density' && (
         <BrushSection title="Paint result">
           <ParameterRange
+            presentation="radial"
             label="Target coverage"
             min={0}
             max={100}
@@ -598,21 +685,7 @@ function GroundCoverPaintControls() {
             value={Math.round(brush.targetDensity * 100)}
             onChange={(targetDensity) => setBrush({ targetDensity: targetDensity / 100 })}
           />
-          <label className="flex min-h-10 items-center justify-between gap-3 text-xs">
-            <span>Grass color</span>
-            <span className="flex items-center gap-2">
-              <span className="font-mono text-sidebar-foreground/70">
-                {brush.color.toUpperCase()}
-              </span>
-              <input
-                aria-label="Grass paint color"
-                className="h-9 w-10 cursor-pointer rounded-md border border-sidebar-border bg-transparent p-1 focus-visible:outline-2 focus-visible:outline-ring"
-                onChange={(event) => setBrush({ color: event.target.value })}
-                type="color"
-                value={brush.color}
-              />
-            </span>
-          </label>
+          <BrushColorPicker value={brush.color} onChange={(color) => setBrush({ color })} />
           <p className="text-xs leading-relaxed text-sidebar-foreground/60">
             Coverage controls where grass grows. Blade size and overall density are in the Grass
             Field inspector.
@@ -622,6 +695,7 @@ function GroundCoverPaintControls() {
       {isHeightTool && tool !== 'smooth-height' && (
         <BrushSection title="Height adjustment">
           <ParameterRange
+            presentation="radial"
             label="Height change"
             min={5}
             max={100}
@@ -659,6 +733,7 @@ function GroundCoverPaintControls() {
             ]}
           />
           <ParameterRange
+            presentation="radial"
             label="Stroke variation"
             min={0}
             max={100}
@@ -731,7 +806,7 @@ function BrushChoices<T extends string>({
   return (
     <fieldset className="min-w-0">
       <legend className="mb-2 text-xs font-medium text-sidebar-foreground/70">{label}</legend>
-      <div className="flex gap-1 rounded-lg bg-sidebar-accent/50 p-1">
+      <div className="flex gap-1.5">
         {options.map((option) => (
           <label className="relative min-w-0 flex-1 cursor-pointer" key={option.value}>
             <input
@@ -745,13 +820,17 @@ function BrushChoices<T extends string>({
               onBlur={() => setFocused(null)}
             />
             <span
-              className="flex min-h-9 items-center justify-center gap-1.5 rounded-md px-1 text-xs text-sidebar-foreground/70 hover:bg-sidebar-accent"
+              className="flex min-h-14 flex-col items-center justify-center gap-1.5 rounded-xl bg-sidebar-accent/30 px-1 py-2 text-xs text-sidebar-foreground/70 hover:bg-sidebar-accent/60 active:bg-sidebar-accent"
               style={{
-                minHeight: 36,
-                backgroundColor: value === option.value ? 'var(--sidebar-accent)' : undefined,
+                backgroundColor:
+                  value === option.value
+                    ? 'color-mix(in srgb, var(--primary) 10%, transparent)'
+                    : undefined,
                 color: value === option.value ? 'var(--primary)' : undefined,
                 boxShadow:
-                  value === option.value ? 'inset 0 0 0 1px var(--sidebar-border)' : undefined,
+                  value === option.value
+                    ? 'inset 0 0 0 1px color-mix(in srgb, var(--primary) 50%, transparent)'
+                    : undefined,
                 outline: focused === option.value ? '2px solid var(--ring)' : undefined,
                 outlineOffset: 2,
               }}
@@ -901,7 +980,36 @@ function SurroundingsControls() {
 
   return (
     <div className="flex flex-col gap-3">
-      <label className="flex min-h-10 cursor-pointer items-center justify-between gap-3 text-xs">
+      <fieldset className="min-w-0" aria-describedby={presetDescriptionId}>
+        <legend className="mb-2 text-xs font-medium text-sidebar-foreground/70">
+          Landscape preset
+        </legend>
+        <div className="grid grid-cols-3 gap-1.5">
+          {SURROUNDINGS_PRESET_IDS.map((presetId) => {
+            const Icon =
+              presetId === 'regional' ? House : presetId === 'open-meadow' ? Flower2 : Trees
+            return (
+              <button
+                aria-pressed={preset === presetId}
+                className={`flex min-h-20 min-w-0 flex-col items-center justify-center gap-2 rounded-xl px-1.5 py-2 text-center text-xs leading-tight transition-colors active:bg-sidebar-accent focus-visible:outline-2 focus-visible:outline-ring ${preset === presetId ? 'bg-primary/10 text-primary ring-1 ring-inset ring-primary/50' : 'bg-sidebar-accent/30 text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground'}`}
+                key={presetId}
+                onClick={() => setPreset(presetId)}
+                type="button"
+              >
+                <Icon aria-hidden size={23} strokeWidth={1.5} />
+                {SURROUNDINGS_PRESET_POLICIES[presetId].label}
+              </button>
+            )
+          })}
+        </div>
+        <p
+          className="mt-2 text-xs leading-relaxed text-sidebar-foreground/60"
+          id={presetDescriptionId}
+        >
+          {SURROUNDINGS_PRESET_POLICIES[preset].description}
+        </p>
+      </fieldset>
+      <label className="flex min-h-10 cursor-pointer items-center justify-between gap-3 rounded-lg bg-sidebar-accent/30 px-3 text-xs">
         <span>Show surroundings</span>
         <input
           aria-label="Show surroundings"
@@ -939,34 +1047,11 @@ function SurroundingsControls() {
           />
         </section>
       )}
-      <div className="flex flex-col gap-2">
-        <label className="flex flex-col gap-2 text-xs font-medium">
-          <span>Landscape preset</span>
-          <select
-            aria-describedby={presetDescriptionId}
-            className="h-10 w-full rounded-md border border-sidebar-border bg-sidebar px-3 text-xs focus-visible:outline-2 focus-visible:outline-ring"
-            onChange={(event) => {
-              const nextPreset = SURROUNDINGS_PRESET_IDS.find(
-                (presetId) => presetId === event.target.value,
-              )
-              if (nextPreset) setPreset(nextPreset)
-            }}
-            value={preset}
-          >
-            {SURROUNDINGS_PRESET_IDS.map((presetId) => (
-              <option key={presetId} value={presetId}>
-                {SURROUNDINGS_PRESET_POLICIES[presetId].label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="text-xs leading-relaxed text-sidebar-foreground/60" id={presetDescriptionId}>
-          {SURROUNDINGS_PRESET_POLICIES[preset].description}
-        </p>
-      </div>
       <details className="group rounded-lg border border-sidebar-border">
         <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between rounded-lg px-3 text-xs font-medium focus-visible:outline-2 focus-visible:outline-ring">
-          Variation &amp; birds
+          <span className="flex items-center gap-2">
+            <Bird aria-hidden size={15} /> Variation &amp; birds
+          </span>
           <ChevronDown aria-hidden size={14} className="group-open:rotate-180" />
         </summary>
         <div className="flex flex-col gap-3 px-3 pb-3">
@@ -1117,6 +1202,8 @@ function SurfacePaintControls() {
       </div>
       <BrushSection title="Brush">
         <ParameterRange
+          presentation="radial"
+          radialVisual="radius"
           label="Radius"
           min={0.25}
           max={20}
@@ -1126,22 +1213,28 @@ function SurfacePaintControls() {
           value={brush.radius}
           onChange={(radius) => setBrush({ radius })}
         />
-        <ParameterRange
-          label="Strength"
-          min={5}
-          max={100}
-          step={5}
-          value={Math.round(brush.strength * 100)}
-          onChange={(strength) => setBrush({ strength: strength / 100 })}
-        />
-        <ParameterRange
-          label="Edge softness"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(brush.falloff * 100)}
-          onChange={(falloff) => setBrush({ falloff: falloff / 100 })}
-        />
+        <div className="grid min-w-0 grid-cols-2 gap-2">
+          <ParameterRange
+            presentation="radial"
+            radialLayout="tile"
+            label="Strength"
+            min={5}
+            max={100}
+            step={5}
+            value={Math.round(brush.strength * 100)}
+            onChange={(strength) => setBrush({ strength: strength / 100 })}
+          />
+          <ParameterRange
+            presentation="radial"
+            radialLayout="tile"
+            label="Edge softness"
+            min={0}
+            max={100}
+            step={5}
+            value={Math.round(brush.falloff * 100)}
+            onChange={(falloff) => setBrush({ falloff: falloff / 100 })}
+          />
+        </div>
       </BrushSection>
       <details className="group rounded-lg border border-sidebar-border">
         <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between rounded-lg px-3 text-xs font-medium focus-visible:outline-2 focus-visible:outline-ring">
@@ -1150,6 +1243,7 @@ function SurfacePaintControls() {
         </summary>
         <div className="flex flex-col gap-2 px-3 pb-3">
           <ParameterRange
+            presentation="radial"
             label="Texture size"
             min={25}
             max={200}
@@ -1159,7 +1253,7 @@ function SurfacePaintControls() {
             commitOnRelease
           />
           <p className="text-xs leading-relaxed text-sidebar-foreground/60">
-            Larger values enlarge the pattern on all painted materials. Release the slider to apply.
+            Larger values enlarge the pattern on all painted materials. Release the dial to apply.
           </p>
         </div>
       </details>

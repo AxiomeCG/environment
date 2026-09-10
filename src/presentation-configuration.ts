@@ -171,7 +171,7 @@ export function exportEnvironmentConfiguration(): EnvironmentConfiguration {
 
 /**
  * Validates and applies a host-supplied sidecar through Environment store actions.
- * Consent and playback state are session-only and always return to their safe defaults.
+ * Session-only playback and motion return to their defaults; audio consent is never imported.
  */
 export function importEnvironmentConfiguration(input: unknown): EnvironmentConfiguration {
   const parsed = persistedConfigurationSchema.parse(input)
@@ -191,7 +191,7 @@ export function importEnvironmentConfiguration(input: unknown): EnvironmentConfi
   environment.setSkyEnabled(configuration.visibility.sky)
   environment.setWeatherSettings({ ...configuration.weather, thunderAudio: false })
   environment.setSkyPlaying(false)
-  environment.setSkyMotion(false)
+  environment.setSkyMotion(useEnvironmentStore.getInitialState().skyMotion)
   return configuration
 }
 

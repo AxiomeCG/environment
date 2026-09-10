@@ -16,11 +16,11 @@ describe('Environment presentation configuration', () => {
     })
   })
 
-  test('restores persisted presentation without audio consent or sky playback state', () => {
+  test('restores persisted presentation with cloud motion on but without audio consent or day playback', () => {
     const saved = exportEnvironmentConfiguration()
     const environment = useEnvironmentStore.getState()
     environment.setSkyPlaying(true)
-    environment.setSkyMotion(true)
+    environment.setSkyMotion(false)
     environment.setAmbientMotion(false)
     environment.setWeatherSettings({ thunderAudio: true })
 
@@ -29,7 +29,7 @@ describe('Environment presentation configuration', () => {
     expect(useEnvironmentStore.getState()).toMatchObject({
       skyEnabled: true,
       skyPlaying: false,
-      skyMotion: false,
+      skyMotion: true,
       ambientMotion: false,
       weatherSettings: { thunderAudio: false },
     })

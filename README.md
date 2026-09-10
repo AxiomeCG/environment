@@ -205,28 +205,36 @@ walkthrough above.
 
 ### Browsing Environment
 
-The Environment panel opens with the illustrated **Site View**. The two **Browse**
-icon buttons switch between the map (**Site View**) and list (**Catalogue**).
-Each has a tooltip and accessible label, and the active view is marked.
-Both views open the same tools. Unavailable tools remain disabled and are marked
-**Coming soon** in the Catalogue.
+The Environment panel opens with the illustrated **Site View**. The labelled
+**Site View** and **Catalogue** controls switch between the map and icon-led list,
+with the active view marked. Map category tooltips follow the cursor; keyboard
+focus anchors them to the category. **Escape** dismisses a tooltip, and **Enter**
+or **Space** opens the focused category. Both views open the same tools.
+Unavailable tools remain disabled and are marked **Coming soon**.
 
 Your chosen view is retained when returning from a tool, but resets on reload.
 
 ### Painting Surface and Ground Cover
 
-Both painting panels keep their header visible while expanded settings scroll
-inside the sidebar. Brush modes are keyboard-selectable, and each slider has
-an exact-value input. **Esc** pauses painting; **Resume painting** stays in the
-header. Whole-site fill, clear, and height-reset actions require confirmation.
+Painting panels keep their header visible while expanded settings scroll inside
+the sidebar. Brush modes are keyboard-selectable. Ground Cover and Surface use
+circular controls for **Radius** and the remaining brush amounts. Strength and
+softness sit side by side in compact gauges. Drag an arc, use arrow keys, or enter
+an exact value in the displayed unit. **Home** and **End** reach the control's
+limits; **Escape** cancels a dial drag. Outside a control interaction, **Esc**
+pauses painting; **Resume painting** stays in the header. Whole-site fill, clear,
+and height-reset actions require confirmation.
 
 **Surface** provides material swatches, **Paint** and **Blend** modes, and a
 collapsible **Material scale** section. Texture size applies to every painted
-material on the Site; dragging its slider commits on release.
+material on the Site; dragging its dial commits on release.
 
 **Ground Cover** separates coverage painting from local height adjustment.
 **Target coverage** controls where grass grows; the Grass Field inspector
 groups global appearance, natural variation, wind, and obstacle interaction.
+The **Grass color** picker provides a saturation/brightness area, hue control,
+and named natural-color presets. Hex values apply on Enter or when leaving the
+field; invalid values leave the brush color unchanged. Escape cancels a hex edit.
 Opening **Ground Cover** selects its existing layer (or creates one if needed)
 and activates painting. Layer selection is part of this tool flow, not a separate
 shortcut on the Environment home screen; **Resume painting** restores it after a pause.
@@ -416,16 +424,34 @@ surface can be included through the opt-in static surroundings export.
 ### Local Sky tool
 
 In the development host, open **Environment → Catalogue → Atmosphere**. The
-environment sky is active by default. Clear, Light rain, Rain, Storm, and Snow
-presets expose the common controls first; sun position follows, while manual
-scattering and diagnostics live under **Advanced**. Day playback takes two
-minutes and remains opt-in.
+environment sky is active by default. **Sky**, **Weather**, and **Advanced** tabs
+separate everyday adjustments from specialist tuning. Weather starts with four
+labelled icon cards: **Clear**, **Rain**, **Snow**, and **Storm**. Rain and snow
+show contextual **Light**, **Steady**, and **Heavy** strength choices; wind uses
+**Calm**, **Breeze**, and **Strong**. These labels describe ranges without changing
+existing exact values until a choice is clicked. Adjusting strength or wind keeps
+the weather type selected.
 
-The time widget shows a daylight or nighttime semicircle. Drag the sun or moon,
-switch orbit with the two celestial buttons, or enter an exact time. Arrow keys
-move five minutes; Shift moves thirty; Escape cancels a drag. The gradient, stars,
-and clouds follow the current sky state. Adjusting time pauses playback. The
-widget uses SVG and introduces no viewer render pass or idle animation loop.
+**Fine-tune** starts collapsed and retains exact rain, snow, and wind amounts,
+mixed rain–snow combinations, and the lightning toggle. Thunder sound appears
+only while lightning is enabled and remains opt-in. **Base cloud cover** is in
+**Advanced → Clouds** rather than the Weather panel.
+
+Advanced opens with five collapsed groups: Sun direction, Light & visibility,
+Clouds, Sky model, and Diagnostics. Physical scattering has its own disclosure
+inside Sky model, so the initial Advanced view contains no sliders. All controls
+remain available.
+**Animate clouds** starts checked. Project restore and **Reset sky** return cloud
+animation to this default; switching it off affects the current session only.
+Day playback takes two minutes and remains opt-in; audio consent is never restored.
+
+The time widget is a raised, grabbable half-disk. Drag its face or rim continuously
+through day, night, and midnight without changing the time on initial grab.
+The celestial shortcuts move to the corresponding time twelve hours apart;
+the exact-time input remains available. Arrow keys move five minutes; Shift
+moves thirty; Escape cancels a drag. The gradient, stars, clouds, and celestial
+bodies follow the current sky state. Adjusting time pauses playback. The widget
+uses SVG and introduces no viewer render pass or idle animation loop.
 
 The procedural provider shares a normalized world-direction, linear-HDR contract
 between the background, reflections, and fog. One solar state drives the visible

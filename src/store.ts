@@ -140,7 +140,7 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
   skyEnabled: true,
   skySettings: { ...DEFAULT_SKY_SETTINGS },
   skyPlaying: false,
-  skyMotion: false,
+  skyMotion: true,
   pondToolMode: 'select-basin',
   pondTarget: null,
   pondQuality: 'clear',
