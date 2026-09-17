@@ -154,7 +154,7 @@ class AnalyticEnvironmentNode extends TempNode<'vec3'> {
   }
 
   override setup(builder: NodeBuilder): Node {
-    const context = builder.context as EnvironmentContext
+    const context = (builder as NodeBuilder & { context: EnvironmentContext }).context
     const direction = context.getUV?.(this, builder)
     if (!direction) return TSL.vec3(0)
 
