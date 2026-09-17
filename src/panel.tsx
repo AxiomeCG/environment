@@ -142,6 +142,9 @@ const GROUND_COVER_INSTRUCTIONS: Record<GroundCoverBrushTool, string> = {
 }
 
 export default function EnvironmentPanel() {
+  const environmentEnabled = useEnvironmentStore((state) => state.environmentEnabled)
+  const setEnvironmentEnabled = useEnvironmentStore((state) => state.setEnvironmentEnabled)
+  const environmentDescriptionId = useId()
   const activeTool = useEditor((state) => state.tool) as string | null
   const editorMode = useEditor((state) => state.mode)
   const activeSection = useEnvironmentStore((state) => state.activeSection)
@@ -348,6 +351,25 @@ export default function EnvironmentPanel() {
           </h2>
         </div>
         <p className="text-sidebar-foreground/60 text-xs">Choose an area to shape your scene.</p>
+        <div className="rounded-lg bg-sidebar-accent/30 px-3 pb-3">
+          <label className="flex min-h-10 cursor-pointer items-center justify-between gap-3 text-xs font-medium">
+            <span>Enable Environment</span>
+            <input
+              aria-describedby={environmentDescriptionId}
+              className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-ring"
+              checked={environmentEnabled}
+              onChange={(event) => setEnvironmentEnabled(event.target.checked)}
+              type="checkbox"
+            />
+          </label>
+          <p
+            id={environmentDescriptionId}
+            className="text-xs leading-relaxed text-sidebar-foreground/60"
+          >
+            Sky, weather, and surroundings. You can also enable or disable individual features in
+            their sections.
+          </p>
+        </div>
         <div
           role="group"
           aria-label="Environment view"

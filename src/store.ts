@@ -56,6 +56,7 @@ export type PondToolTarget = {
 }
 
 export type EnvironmentStore = {
+  environmentEnabled: boolean
   activeSection?: EnvironmentTool
   catalogueView: 'catalogue' | 'site'
   waterTab: 'pond' | 'river'
@@ -79,6 +80,7 @@ export type EnvironmentStore = {
   pondTarget: PondToolTarget | null
   pondQuality: WaterQuality
   pondFeedback: string
+  setEnvironmentEnabled: (enabled: boolean) => void
   setWeatherSettings: (patch: Partial<WeatherSettings>) => void
   setAmbientMotion: (motion: boolean) => void
   setBirdsEnabled: (enabled: boolean) => void
@@ -107,6 +109,7 @@ export type EnvironmentStore = {
 }
 
 export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
+  environmentEnabled: false,
   activeSection: undefined,
   catalogueView: 'site',
   waterTab: 'pond',
@@ -145,6 +148,7 @@ export const useEnvironmentStore = create<EnvironmentStore>((set) => ({
   pondTarget: null,
   pondQuality: 'clear',
   pondFeedback: '',
+  setEnvironmentEnabled: (environmentEnabled) => set({ environmentEnabled }),
   setSkyEnabled: (skyEnabled) =>
     set((state) => ({ skyEnabled, skyPlaying: skyEnabled && state.skyPlaying })),
   setSkySettings: (patch) =>

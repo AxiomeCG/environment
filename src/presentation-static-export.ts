@@ -5,7 +5,8 @@ import { useEnvironmentStore } from './store'
 import { buildStaticSurroundings } from './surroundings/static-export'
 
 export function buildStaticEnvironmentPresentation(context: ViewerPresentationExportContext) {
-  const birdsEnabled = useEnvironmentStore.getState().birdsEnabled
+  const { environmentEnabled, birdsEnabled } = useEnvironmentStore.getState()
+  if (!environmentEnabled) return null
   return buildStaticSurroundings(
     context,
     EnvironmentConfigurationSchema.parse(context.configuration) as EnvironmentConfiguration,

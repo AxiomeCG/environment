@@ -1,6 +1,48 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { useEnvironmentStore } from './store'
 
+describe('Environment master visibility', () => {
+  beforeEach(() => {
+    useEnvironmentStore.setState(useEnvironmentStore.getInitialState(), true)
+  })
+
+  test('starts disabled', () => {
+    expect(useEnvironmentStore.getState().environmentEnabled).toBe(false)
+  })
+
+  test('preserves individual feature settings when enabled and disabled', () => {
+    const state = useEnvironmentStore.getState()
+    state.setWeatherSettings({ rain: 0.4, snow: 0.2, wind: 0.7, storm: true })
+    state.setSurroundingsPreset('woodland-edge')
+    state.setSurroundingsSeed('retained-environment')
+
+    // Both switch values must survive either direction of the master toggle.
+    for (const skyEnabled of [false, true]) {
+      state.setSkyEnabled(skyEnabled)
+      state.setSurroundingsEnabled(!skyEnabled)
+      state.setBirdsEnabled(skyEnabled)
+      state.setSkyMotion(!skyEnabled)
+      state.setAmbientMotion(skyEnabled)
+
+      for (const environmentEnabled of [true, false]) {
+        state.setEnvironmentEnabled(environmentEnabled)
+
+        expect(useEnvironmentStore.getState()).toMatchObject({
+          environmentEnabled,
+          skyEnabled,
+          surroundingsEnabled: !skyEnabled,
+          birdsEnabled: skyEnabled,
+          skyMotion: !skyEnabled,
+          ambientMotion: skyEnabled,
+          surroundingsPreset: 'woodland-edge',
+          surroundingsSeed: 'retained-environment',
+          weatherSettings: { rain: 0.4, snow: 0.2, wind: 0.7, storm: true },
+        })
+      }
+    }
+  })
+})
+
 describe('Surroundings visibility', () => {
   beforeEach(() => {
     useEnvironmentStore.setState(useEnvironmentStore.getInitialState(), true)

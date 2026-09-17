@@ -214,6 +214,13 @@ Unavailable tools remain disabled and are marked **Coming soon**.
 
 Your chosen view is retained when returning from a tool, but resets on reload.
 
+**Enable Environment** switches sky, weather, and surroundings together for the
+current session, preserving each feature's settings. Viewer isolation temporarily
+hides these effects; leaving isolation restores them only if Environment is enabled.
+Disabling Environment also omits generated surroundings from GLB/USDZ exports.
+Authored grass, surfaces, ponds, rivers, and saved configuration are unaffected.
+Environment starts disabled, and the global toggle resets to disabled on reload.
+
 ### Painting Surface and Ground Cover
 
 Painting panels keep their header visible while expanded settings scroll inside

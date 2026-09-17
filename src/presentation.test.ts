@@ -111,7 +111,26 @@ describe('Environment presentation configuration', () => {
     expect(exportEnvironmentConfiguration()).toEqual(before)
   })
 
+  test('omits static Environment while the master is disabled', async () => {
+    const build = environmentPresentation.staticExport?.build
+    if (!build) throw new Error('Environment presentation has no static export contribution')
+    useEnvironmentStore.getState().setSurroundingsEnabled(true)
+    const context = {
+      nodes: {},
+      configuration: exportEnvironmentConfiguration(),
+      onlyVisible: true,
+      excludedNodeTypes: [],
+    }
+
+    useEnvironmentStore.getState().setEnvironmentEnabled(true)
+    expect(await build(context)).not.toBeNull()
+
+    useEnvironmentStore.getState().setEnvironmentEnabled(false)
+    expect(await build(context)).toBeNull()
+  })
+
   test('omits static surroundings when presentation visibility is disabled', async () => {
+    useEnvironmentStore.getState().setEnvironmentEnabled(true)
     const build = environmentPresentation.staticExport?.build
     if (!build) throw new Error('Environment presentation has no static export contribution')
     const configuration = exportEnvironmentConfiguration()
@@ -130,6 +149,7 @@ describe('Environment presentation configuration', () => {
   })
 
   test('does not resurrect an excluded or hidden Site through static surroundings', async () => {
+    useEnvironmentStore.getState().setEnvironmentEnabled(true)
     const build = environmentPresentation.staticExport?.build
     if (!build) throw new Error('Environment presentation has no static export contribution')
     const site = SiteNode.parse({
