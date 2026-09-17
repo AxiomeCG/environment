@@ -84,22 +84,26 @@ function withHaze(outputNode: Node): Node<'vec4'> {
   const shaded = outputNode as Node<'vec4'>
   return vec4(mix(shaded.rgb, hazeColor, haze), shaded.a)
 }
+function hasSceneFog(builder: NodeBuilder): boolean {
+  return Boolean((builder as NodeBuilder & { fogNode?: Node }).fogNode)
+}
+
 
 export class PresentationMaterial extends MeshStandardNodeMaterial {
   setupOutput(builder: NodeBuilder, outputNode: Node): Node {
-    return super.setupOutput(builder, builder.fogNode ? outputNode : withHaze(outputNode))
+    return super.setupOutput(builder, hasSceneFog(builder) ? outputNode : withHaze(outputNode))
   }
 }
 
 export class PresentationPhysicalMaterial extends MeshPhysicalNodeMaterial {
   setupOutput(builder: NodeBuilder, outputNode: Node): Node {
-    return super.setupOutput(builder, builder.fogNode ? outputNode : withHaze(outputNode))
+    return super.setupOutput(builder, hasSceneFog(builder) ? outputNode : withHaze(outputNode))
   }
 }
 
 export class PresentationBasicMaterial extends MeshBasicNodeMaterial {
   setupOutput(builder: NodeBuilder, outputNode: Node): Node {
-    return super.setupOutput(builder, builder.fogNode ? outputNode : withHaze(outputNode))
+    return super.setupOutput(builder, hasSceneFog(builder) ? outputNode : withHaze(outputNode))
   }
 }
 
