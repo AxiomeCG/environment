@@ -1,28 +1,25 @@
 'use client'
 
-import {
-  useScene,
-  type AnyNode,
-  type AnyNodeId,
-  type GeometryContext,
-} from '@pascal-app/core'
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import type { Material, Object3D } from 'three'
+import { replaceGeometryContext, type ReplaceResolve, useReplaceResolve } from '../bake-replace-context'
 import { buildGrassFieldGeometry } from './geometry'
 import type { GrassFieldNode } from './schema'
 import { updateGrassTileLod } from './render/grass-tiles'
 
 export default function GroundCoverStaticRenderer({
   nodes,
+  resolve,
 }: {
   nodes: GrassFieldNode[]
+  resolve?: ReplaceResolve
 }) {
-  const sceneNodes = useScene((state) => state.nodes)
+  const lookup = useReplaceResolve(resolve)
   return (
     <>
       {nodes.map((node) => (
-        <GroundCoverStaticNode key={node.id} node={node} sceneNodes={sceneNodes} />
+        <GroundCoverStaticNode key={node.id} node={node} resolve={lookup} />
       ))}
     </>
   )
@@ -30,14 +27,14 @@ export default function GroundCoverStaticRenderer({
 
 function GroundCoverStaticNode({
   node,
-  sceneNodes,
+  resolve,
 }: {
   node: GrassFieldNode
-  sceneNodes: Readonly<Record<string, AnyNode>>
+  resolve: ReplaceResolve
 }) {
   const geometry = useMemo(
-    () => buildGrassFieldGeometry(node, createGeometryContext(node, sceneNodes)),
-    [node, sceneNodes],
+    () => buildGrassFieldGeometry(node, replaceGeometryContext(node, resolve)),
+    [node, resolve],
   )
 
   useEffect(() => () => disposeObjectResources(geometry), [geometry])
@@ -55,18 +52,6 @@ function GroundCoverStaticNode({
   )
 }
 
-function createGeometryContext(
-  node: GrassFieldNode,
-  nodes: Readonly<Record<string, AnyNode>>,
-): GeometryContext {
-  const parent = node.parentId ? nodes[node.parentId] ?? null : null
-  return {
-    parent,
-    resolve: <N = AnyNode>(id: AnyNodeId) => nodes[id] as N | undefined,
-    children: [],
-    siblings: [],
-  }
-}
 
 
 function disposeObjectResources(root: Object3D): void {
