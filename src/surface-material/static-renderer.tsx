@@ -1,26 +1,23 @@
 'use client'
 
-import {
-  useScene,
-  type AnyNode,
-  type AnyNodeId,
-  type GeometryContext,
-} from '@pascal-app/core'
 import { useEffect, useMemo } from 'react'
 import type { Material, Object3D } from 'three'
+import { replaceGeometryContext, type ReplaceResolve, useReplaceResolve } from '../bake-replace-context'
 import { buildSurfaceMaterialGeometry } from './geometry'
 import type { SurfaceMaterialNode } from './schema'
 
 export default function SurfaceMaterialStaticRenderer({
   nodes,
+  resolve,
 }: {
   nodes: SurfaceMaterialNode[]
+  resolve?: ReplaceResolve
 }) {
-  const sceneNodes = useScene((state) => state.nodes)
+  const lookup = useReplaceResolve(resolve)
   return (
     <>
       {nodes.map((node) => (
-        <SurfaceMaterialStaticNode key={node.id} node={node} sceneNodes={sceneNodes} />
+        <SurfaceMaterialStaticNode key={node.id} node={node} resolve={lookup} />
       ))}
     </>
   )
@@ -28,14 +25,14 @@ export default function SurfaceMaterialStaticRenderer({
 
 function SurfaceMaterialStaticNode({
   node,
-  sceneNodes,
+  resolve,
 }: {
   node: SurfaceMaterialNode
-  sceneNodes: Readonly<Record<string, AnyNode>>
+  resolve: ReplaceResolve
 }) {
   const geometry = useMemo(
-    () => buildSurfaceMaterialGeometry(node, createGeometryContext(node, sceneNodes)),
-    [node, sceneNodes],
+    () => buildSurfaceMaterialGeometry(node, replaceGeometryContext(node, resolve)),
+    [node, resolve],
   )
 
   useEffect(() => () => disposeObjectResources(geometry), [geometry])
@@ -50,18 +47,6 @@ function SurfaceMaterialStaticNode({
   )
 }
 
-function createGeometryContext(
-  node: SurfaceMaterialNode,
-  nodes: Readonly<Record<string, AnyNode>>,
-): GeometryContext {
-  const parent = node.parentId ? nodes[node.parentId] ?? null : null
-  return {
-    parent,
-    resolve: <N = AnyNode>(id: AnyNodeId) => nodes[id] as N | undefined,
-    children: [],
-    siblings: [],
-  }
-}
 
 function disposeObjectResources(root: Object3D): void {
   const geometries = new Set<{ dispose(): void }>()
