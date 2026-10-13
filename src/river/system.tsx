@@ -96,45 +96,39 @@ function riverGradingChanged(current: AnyNode | undefined, previous: AnyNode | u
   )
 }
 
-export type RiverReconcileWrite = Readonly<{
-  update: Pick<SiteNode, 'terrain' | 'metadata'>
-  /** Correcting a Site as an earlier version saved it: a load migration, not an edit. */
-  migration: boolean
-}>
-
 /**
  * The terrain and metadata that bring a Site in line with its rivers, or null
  * when it already carries them. An apply stamps the Site with its carve, so
- * reconciling right after one writes nothing: no second history entry. A Site
- * saved by an earlier carver whose carve this one reproduces is not written
- * either; its stamp is refreshed by the next real river change.
+ * reconciling right after one writes nothing. A Site still as an earlier
+ * carver saved it, whose carve this one reproduces, is not written either:
+ * re-stamping it on load would be a visible write that changes nothing, and
+ * the next real river change refreshes its stamp.
  */
 export function riverReconcileUpdate(
   site: SiteNode,
   rivers: readonly RiverNode[],
-): RiverReconcileWrite | null {
+): Pick<SiteNode, 'terrain' | 'metadata'> | null {
   const hasTracking =
     site.metadata !== null &&
     Object.prototype.hasOwnProperty.call(site.metadata, 'environmentRiverTerrain')
   if (rivers.length === 0 && !hasTracking) return null
   if (riverTerrainIsApplied(site, rivers)) return null
-  const migration = riverTerrainSavedByEarlierCarver(site)
   const rebuilt = rebuildRiverTerrain(site, rivers)
-  const sameTerrain = terrainDataEqual(site.terrain, rebuilt.terrainData)
-  if (sameTerrain && (migration || metadataEqual(site.metadata, rebuilt.metadata))) return null
-  return { update: { terrain: rebuilt.terrainData, metadata: rebuilt.metadata }, migration }
+  const unchanged =
+    terrainDataEqual(site.terrain, rebuilt.terrainData) &&
+    (riverTerrainSavedByEarlierCarver(site) || metadataEqual(site.metadata, rebuilt.metadata))
+  return unchanged ? null : { terrain: rebuilt.terrainData, metadata: rebuilt.metadata }
 }
 
 export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
   useEffect(() => {
     let reconciling = false
 
-    const reconcile = (siteIds: ReadonlySet<string>, riverEditedSiteIds: ReadonlySet<string>) => {
+    const reconcile = (siteIds: ReadonlySet<string>) => {
       if (reconciling || siteIds.size === 0) return
       reconciling = true
       try {
-        const writes = reconcileWrites(sceneApi.nodes(), siteIds, riverEditedSiteIds)
-        applyReconcileWrites(sceneApi, writes)
+        writeWithoutHistory(sceneApi, reconcileUpdates(sceneApi.nodes(), siteIds))
       } finally {
         reconciling = false
       }
@@ -145,13 +139,10 @@ export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
       sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
         if (reconciling) return
         const changes = riverSiteChanges(currentNodes, previousNodes)
-        reconcile(
-          new Set(changes.map((change) => change.siteId)),
-          new Set(changes.filter((change) => change.riverChanged).map((change) => change.siteId)),
-        )
+        reconcile(new Set(changes.map((change) => change.siteId)))
       }) ?? (() => {})
     const unsubscribePreviews = subscribeLivePreviews(sceneApi)
-    reconcile(riverSitesOf(sceneApi.nodes()), new Set())
+    reconcile(riverSitesOf(sceneApi.nodes()))
 
     return () => {
       unsubscribeScene()
@@ -163,21 +154,24 @@ export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
 }
 
 /**
- * Edits are ordinary writes. Undoing must never bring back a carve the
- * current planner refuses, so a load migration records no undo step and no
- * local scene commit.
+ * A reconcile is the consequence of whatever just changed the scene. History
+ * records a write's undo step only after its subscribers have run, so a
+ * reconcile written without recording joins the step of the change that
+ * caused it: the river edit and its re-carve undo as one, and Undo restores a
+ * Site that already matches its rivers, so it never causes a recorded write.
+ * On load or a late mount nothing is being recorded, so a correction adds no
+ * step at all. A pause someone else holds (an editor handle drag pauses the
+ * history store directly) is left exactly as it was.
  */
-function applyReconcileWrites(
-  sceneApi: SceneApi,
-  { edits, migrations }: Readonly<{ edits: SiteUpdate[]; migrations: SiteUpdate[] }>,
-): void {
-  applySiteUpdates(sceneApi, edits)
-  if (migrations.length === 0) return
-  const releaseHistory = acquireSceneHistoryPause(useScene)
+function writeWithoutHistory(sceneApi: SceneApi, updates: readonly SiteUpdate[]): void {
+  if (updates.length === 0) return
+  const releaseHistory = useScene.temporal.getState().isTracking
+    ? acquireSceneHistoryPause(useScene)
+    : null
   try {
-    applySiteUpdates(sceneApi, migrations)
+    applySiteUpdates(sceneApi, updates)
   } finally {
-    releaseHistory()
+    releaseHistory?.()
   }
 }
 
@@ -234,18 +228,12 @@ function subscribeLivePreviews(sceneApi: SceneApi): () => void {
 
 type SiteUpdate = Readonly<{ id: AnyNodeId; data: Partial<AnyNode> }>
 
-/**
- * The Site writes that bring these Sites in line with their rivers, split by
- * kind. A write caused by a river edit is always an edit, even on a Site
- * still as an earlier carver saved it: the edit's consequence must be undoable.
- */
-function reconcileWrites(
+/** The Site writes that bring these Sites in line with their rivers. */
+function reconcileUpdates(
   nodes: Readonly<Record<string, AnyNode>>,
   siteIds: ReadonlySet<string>,
-  riverEditedSiteIds: ReadonlySet<string>,
-): Readonly<{ edits: SiteUpdate[]; migrations: SiteUpdate[] }> {
-  const edits: SiteUpdate[] = []
-  const migrations: SiteUpdate[] = []
+): SiteUpdate[] {
+  const updates: SiteUpdate[] = []
   for (const siteId of siteIds) {
     const parsedSite = SiteNode.safeParse(nodes[siteId])
     if (!parsedSite.success) continue
@@ -257,13 +245,10 @@ function reconcileWrites(
       .map((candidate) => RiverNode.safeParse(candidate))
       .filter((parsed): parsed is { success: true; data: RiverNode } => parsed.success)
       .map((parsed) => parsed.data)
-    const write = riverReconcileUpdate(site, rivers)
-    if (!write) continue
-    const update = { id: site.id as AnyNodeId, data: write.update as Partial<AnyNode> }
-    if (write.migration && !riverEditedSiteIds.has(siteId)) migrations.push(update)
-    else edits.push(update)
+    const update = riverReconcileUpdate(site, rivers)
+    if (update) updates.push({ id: site.id as AnyNodeId, data: update as Partial<AnyNode> })
   }
-  return { edits, migrations }
+  return updates
 }
 
 function applySiteUpdates(sceneApi: SceneApi, updates: readonly SiteUpdate[]): void {

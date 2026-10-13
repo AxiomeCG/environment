@@ -167,16 +167,9 @@ export function riverTerrainFingerprint(
 }
 
 /**
- * True when the Site's terrain already carries the carve for exactly these
- * rivers, boundary, and grid — i.e. an apply already wrote it and a
- * reconciliation pass must not write (or record history) again. The persisted
- * terrain must still be the applied one: a sculpt since the apply leaves the
- * fingerprint intact but needs the river re-carved from the sculpted ground.
- */
-/**
  * True when the Site is exactly as an earlier carver revision saved it: its
- * stamp predates this revision and nothing has edited the terrain since. A
- * reconcile of such a Site is a load migration, not a consequence of an edit.
+ * stamp predates this revision and nothing has edited the terrain since. If
+ * this carver reproduces that carve, reconciling it has nothing to write.
  */
 export function riverTerrainSavedByEarlierCarver(site: SiteNode): boolean {
   const tracked = readRiverTerrainMetadata(site.metadata)
@@ -186,6 +179,13 @@ export function riverTerrainSavedByEarlierCarver(site: SiteNode): boolean {
   return Boolean(persisted && applied && sameHeights(persisted, applied))
 }
 
+/**
+ * True when the Site's terrain already carries the carve for exactly these
+ * rivers, boundary, and grid — i.e. an apply already wrote it and a
+ * reconciliation pass must not write (or record history) again. The persisted
+ * terrain must still be the applied one: a sculpt since the apply leaves the
+ * fingerprint intact but needs the river re-carved from the sculpted ground.
+ */
 export function riverTerrainIsApplied(site: SiteNode, rivers: readonly RiverNode[]): boolean {
   const tracked = readRiverTerrainMetadata(site.metadata)
   if (!tracked?.fingerprint || rivers.length === 0) return false

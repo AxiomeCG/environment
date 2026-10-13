@@ -15,7 +15,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { createRiver, type RiverNodeChanges } from './actions'
 import { readEarlierCarveFixtures } from './earlier-carves'
-import { RiverNode } from './schema'
+import { RIVER_KIND, RiverNode } from './schema'
 import RiverSystem from './system'
 import { rebuildRiverTerrain, riverTerrainBaseline, riverTerrainIsApplied } from './terrain'
 
@@ -322,27 +322,109 @@ describe('RiverSystem reconciliation', () => {
       }
     })
 
-    test('a river edit right after loading an earlier save stays an undoable edit', async () => {
+    /** The saved straight river as the scene holds it now: its flow and whether its ground is re-carved. */
+    function straightRiverState(savedTerrain: SiteNodeType['terrain']) {
+      const river = Object.values(useScene.getState().nodes).find(
+        (node) => (node.type as string) === RIVER_KIND,
+      )
+      return {
+        flow: RiverNode.parse(river).flow,
+        recarved: JSON.stringify(currentSite().terrain) !== JSON.stringify(savedTerrain),
+      }
+    }
+
+    /** A parametric edit goes straight to the scene, past the river actions. */
+    async function editFlowToDownhill(riverId: string): Promise<void> {
+      await act(async () => {
+        createSceneApi(useScene).applyChanges?.({
+          update: [{ id: riverId as AnyNodeId, data: { flow: 'downhill' } as Partial<AnyNode> }],
+        })
+      })
+    }
+
+    async function undo(): Promise<void> {
+      await act(async () => {
+        useScene.temporal.getState().undo()
+      })
+    }
+
+    async function redo(): Promise<void> {
+      await act(async () => {
+        useScene.temporal.getState().redo()
+      })
+    }
+
+    test('a river edit and the re-carve it causes undo and redo as one step', async () => {
+      // Review round 5 input: the frozen as-drawn save, loaded, the system
+      // mounted, then its flow switched to downhill by a parametric edit.
       const { site, rivers } = savedCase('asDrawnStraight')
+      const [river] = rivers
+      if (!river) throw new Error('expected the saved river')
       loadScene([site, ...(rivers as unknown as AnyNode[])])
       const { sceneApi, writes } = recordingSceneApi()
       const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
       try {
-        expect(writes).toHaveLength(0)
-        const [river] = rivers
-        if (!river) throw new Error('expected the saved river')
+        await editFlowToDownhill(river.id)
+        expect(straightRiverState(site.terrain)).toEqual({ flow: 'downhill', recarved: true })
+        const writesAfterEdit = writes.length
 
-        await act(async () => {
-          // A parametric edit goes straight to the scene, past the river actions.
-          createSceneApi(useScene).applyChanges?.({
-            update: [{ id: river.id as AnyNodeId, data: { flow: 'downhill' } as Partial<AnyNode> }],
-          })
-        })
+        await undo()
+        expect(straightRiverState(site.terrain)).toEqual({ flow: 'as_drawn', recarved: false })
+        await undo()
+        expect(straightRiverState(site.terrain)).toEqual({ flow: 'as_drawn', recarved: false })
+        await redo()
+        expect(straightRiverState(site.terrain)).toEqual({ flow: 'downhill', recarved: true })
+        await redo()
+        expect(straightRiverState(site.terrain)).toEqual({ flow: 'downhill', recarved: true })
 
-        // The edit and the re-carve it causes are both recorded, not hidden as a migration.
-        expect(writes).toHaveLength(1)
-        expect(useScene.temporal.getState().pastStates).toHaveLength(2)
+        // Undo and Redo restore consistent states: the system writes nothing.
+        expect(writes).toHaveLength(writesAfterEdit)
       } finally {
+        await renderer.unmount()
+      }
+    })
+
+    test('after a Site rename, undo steps back through the river edit, then the rename', async () => {
+      const { site, rivers } = savedCase('asDrawnStraight')
+      const [river] = rivers
+      if (!river) throw new Error('expected the saved river')
+      loadScene([site, ...(rivers as unknown as AnyNode[])])
+      createSceneApi(useScene).applyChanges?.({
+        update: [{ id: site.id as AnyNodeId, data: { name: 'Renamed lot' } as Partial<AnyNode> }],
+      })
+      const { sceneApi, writes } = recordingSceneApi()
+      const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+      try {
+        await editFlowToDownhill(river.id)
+        const state = () => ({ name: currentSite().name, ...straightRiverState(site.terrain) })
+        const writesAfterEdit = writes.length
+
+        await undo()
+        expect(state()).toEqual({ name: 'Renamed lot', flow: 'as_drawn', recarved: false })
+        await undo()
+        expect(state()).toEqual({ name: site.name, flow: 'as_drawn', recarved: false })
+        await redo()
+        expect(state()).toEqual({ name: 'Renamed lot', flow: 'as_drawn', recarved: false })
+        await redo()
+        expect(state()).toEqual({ name: 'Renamed lot', flow: 'downhill', recarved: true })
+        expect(writes).toHaveLength(writesAfterEdit)
+      } finally {
+        await renderer.unmount()
+      }
+    })
+
+    test('a load restore leaves history paused when something else paused it', async () => {
+      // An editor handle drag pauses the history store directly while it runs.
+      const { site, rivers, ground } = savedCase('downhillCrossing')
+      loadScene([site, ...(rivers as unknown as AnyNode[])])
+      useScene.temporal.getState().pause()
+      const { sceneApi } = recordingSceneApi()
+      const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+      try {
+        expect(currentSite().terrain).toEqual(ground)
+        expect(useScene.temporal.getState().isTracking).toBe(false)
+      } finally {
+        useScene.temporal.getState().resume()
         await renderer.unmount()
       }
     })
