@@ -169,8 +169,13 @@ function withRivers(rivers: RiverNodeValue[]): Nodes {
 }
 
 /** A rectangular lot over a 1 m terrain grid of `cols` x `rows` heights (0.01 m steps). */
-function terrainLot(cols: number, rows: number, shape: (heights: Int16Array) => void): Nodes {
-  const terrain = createTerrainField({ origin: [0, 0], spacing: 1, cols, rows, step: 0.01 })
+function terrainLot(
+  cols: number,
+  rows: number,
+  shape: (heights: Int16Array) => void,
+  step = 0.01,
+): Nodes {
+  const terrain = createTerrainField({ origin: [0, 0], spacing: 1, cols, rows, step })
   shape(terrain.heights)
   const site = SiteNode.parse({
     id: 'site_terrain',
@@ -533,6 +538,25 @@ describe('read_environment', () => {
       [47, 3],
     ])
     expect(result.hollowsTruncated).toBe(false)
+  })
+
+  test('finds minima along the terrain mesh, where a diagonal neighbour is not adjacent', () => {
+    // Sol's round-2 fixture: [2, 2] sits diagonally next to the lower [1, 1], across no edge.
+    const nodes = terrainLot(
+      5,
+      5,
+      (heights) => {
+        heights.fill(10)
+        heights[1 * 5 + 1] = 0
+        heights[2 * 5 + 2] = 1
+      },
+      1,
+    )
+    const { result } = runRead(nodes, { hollowsLimit: 5 })
+    expect((result.hollows as { atM: number[] }[]).map((hollow) => hollow.atM)).toEqual([
+      [1, 1],
+      [2, 2],
+    ])
   })
 
   test('says when the scan gave up before the hollow limit', () => {

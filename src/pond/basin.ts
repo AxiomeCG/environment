@@ -115,6 +115,57 @@ export function analyzePondBasin(
   return basin
 }
 
+/** A flat bottom of the terrain mesh: one of its vertices, and its height. */
+export type TerrainMinimum = { readonly point: Point2; readonly height: number }
+
+/** One flat patch of the mesh (vertices of one height joined by mesh edges), and its rim. */
+function meshPlateau(mesh: TerrainMesh, start: number, seen: Uint8Array) {
+  const height = mesh.vertices[start]?.height ?? 0
+  const vertices = [start]
+  let lower = false
+  let higher = false
+  seen[start] = 1
+  for (let cursor = 0; cursor < vertices.length; cursor += 1) {
+    for (const neighbor of mesh.adjacency[vertices[cursor] ?? 0] ?? []) {
+      const neighborHeight = mesh.vertices[neighbor]?.height ?? height
+      if (neighborHeight < height - GEOMETRY_EPSILON) lower = true
+      else if (neighborHeight > height + GEOMETRY_EPSILON) higher = true
+      else if (!seen[neighbor]) {
+        seen[neighbor] = 1
+        vertices.push(neighbor)
+      }
+    }
+  }
+  return { vertices, height, lower, higher }
+}
+
+/**
+ * The local minima of the terrain mesh `analyzePondBasin` floods, lowest first: one per flat
+ * bottom, judged along the mesh's own edges (a diagonal neighbour across no edge does not count).
+ * `accepts` picks the vertex that stands for each bottom, as the first one it accepts.
+ */
+export function terrainMeshMinima(
+  terrain: TerrainField,
+  boundary: ReadonlyArray<Point2>,
+  accepts: (x: number, z: number) => boolean,
+): TerrainMinimum[] {
+  if (!validTerrain(terrain) || !validBoundary(boundary)) return []
+  const mesh = buildTerrainMesh(terrain, boundary)
+  const seen = new Uint8Array(mesh.vertices.length)
+  const minima: TerrainMinimum[] = []
+  for (let start = 0; start < mesh.vertices.length; start += 1) {
+    if (seen[start]) continue
+    const plateau = meshPlateau(mesh, start, seen)
+    if (plateau.lower || !plateau.higher) continue
+    const vertex = plateau.vertices
+      .sort((left, right) => left - right)
+      .map((index) => mesh.vertices[index])
+      .find((candidate) => candidate && accepts(candidate.x, candidate.z))
+    if (vertex) minima.push({ point: [vertex.x, vertex.z], height: plateau.height })
+  }
+  return minima.sort((left, right) => left.height - right.height)
+}
+
 export function buildPondSurface(
   basin: PondBasin,
   requestedLevel: number | null,
