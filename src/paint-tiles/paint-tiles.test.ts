@@ -12,6 +12,8 @@ import {
   currentPaintField,
 } from '../ground-cover/paint-stroke'
 import { createGroundCoverNode } from '../ground-cover/create-node'
+import { grassFieldDefinition } from '../ground-cover/definition'
+import { surfaceMaterialDefinition } from '../surface-material/definition'
 import { paintAt } from '../ground-cover/paint-field'
 import { commitPaintWrite, type PaintWriter } from './commit'
 import {
@@ -289,5 +291,40 @@ describe('paint tiles', () => {
     const painted = resolveGroundCoverPaint(grass, Object.values(nodes), bounds)
     expect(paintAt(painted, 1, 1).a).toBe(1)
     expect(paintAt(painted, 2, 2).a).toBe(1)
+  })
+
+  test('deleting a Ground cover or a Surface takes its tiles along, and no other node', () => {
+    // Sol's round-3 case: deleting the grass left its tiles naming a node that was gone.
+    const base = lotField(16)
+    const stroke = strokeAcross(base, 16)
+    const grassTiles = applyTiles(
+      {},
+      planPaintTileChanges(target(), [], stroke.snapshot, currentPaintField(stroke)),
+    )
+    const surfaceTarget = { ...target(), targetId: 'surface-material_tiles' }
+    const nodes = applyTiles(
+      grassTiles,
+      planPaintTileChanges(surfaceTarget, [], stroke.snapshot, currentPaintField(stroke)),
+    )
+    const grassTileIds = paintTilesOf(Object.values(nodes), 'grass-field_tiles', 'paintMap').map(
+      (tile) => tile.id,
+    )
+    const cascade = (
+      definition: typeof grassFieldDefinition | typeof surfaceMaterialDefinition,
+      id: string,
+    ): string[] =>
+      definition.parametrics?.onDeleteCascade?.(
+        { id } as never,
+        nodes as never,
+        new Set(),
+        new Set(),
+      ) ?? []
+    expect(grassTileIds.length).toBeGreaterThan(0)
+    expect([...cascade(grassFieldDefinition, 'grass-field_tiles')].sort()).toEqual(
+      grassTileIds.sort(),
+    )
+    expect(cascade(surfaceMaterialDefinition, 'surface-material_tiles')).toHaveLength(
+      grassTileIds.length,
+    )
   })
 })

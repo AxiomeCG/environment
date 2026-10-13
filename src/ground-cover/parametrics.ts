@@ -1,7 +1,9 @@
 import type { ParametricDescriptor } from '@pascal-app/core'
+import { paintTilesDeletedWith } from '../paint-tiles/compose'
 import type { GrassFieldNode } from './schema'
 
 export const grassFieldParametrics: ParametricDescriptor<GrassFieldNode> = {
+  onDeleteCascade: paintTilesDeletedWith,
   groups: [
     {
       label: 'Ground cover appearance (global)',

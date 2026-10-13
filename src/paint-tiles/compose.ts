@@ -131,6 +131,17 @@ export function changedPaintTileTargets(
   return targets
 }
 
+/**
+ * A painted node's delete takes its tiles along (`parametrics.onDeleteCascade`): a tile never
+ * outlives the Ground cover or Surface it names.
+ */
+export function paintTilesDeletedWith(
+  node: { id: string },
+  nodes: Readonly<Record<string, unknown>>,
+): AnyNodeId[] {
+  return paintTileIdsOf(Object.values(nodes), node.id) as AnyNodeId[]
+}
+
 /** A painted node's plan drawing depends on its tiles: a tile commit redraws it. */
 export function paintTileFloorplanDependencies(
   node: { id: string },

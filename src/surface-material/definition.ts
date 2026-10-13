@@ -1,6 +1,6 @@
 import type { NodeDefinition } from '@pascal-app/core'
 import type { FloorplanNodeExtension } from '@pascal-app/editor'
-import { paintTileFloorplanDependencies } from '../paint-tiles/compose'
+import { paintTileFloorplanDependencies, paintTilesDeletedWith } from '../paint-tiles/compose'
 import {
   buildSurfaceMaterialBakeGeometry,
   buildSurfaceMaterialBakeGeometryAsync,
@@ -49,6 +49,8 @@ export const surfaceMaterialDefinition: SurfaceMaterialDefinition = {
     deletable: false,
   },
 
+  // No inspector fields; deleting a Surface takes its paint tiles along.
+  parametrics: { groups: [], onDeleteCascade: paintTilesDeletedWith },
   geometry: buildSurfaceMaterialGeometry,
   bake: 'replace',
   bakeGeometry: buildSurfaceMaterialBakeGeometry,
