@@ -2,6 +2,7 @@ import { terrainFieldOf, type SiteNode } from '@pascal-app/core'
 import { ShapeUtils, Vector2 } from 'three'
 import { POND_WATER_APPEARANCE } from '../pond/appearance'
 import type { WaterQuality } from '../pond/schema'
+import { riverFlowMaterialDirection } from '../river/geometry'
 import type { RiverNode } from '../river/schema'
 import {
   riverCrossSection,
@@ -781,7 +782,7 @@ function buildWaterBatches(
   const outside = exteriorClipTriangles(boundary, channels)
   for (const channel of channels) {
     const quality = waterQuality(channel.river.quality)
-    const direction = channel.river.flowDirection === 'reverse' ? -1 : 1
+    const direction = riverFlowMaterialDirection(channel.river)
     const speed = channel.river.flowSpeed
     const key = `${quality}:${speed}:${direction}`
     let builder = builders.get(key)
