@@ -607,7 +607,7 @@ export function planRiver(
       (stations[path.authoredEndIndex]?.groundY ?? 0)
   const profile =
     river.flow === 'downhill'
-      ? solveOrderedProfile(path, stations, river.maxSlopePct, upstreamAtStart)
+      ? solveOrderedProfile(river, path, stations, upstreamAtStart)
       : asDrawnProfile(stations)
   const samples: RiverPlanSample[] = profile.map((entry, index) => ({
     distanceM: entry.distanceM,
@@ -635,15 +635,20 @@ export function planRiver(
   }
 }
 
-/** Solve from the authored upstream end, whichever way the path was drawn. */
+/**
+ * Solve from the upstream end, whichever way the path was drawn: the authored
+ * end behind a cap, or the Site boundary where a mountain source enters.
+ */
 function solveOrderedProfile(
+  river: RiverNode,
   path: SampledRiverPath,
   stations: readonly RiverProfileStation[],
-  maxSlopePct: number,
   upstreamAtStart: boolean,
 ) {
+  const { maxSlopePct } = river
   if (upstreamAtStart) {
-    return solveDownhillProfile(stations, maxSlopePct, path.authoredStartIndex)
+    const sourceIndex = river.source === 'mountain' ? 0 : path.authoredStartIndex
+    return solveDownhillProfile(stations, maxSlopePct, sourceIndex)
   }
   const total = stations.at(-1)?.distanceM ?? 0
   const reversed = [...stations].reverse().map((station) => ({

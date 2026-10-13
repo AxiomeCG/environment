@@ -566,6 +566,21 @@ describe('downhill caps follow the authored ends', () => {
   })
 })
 
+describe('connected ends', () => {
+  test('a mountain source is solved from the Site boundary, where the water enters', () => {
+    // Ground falls from 3 m at the west boundary to 1 m at x = 10. The reach
+    // from the boundary to the first authored point is river, not a cap.
+    const groundAt = (x: number) => 2 - x / 10
+    const terrain = terrainFromFunction(groundAt)
+    const node = river('river_mountain', { flow: 'downhill', source: 'mountain', maxSlopePct: 20 })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    const seam = plan.samples[0]
+    expect(plan.path.authoredStartIndex).toBeGreaterThan(0)
+    expect(seam?.waterY).toBeCloseTo(groundAt(-10) - riverSurfaceInset(node.depth), 2)
+  })
+})
+
 describe('river facts', () => {
   test('lengths integrate only the authored reach they report, never the caps', () => {
     // Review input: ground falling 30 % under a 2 % river, so the whole
