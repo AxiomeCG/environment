@@ -119,3 +119,13 @@ describe('profile source', () => {
     expect(profile[0]?.slopePct).toBe(0)
   })
 })
+
+describe('rapids', () => {
+  test('a rapid is water running at the maximum slope, including its catch-up below a cliff', () => {
+    // Review input: a 20 m cliff, then flat ground. The water keeps falling at
+    // the 5 % cap over both segments, though the ground below the cliff is flat.
+    const profile = solveDownhillProfile(stations([10, -10, -10]), 5)
+    expect(profile.map((sample) => sample.slopePct)).toEqual([0, 5, 5])
+    expect(profile.map((sample) => sample.rapid)).toEqual([false, true, true])
+  })
+})

@@ -28,7 +28,11 @@ export type RiverProfileSample = Readonly<{
   slopePct: number
   /** How far the bank top (water + inset) sits above the centerline ground. */
   embankmentM: number
-  /** True where the water is pinned at the maximum slope by steeper ground. */
+  /**
+   * True where the solved water runs at the maximum slope: down steeper
+   * ground, and on through its catch-up below a cliff, where the ground is
+   * already flat but the water is still falling at the cap.
+   */
   rapid: boolean
 }>
 
@@ -74,9 +78,7 @@ function solveFromSource(
     const maxDropM = (maxSlopePct / 100) * runM
     const waterY = Math.max(previous.waterY - maxDropM, Math.min(groundWaterY, previous.waterY))
     const slopePct = runM > 1e-9 ? ((previous.waterY - waterY) / runM) * 100 : 0
-    const groundSlopePct =
-      runM > 1e-9 ? ((stations[index - 1]!.groundY - station.groundY) / runM) * 100 : 0
-    const rapid = slopePct >= maxSlopePct - 1e-6 && groundSlopePct > maxSlopePct + 1e-6
+    const rapid = maxSlopePct > 0 && slopePct >= maxSlopePct - 1e-6
     samples.push(profileSample(station, waterY, slopePct, rapid))
   }
   return samples
@@ -241,7 +243,7 @@ export type RiverFacts = Readonly<{
   /** Length whose banks sit above the centerline ground (on an embankment). */
   embankedLengthM: number
   maxEmbankmentM: number
-  /** Length pinned at the maximum slope by steeper ground (rapids/cascades). */
+  /** Length where the water runs at the maximum slope (see `RiverProfileSample.rapid`). */
   rapidLengthM: number
 }>
 

@@ -733,37 +733,40 @@ function sectionReachM(river: RiverNode, sample: RiverPlanSample): number {
   return channelReachM + section.bermM + bankRunM + section.blendM
 }
 
+/**
+ * Facts over the authored reach only. Its ends are samples of the path, so
+ * every integrated segment lies wholly inside it; the caps are excluded.
+ */
 function measureRiverFacts(
   terrain: TerrainField,
   river: RiverNode,
   path: SampledRiverPath,
   samples: readonly RiverPlanSample[],
 ): RiverFacts {
+  const authored = samples.slice(path.authoredStartIndex, path.authoredEndIndex + 1)
+  const areas = authored.map((sample, offset) =>
+    crossSectionAreas(terrain, river, path, path.authoredStartIndex + offset, sample),
+  )
   let cutVolumeM3 = 0
   let fillVolumeM3 = 0
   let embankedLengthM = 0
   let rapidLengthM = 0
-  let maxEmbankmentM = 0
-  const areas = samples.map((sample, index) =>
-    authoredSample(path, sample) ? crossSectionAreas(terrain, river, path, index, sample) : null,
-  )
-  for (let index = 1; index < samples.length; index += 1) {
-    const start = samples[index - 1]!
-    const end = samples[index]!
-    const segmentLengthM = end.distanceM - start.distanceM
-    if (segmentLengthM <= 0 || !authoredSample(path, start)) continue
+  for (let index = 1; index < authored.length; index += 1) {
+    const start = authored[index - 1]
+    const end = authored[index]
     const startArea = areas[index - 1]
-    const endArea = areas[index] ?? startArea
-    if (startArea && endArea) {
-      cutVolumeM3 += ((startArea.cutM2 + endArea.cutM2) / 2) * segmentLengthM
-      fillVolumeM3 += ((startArea.fillM2 + endArea.fillM2) / 2) * segmentLengthM
-    }
+    const endArea = areas[index]
+    if (!start || !end || !startArea || !endArea) continue
+    const segmentLengthM = end.distanceM - start.distanceM
+    cutVolumeM3 += ((startArea.cutM2 + endArea.cutM2) / 2) * segmentLengthM
+    fillVolumeM3 += ((startArea.fillM2 + endArea.fillM2) / 2) * segmentLengthM
     if (start.embankmentM > 0.05 || end.embankmentM > 0.05) embankedLengthM += segmentLengthM
     if (start.rapid || end.rapid) rapidLengthM += segmentLengthM
-    maxEmbankmentM = Math.max(maxEmbankmentM, start.embankmentM, end.embankmentM)
   }
+  const first = authored[0]
+  const last = authored.at(-1)
   const lengthM = Math.max(0, path.authoredEndDistance - path.authoredStartDistance)
-  const dropM = authoredDropM(path, samples)
+  const dropM = first && last ? Math.abs(first.waterY - last.waterY) : 0
   return {
     lengthM,
     dropM,
@@ -771,20 +774,9 @@ function measureRiverFacts(
     cutVolumeM3,
     fillVolumeM3,
     embankedLengthM,
-    maxEmbankmentM,
+    maxEmbankmentM: Math.max(0, ...authored.map((sample) => sample.embankmentM)),
     rapidLengthM,
   }
-}
-
-function authoredSample(path: SampledRiverPath, sample: RiverPlanSample): boolean {
-  return sample.distanceM >= path.authoredStartDistance && sample.distanceM <= path.authoredEndDistance
-}
-
-function authoredDropM(path: SampledRiverPath, samples: readonly RiverPlanSample[]): number {
-  const first = samples.find((sample) => sample.distanceM >= path.authoredStartDistance)
-  const last = [...samples].reverse().find((sample) => sample.distanceM <= path.authoredEndDistance)
-  if (!first || !last) return 0
-  return Math.abs(first.waterY - last.waterY)
 }
 
 /** Cut/fill areas of one cross-section, sampled laterally across the uncarved ground. */

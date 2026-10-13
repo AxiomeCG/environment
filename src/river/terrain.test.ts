@@ -564,3 +564,17 @@ describe('downhill caps follow the authored ends', () => {
     }
   })
 })
+
+describe('river facts', () => {
+  test('lengths integrate only the authored reach they report, never the caps', () => {
+    // Review input: ground falling 30 % under a 2 % river, so the whole
+    // authored reach runs embanked at the maximum slope.
+    const terrain = terrainFromFunction((x) => -0.3 * x)
+    const node = river('river_facts', { flow: 'downhill', maxSlopePct: 2 })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    expect(plan.facts.lengthM).toBeCloseTo(16, 6)
+    expect(plan.facts.embankedLengthM).toBeCloseTo(plan.facts.lengthM, 6)
+    expect(plan.facts.rapidLengthM).toBeCloseTo(plan.facts.lengthM, 6)
+  })
+})
