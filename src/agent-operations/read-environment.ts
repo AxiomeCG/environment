@@ -26,7 +26,7 @@ import {
   asPolygon,
   pointInPolygon,
   polygonArea,
-  polygonsOverlap,
+  interiorsOverlap,
   requireSite,
   requireSitePolygon,
   roundFact,
@@ -43,21 +43,24 @@ export type ReadEnvironmentInput = {
 /** The ground a read samples: inside both the requested area and the lot. */
 type Region = (x: number, z: number) => boolean
 
-/** The lattice cells of `field` in the region, each with its position. */
+/**
+ * The cells of `field`'s lattice whose centres lie in the region, each by its centre: a cell
+ * counts once, and ground that only touches the region counts for nothing.
+ */
 function* regionCells(
   field: Pick<GrassPaintField, 'origin' | 'spacing' | 'cols' | 'rows'>,
   region: Region,
 ) {
-  for (let row = 0; row < field.rows; row += 1) {
-    const z = field.origin[1] + row * field.spacing
-    for (let col = 0; col < field.cols; col += 1) {
-      const x = field.origin[0] + col * field.spacing
+  for (let row = 0; row + 1 < field.rows; row += 1) {
+    const z = field.origin[1] + (row + 0.5) * field.spacing
+    for (let col = 0; col + 1 < field.cols; col += 1) {
+      const x = field.origin[0] + (col + 0.5) * field.spacing
       if (region(x, z)) yield { x, z }
     }
   }
 }
 
-/** The region's area on the lot, sampled on the lot's paint lattice. */
+/** The region's area on the lot, sampled at the cell centres of the lot's paint lattice. */
 function onLotM2(bounds: SiteBounds, region: Region): { areaM2: number; cellM: number } {
   const lattice = createGrassPaintField(bounds, '#000000', 0)
   let cells = 0
@@ -167,8 +170,8 @@ function requireArea(input: ReadEnvironmentInput, sitePolygon: PlanPoint[]): Pla
   if (!area || area.length < 3)
     refuse('invalid_polygon', '`area` is not a usable polygon (3+ points).')
   if (Math.abs(polygonArea(area)) <= 1e-9) refuse('footprint_empty', '`area` covers no ground.')
-  if (!polygonsOverlap(area, sitePolygon)) {
-    refuse('outside_property', '`area` lies wholly outside the lot; only the lot is read.')
+  if (!interiorsOverlap(area, sitePolygon)) {
+    refuse('outside_property', '`area` shares no ground with the lot; only the lot is read.')
   }
   return area
 }
@@ -192,7 +195,7 @@ export const readEnvironment: AgentOperation<ReadEnvironmentInput> = (nodes, inp
       groundCover: groundCoverFacts(nodes, site, bounds, region),
       surface: surfaceFacts(nodes, site, bounds, region),
       ponds: pondFacts(nodes, site, sitePolygon, terrain),
-      rivers: riverFacts(nodes, site),
+      rivers: riverFacts(nodes, site, area),
       hollows: hollowScan.hollows,
       hollowsTruncated: hollowScan.truncated,
       presentation: 'browser',

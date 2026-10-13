@@ -280,6 +280,27 @@ export function riverSurfaceInset(depth: number): number {
   return Math.min(0.14, Math.max(0.025, depth * 0.12))
 }
 
+/** How far the drawn water stands above the surface it settles on, so it never meets the bed. */
+export const RIVER_WATER_CLEARANCE = 0.012
+/** How far below the uncarved banks the water stays, wherever it reaches them. */
+export const RIVER_BANK_INSET = 0.018
+
+/**
+ * The water's level at (x, z) across a centreline sample, before its clearance: the centreline's
+ * inset water, held below the uncarved ground there. The renderer lays the drawn surface
+ * `RIVER_WATER_CLEARANCE` above it.
+ */
+export function riverWaterSourceHeight(
+  point: SampledRiverPoint,
+  river: Pick<RiverNode, 'depth'>,
+  baseline: TerrainField,
+  x: number,
+  z: number,
+): number {
+  const centerWaterHeight = point[1] - riverSurfaceInset(river.depth)
+  return Math.min(centerWaterHeight, surfaceHeightAt(baseline, x, z) - RIVER_BANK_INSET)
+}
+
 function roundedCapScale(distanceFromAuthoredEnd: number, capLength: number): number {
   if (capLength <= EPSILON) return 1
   const normalized = clamp01(distanceFromAuthoredEnd / capLength)

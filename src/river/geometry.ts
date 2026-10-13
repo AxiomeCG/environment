@@ -23,9 +23,10 @@ import { buildPondShoreGeometry, createPondShoreDistances } from '../pond/shorel
 import { createWaterMaterial, type WaterMaterialOptions } from '../surroundings/water-material'
 import type { RiverNode } from './schema'
 import {
+  RIVER_WATER_CLEARANCE,
   riverPathWidthScale,
-  riverSurfaceInset,
   riverTerrainBaseline,
+  riverWaterSourceHeight,
   sampleRiverPath,
   type SampledRiverPath,
 } from './terrain'
@@ -34,8 +35,6 @@ export { RIVER_MAX_CENTERLINE_SEGMENTS } from './terrain'
 export const RIVER_LATERAL_SEGMENTS = 8
 export const RIVER_MAX_WATER_TRIANGLES = 32_000
 
-const WATER_CLEARANCE = 0.012
-const BANK_INSET = 0.018
 const WET_EPSILON = 0.006
 const CLIP_EPSILON = 1e-8
 const LATERAL_FRACTIONS = [-1, -0.9, -0.6, -0.3, 0, 0.3, 0.6, 0.9, 1] as const
@@ -163,7 +162,8 @@ export function buildRiverSurface(
           const polygon = clipToTriangle(triangle, terrainTriangle)
           if (polygon.length < 3) continue
           for (const vertex of polygon) {
-            vertex.depth = vertex.y - WATER_CLEARANCE - surfaceHeightAt(terrain, vertex.x, vertex.z)
+            vertex.depth =
+              vertex.y - RIVER_WATER_CLEARANCE - surfaceHeightAt(terrain, vertex.x, vertex.z)
           }
           emitSiteClipped(clipWetPolygon(polygon))
         }
@@ -368,7 +368,6 @@ function buildRibbonRows(
   terrain: TerrainField,
 ): SurfaceVertex[][] {
   const rows: SurfaceVertex[][] = []
-  const surfaceInset = riverSurfaceInset(node.depth)
   for (let index = 0; index < path.points.length; index += 1) {
     const point = path.points[index]!
     const before = path.points[Math.max(0, index - 1)]!
@@ -382,19 +381,15 @@ function buildRibbonRows(
     const normalX = -tangentZ
     const normalZ = tangentX
     const halfWidth = node.width * 0.5 * riverPathWidthScale(path, node, path.distances[index]!)
-    const centerWaterHeight = point[1] - surfaceInset
     rows.push(
       LATERAL_FRACTIONS.map((fraction): SurfaceVertex => {
         const x = point[0] + normalX * halfWidth * fraction
         const z = point[2] + normalZ * halfWidth * fraction
-        const sourceHeight = Math.min(
-          centerWaterHeight,
-          surfaceHeightAt(baseline, x, z) - BANK_INSET,
-        )
+        const sourceHeight = riverWaterSourceHeight(point, node, baseline, x, z)
         const bedHeight = surfaceHeightAt(terrain, x, z)
         return {
           x,
-          y: sourceHeight + WATER_CLEARANCE,
+          y: sourceHeight + RIVER_WATER_CLEARANCE,
           z,
           depth: sourceHeight - bedHeight,
           course: path.distances[index]!,

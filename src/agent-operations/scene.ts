@@ -169,17 +169,73 @@ function edgesOf(polygon: ReadonlyArray<PlanPoint>): [PlanPoint, PlanPoint][] {
   return edges
 }
 
-/** Whether two polygons share ground: a vertex of either inside the other, or crossing edges. */
-export function polygonsOverlap(
+/** Points that witness a polygon's interior when one of them lies inside another polygon. */
+function probePoints(polygon: ReadonlyArray<PlanPoint>): PlanPoint[] {
+  const edges = edgesOf(polygon)
+  const centroid: PlanPoint = [
+    polygon.reduce((sum, point) => sum + point[0], 0) / polygon.length,
+    polygon.reduce((sum, point) => sum + point[1], 0) / polygon.length,
+  ]
+  return [
+    ...polygon,
+    ...edges.map(([a, b]): PlanPoint => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]),
+    centroid,
+  ]
+}
+
+function orientation(a: PlanPoint, b: PlanPoint, c: PlanPoint): number {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/** Whether two segments cross at a point inside both: touching or running along does not count. */
+function segmentsCrossProperly(a: PlanPoint, b: PlanPoint, c: PlanPoint, d: PlanPoint): boolean {
+  const eps = 1e-12
+  const abC = orientation(a, b, c)
+  const abD = orientation(a, b, d)
+  const cdA = orientation(c, d, a)
+  const cdB = orientation(c, d, b)
+  return (
+    ((abC > eps && abD < -eps) || (abC < -eps && abD > eps)) &&
+    ((cdA > eps && cdB < -eps) || (cdA < -eps && cdB > eps))
+  )
+}
+
+/**
+ * Whether two polygons share ground of some area: a vertex, edge midpoint or centroid of either
+ * strictly inside the other, or edges that cross. Touching along an edge or at a corner does not.
+ */
+export function interiorsOverlap(
   first: ReadonlyArray<PlanPoint>,
   second: ReadonlyArray<PlanPoint>,
 ): boolean {
-  if (first.some((point) => pointInPolygon(point[0], point[1], second))) return true
-  if (second.some((point) => pointInPolygon(point[0], point[1], first))) return true
+  const inside = (point: PlanPoint, polygon: ReadonlyArray<PlanPoint>) =>
+    signedDistanceToPolygon(point[0], point[1], polygon) > 1e-9
+  if (probePoints(first).some((point) => inside(point, second))) return true
+  if (probePoints(second).some((point) => inside(point, first))) return true
   const secondEdges = edgesOf(second)
   return edgesOf(first).some(([a, b]) =>
-    secondEdges.some(([c, d]) =>
-      segmentsIntersect([a[0], a[1]], [b[0], b[1]], [c[0], c[1]], [d[0], d[1]]),
-    ),
+    secondEdges.some(([c, d]) => segmentsCrossProperly(a, b, c, d)),
   )
+}
+
+/** Whether a polyline passes through a polygon: a point inside it, or a segment crossing it. */
+export function polylineMeetsPolygon(
+  points: ReadonlyArray<PlanPoint>,
+  polygon: ReadonlyArray<PlanPoint>,
+): boolean {
+  if (points.some((point) => pointInPolygon(point[0], point[1], polygon))) return true
+  const edges = edgesOf(polygon)
+  for (let index = 0; index + 1 < points.length; index += 1) {
+    const from = points[index]
+    const to = points[index + 1]
+    if (!from || !to) continue
+    if (
+      edges.some(([c, d]) =>
+        segmentsIntersect([from[0], from[1]], [to[0], to[1]], [c[0], c[1]], [d[0], d[1]]),
+      )
+    ) {
+      return true
+    }
+  }
+  return false
 }

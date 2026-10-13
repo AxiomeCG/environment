@@ -20,6 +20,7 @@ import { analyzePondBasin, buildPondSurface } from '../pond/basin'
 import { resolveRenderablePondProps } from '../pond/props'
 import { POND_KIND, PondNode, type PondNode as PondNodeValue } from '../pond/schema'
 import { RiverNode, type RiverNode as RiverNodeValue } from '../river/schema'
+import { buildRiverSurface } from '../river/geometry'
 import { rebuildRiverTerrain, riverTerrainBaseline, sampleRiverPath } from '../river/terrain'
 import { resolveGroundCoverPaint, resolveSurfacePaint } from '../paint-tiles/layers'
 import { surfaceMaterialWeightsAt, type SurfaceMaterialField } from '../surface-material/field'
@@ -469,11 +470,89 @@ describe('read_environment', () => {
     })
     const groundCover = result.groundCover as { coveredM2: number; coverageOfAreaPct: number }
     expect(result.areaM2).toBe(16)
-    // 2x2 m of the area is on the lot, give or take one lattice row along each cut.
-    expect(result.onLotM2 as number).toBeGreaterThan(4)
-    expect(result.onLotM2 as number).toBeLessThan(4.3)
-    expect(groundCover.coveredM2).toBeCloseTo(result.onLotM2 as number, 2)
+    // 2x2 m of the area is on the lot, sampled at the centres of the lot's lattice cells.
+    expect(result.onLotM2).toBeCloseTo(4, 6)
+    expect(groundCover.coveredM2).toBeCloseTo(4, 6)
     expect(groundCover.coverageOfAreaPct).toBe(100)
+  })
+
+  test('refuses an area that only touches the lot along its edge', () => {
+    const { nodes } = flatLot()
+    const grassed = applyChanges(
+      nodes,
+      runLayGround(nodes, [{ site: true, ground: 'grass', featherM: 0 }]).changes,
+    )
+    const touching = [
+      [16, 0],
+      [17, 0],
+      [17, 16],
+      [16, 16],
+    ]
+    expect(codeOf(() => runRead(grassed, { area: touching }))).toBe('outside_property')
+    // An area thinner than a lattice cell, wholly on the lot, is still read.
+    const sliver = [
+      [8, 8],
+      [8.01, 8],
+      [8.01, 8.01],
+      [8, 8.01],
+    ]
+    expect(codeOf(() => runRead(grassed, { area: sliver }))).toBe('did-not-refuse')
+  })
+
+  test('reports only the rivers that cross the area, each over its whole course', () => {
+    const river = RiverNode.parse({
+      id: 'river_across',
+      parentId: 'site_flat',
+      points: [
+        [4, 8],
+        [12, 8],
+      ],
+      width: 2,
+      source: 'mountain',
+      outlet: 'sea',
+    })
+    const nodes = withRivers([river])
+    const away = [
+      [14, 14],
+      [15, 14],
+      [15, 15],
+      [14, 15],
+    ]
+    expect(runRead(nodes, { area: away }).result.rivers).toEqual([])
+    const across = [
+      [7, 7],
+      [9, 7],
+      [9, 9],
+      [7, 9],
+    ]
+    const [facts] = runRead(nodes, { area: across }).result.rivers as { lengthM: number }[]
+    expect(facts?.lengthM).toBeCloseTo(16, 6)
+  })
+
+  test('states the water level the river renderer draws', () => {
+    const river = RiverNode.parse({
+      id: 'river_across',
+      parentId: 'site_flat',
+      points: [
+        [4, 8],
+        [12, 8],
+      ],
+      width: 2,
+      depth: 1,
+      source: 'mountain',
+      outlet: 'sea',
+    })
+    const nodes = withRivers([river])
+    const site = nodes.site_flat as SiteNode
+    const drawn = buildRiverSurface(river, site)
+    const heights = new Set<number>()
+    for (let index = 1; index < (drawn?.positions.length ?? 0); index += 3) {
+      heights.add(Math.round((drawn?.positions[index] ?? 0) * 1e4) / 1e4)
+    }
+    // A flat river's water is one level all along, wherever the renderer cut its triangles.
+    expect([...heights]).toHaveLength(1)
+    const [facts] = runRead(nodes, {}).result.rivers as { start: { waterM: number } }[]
+    expect(facts?.start.waterM).toBeCloseTo([...heights][0] ?? Number.NaN, 3)
   })
 
   test('reports a river along its whole course, water and bed apart', () => {
@@ -704,8 +783,18 @@ describe('fill_pond', () => {
 
   test('lowering joined ponds keeps the water in the hollow asked for, as stored', () => {
     // Sol's round-2 case: the surviving record was seeded in the other hollow, now dry at 1 m.
-    const left = PondNode.parse({ id: 'pond_left', parentId: 'site_two_basins', seed: [2, 2], waterLevel: 1 })
-    const right = PondNode.parse({ id: 'pond_right', parentId: 'site_two_basins', seed: [5, 3], waterLevel: 4 })
+    const left = PondNode.parse({
+      id: 'pond_left',
+      parentId: 'site_two_basins',
+      seed: [2, 2],
+      waterLevel: 1,
+    })
+    const right = PondNode.parse({
+      id: 'pond_right',
+      parentId: 'site_two_basins',
+      seed: [5, 3],
+      waterLevel: 4,
+    })
     const { nodes, site } = twoBasinLot([left, right])
     const { result, changes } = run(nodes, { at: [2, 2], level: 1 })
     const stored = pondsOf(applyChanges(nodes, changes))
@@ -718,7 +807,12 @@ describe('fill_pond', () => {
   })
 
   test('hidden ponds take no part, as the renderer leaves them out', () => {
-    const shown = PondNode.parse({ id: 'pond_shown', parentId: 'site_bowl', seed: [2, 2], waterLevel: 1 })
+    const shown = PondNode.parse({
+      id: 'pond_shown',
+      parentId: 'site_bowl',
+      seed: [2, 2],
+      waterLevel: 1,
+    })
     const hidden = PondNode.parse({
       id: 'pond_hidden',
       parentId: 'site_bowl',
