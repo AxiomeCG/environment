@@ -25,10 +25,15 @@ type TileBlock = LatticeBlock & { key: string }
 
 /**
  * One id per block of a map, so two writers of the same block meet on one node. Blocks are
- * aligned on the world grid of the spacing, so they stay put when the lot's bounds move.
+ * aligned on the world grid of the spacing, so they stay put when the lot's bounds move. Colons
+ * separate the parts: shared scene operations take ids of letters, digits, `:`, `_` and `-`.
  */
-export function paintTileId(target: Omit<PaintTileTarget, 'siteId'>, blockCol: number, blockRow: number): string {
-  return `paint-tile_${target.targetId}.${target.map}.${blockCol}.${blockRow}`
+export function paintTileId(
+  target: Omit<PaintTileTarget, 'siteId'>,
+  blockCol: number,
+  blockRow: number,
+): string {
+  return `paint-tile_${target.targetId}:${target.map}:${blockCol}:${blockRow}`
 }
 
 function worldCellIndex(coordinate: number, spacing: number): number {

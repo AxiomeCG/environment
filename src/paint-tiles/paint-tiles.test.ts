@@ -13,7 +13,12 @@ import {
   paintTileFloorplanDependencies,
   paintTilesOf,
 } from './compose'
-import { planPaintTileChanges, type PaintTileChanges, type PaintTileTarget } from './plan'
+import {
+  paintTileId,
+  planPaintTileChanges,
+  type PaintTileChanges,
+  type PaintTileTarget,
+} from './plan'
 import { decodePixelRuns, encodePixelRuns } from './runs'
 import { PAINT_TILE_SIDE, PaintTileData } from './schema'
 
@@ -116,9 +121,14 @@ describe('paint tiles', () => {
     const changes = planPaintTileChanges(target(), [], stroke.snapshot, currentPaintField(stroke))
     // A 1 m dab at [1, 1] (cells 0-30 at 0.05 m) lies inside the first 64-cell block.
     expect(changes.create?.map(({ node }) => String(node.id))).toEqual([
-      'paint-tile_grass-field_tiles.paintMap.0.0',
+      'paint-tile_grass-field_tiles:paintMap:0:0',
     ])
     expect(changes.update).toBeUndefined()
+  })
+
+  test('tile ids are ids a shared scene operation accepts', () => {
+    const id = paintTileId({ targetId: 'grass-field_0123456789abcdef', map: 'heightMap' }, -12, 7)
+    expect(id).toMatch(/^[A-Za-z0-9:_-]{1,128}$/)
   })
 
   test('a repeated stroke updates the same tiles, and an unchanged field writes nothing', () => {
