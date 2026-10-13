@@ -54,6 +54,9 @@ export type SampledRiverPath = Readonly<{
   length: number
   authoredStartDistance: number
   authoredEndDistance: number
+  /** Indexes of the samples at the first and last authored points. */
+  authoredStartIndex: number
+  authoredEndIndex: number
   /**
    * Station of each sample along the authored polyline, taken from the spline
    * span it was sampled on (caps clamp to the nearest authored end). Per-point
@@ -378,6 +381,8 @@ export function sampleRiverPath(
         length,
         authoredStartDistance: distances[normalizedAuthoredStartIndex] ?? 0,
         authoredEndDistance: distances[normalizedAuthoredEndIndex] ?? length,
+        authoredStartIndex: normalizedAuthoredStartIndex,
+        authoredEndIndex: normalizedAuthoredEndIndex,
         authoredStations,
       }
     : null
@@ -603,15 +608,16 @@ export function planRiver(
   }))
   // Connected ends pin the flow: a mountain source feeds the start and a sea
   // outlet drains the end, so both put upstream at the start. Otherwise the
-  // higher authored end is upstream.
+  // higher authored end is upstream; cap tips beyond it never decide.
   const upstreamAtStart =
     river.flow !== 'downhill' ||
     river.source === 'mountain' ||
     river.outlet === 'sea' ||
-    (stations[0]?.groundY ?? 0) >= (stations.at(-1)?.groundY ?? 0)
+    (stations[path.authoredStartIndex]?.groundY ?? 0) >=
+      (stations[path.authoredEndIndex]?.groundY ?? 0)
   const profile =
     river.flow === 'downhill'
-      ? solveOrderedProfile(stations, river.maxSlopePct, upstreamAtStart)
+      ? solveOrderedProfile(path, stations, river.maxSlopePct, upstreamAtStart)
       : asDrawnProfile(stations)
   const samples: RiverPlanSample[] = profile.map((entry, index) => ({
     distanceM: entry.distanceM,
@@ -625,10 +631,8 @@ export function planRiver(
     rapid: entry.rapid,
     bendShiftM: bendShiftAt(path, index, widths[index]! * 0.5, river.section.bendAsymmetry),
   }))
-  const startSample = samples.find((sample) => sample.distanceM >= path.authoredStartDistance)
-  const endSample = [...samples]
-    .reverse()
-    .find((sample) => sample.distanceM <= path.authoredEndDistance)
+  const startSample = samples[path.authoredStartIndex]
+  const endSample = samples[path.authoredEndIndex]
   return {
     path,
     samples,
@@ -641,18 +645,22 @@ export function planRiver(
   }
 }
 
+/** Solve from the authored upstream end, whichever way the path was drawn. */
 function solveOrderedProfile(
+  path: SampledRiverPath,
   stations: readonly RiverProfileStation[],
   maxSlopePct: number,
   upstreamAtStart: boolean,
 ) {
-  if (upstreamAtStart) return solveDownhillProfile(stations, maxSlopePct)
+  if (upstreamAtStart) {
+    return solveDownhillProfile(stations, maxSlopePct, path.authoredStartIndex)
+  }
   const total = stations.at(-1)?.distanceM ?? 0
   const reversed = [...stations].reverse().map((station) => ({
     ...station,
     distanceM: total - station.distanceM,
   }))
-  return solveDownhillProfile(reversed, maxSlopePct)
+  return solveDownhillProfile(reversed, maxSlopePct, stations.length - 1 - path.authoredEndIndex)
     .reverse()
     .map((sample, index) => ({
       ...sample,

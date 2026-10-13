@@ -107,3 +107,15 @@ describe('cross-section', () => {
     expect(riverSectionTargetHeight({ ...base, lateralM: 40, groundY: 8 })).toBeNull()
   })
 })
+
+describe('profile source', () => {
+  test('solving from a source station holds the stations before it at the source level', () => {
+    // Station 0 lies in an upstream cap whose ground dips 2 m below the source
+    // at station 1. Inset for depth 1 is 0.12.
+    const profile = solveDownhillProfile(stations([0, 2, 1.5, 1]), 50, 1)
+    const expected = [1.88, 1.88, 1.38, 0.88]
+    profile.forEach((sample, index) => expect(sample.waterY).toBeCloseTo(expected[index] ?? 0, 9))
+    expect(profile[0]?.embankmentM).toBeCloseTo(2, 9)
+    expect(profile[0]?.slopePct).toBe(0)
+  })
+})

@@ -38,8 +38,26 @@ export type RiverProfileSample = Readonly<{
  * the previous level (so it never rises: ground rises are cut through), but it
  * may fall no faster than `maxSlopePct` (so steep ground drops leave the water
  * held up on an embankment). Stations must be ordered upstream → downstream.
+ *
+ * The water is set at `sourceIndex`, the authored upstream end. Stations
+ * before it lie in an upstream cap: water there may not sit lower than the
+ * source it flows into, so the cap holds the source level.
  */
 export function solveDownhillProfile(
+  stations: readonly RiverProfileStation[],
+  maxSlopePct: number,
+  sourceIndex = 0,
+): RiverProfileSample[] {
+  const solved = solveFromSource(stations.slice(sourceIndex), maxSlopePct)
+  const sourceWaterY = solved[0]?.waterY
+  if (sourceWaterY === undefined) return solved
+  const heldCap = stations
+    .slice(0, sourceIndex)
+    .map((station) => profileSample(station, sourceWaterY, 0, false))
+  return [...heldCap, ...solved]
+}
+
+function solveFromSource(
   stations: readonly RiverProfileStation[],
   maxSlopePct: number,
 ): RiverProfileSample[] {

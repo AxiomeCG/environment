@@ -17,6 +17,7 @@ import {
   rebuildRiverTerrain,
   riverTerrainBaseline,
   riverTerrainIsApplied,
+  riverSurfaceInset,
   riverTerrainPayloadBytes,
   sampleRiverPath,
   type RiverPlan,
@@ -531,5 +532,35 @@ describe('per-point sizes keep their spline span', () => {
     if (!plan) throw new Error('expected a plan')
     expect(plan.authoredStartWidthM).toBeCloseTo(2, 6)
     expect(plan.authoredEndWidthM).toBeCloseTo(12, 6)
+  })
+})
+
+describe('downhill caps follow the authored ends', () => {
+  test('the higher authored end is upstream even when a cap tip beyond the other end is higher', () => {
+    // Review input: 2 m before x = -8, falling to 1 m at x = 8, then rising to
+    // 5 m at x = 10, under the end cap.
+    const groundAt = (x: number) => (x <= -8 ? 2 : x <= 8 ? 2 - (x + 8) / 16 : 1 + (x - 8) * 2)
+    const terrain = terrainFromFunction(groundAt)
+    const node = river('river_upstream', { flow: 'downhill' })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    expect(plan.upstreamAtStart).toBe(true)
+  })
+
+  test('the profile starts at the authored upstream end and the upstream cap holds its level', () => {
+    // The ground drops to 0 m under the start cap: solving from the cap tip
+    // would pin the whole river 2 m low.
+    const groundAt = (x: number) => (x < -8 ? 0 : 2 - (x + 8) / 16)
+    const terrain = terrainFromFunction(groundAt)
+    const node = river('river_cap_dip', { flow: 'downhill' })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    const authoredStart = plan.samples[plan.path.authoredStartIndex]
+    if (!authoredStart) throw new Error('expected an authored start sample')
+    expect(plan.upstreamAtStart).toBe(true)
+    expect(authoredStart.waterY).toBeCloseTo(groundAt(-8) - riverSurfaceInset(node.depth), 2)
+    for (const capSample of plan.samples.slice(0, plan.path.authoredStartIndex)) {
+      expect(capSample.waterY).toBe(authoredStart.waterY)
+    }
   })
 })
