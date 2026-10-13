@@ -43,7 +43,7 @@ export function decodeLocalHeightScale(channel: number): number {
   return byte < 128 ? byte / 128 : 1 + (byte - 128) / 127
 }
 
-function encodeLocalHeightScale(scale: number): number {
+export function encodeLocalHeightScale(scale: number): number {
   const normalized = clamp(scale, 0, 2)
   return Math.round(
     normalized < 1 ? normalized * 128 : 128 + (normalized - 1) * 127,
