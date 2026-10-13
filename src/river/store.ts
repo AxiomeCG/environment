@@ -68,6 +68,24 @@ export const DEFAULT_RIVER_SETTINGS: Readonly<RiverSettings> = {
   ends: { start: 'rounded', end: 'rounded' },
 }
 
+/** The authoring settings carried by a river or by the store's defaults. */
+export function riverSettingsOf(source: RiverSettings): RiverSettings {
+  return {
+    width: source.width,
+    depth: source.depth,
+    source: source.source,
+    outlet: source.outlet,
+    flowDirection: source.flowDirection,
+    flowSpeed: source.flowSpeed,
+    quality: source.quality,
+    shoreline: source.shoreline,
+    flow: source.flow,
+    maxSlopePct: source.maxSlopePct,
+    section: source.section,
+    ends: source.ends,
+  }
+}
+
 export const useRiverStore = create<RiverStore>((set, get) => ({
   ...DEFAULT_RIVER_SETTINGS,
   draft: null,
@@ -116,21 +134,7 @@ export const useRiverStore = create<RiverStore>((set, get) => ({
     }),
   setPreviewRiver: (previewRiver) => set({ previewRiver }),
   setFeedback: (feedback) => set({ feedback }),
-  adoptRiverSettings: (river) =>
-    set({
-      width: river.width,
-      depth: river.depth,
-      source: river.source,
-      outlet: river.outlet,
-      flowDirection: river.flowDirection,
-      flowSpeed: river.flowSpeed,
-      quality: river.quality,
-      shoreline: river.shoreline,
-      flow: river.flow,
-      maxSlopePct: river.maxSlopePct,
-      section: river.section,
-      ends: river.ends,
-    }),
+  adoptRiverSettings: (river) => set(riverSettingsOf(river)),
   cancelRiverInteraction: () =>
     set({
       draft: null,

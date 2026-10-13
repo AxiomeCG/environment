@@ -6,7 +6,7 @@ import { RiverNode } from './schema'
 
 // The panel reaches CommonJS builds that require three; load it only once
 // three's ES module has been evaluated above (see system.test.tsx).
-const { RiverPlanReadout } = await import('./controls')
+const { RiverPlanReadout } = await import('./controls-sections')
 
 /** The 20 m test lot on ground falling 10 % toward +x. */
 function fallingSite() {
