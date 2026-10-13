@@ -1,7 +1,6 @@
 import { persistedTerrainFieldOf, type SiteNode, type TerrainField } from '@pascal-app/core'
 import { localGrassHeightScaleAt } from '../ground-cover/height-field'
 import {
-  createGrassPaintField,
   paintAt,
   siteBounds,
   type GrassPaintField,
@@ -26,7 +25,7 @@ import {
   asPolygon,
   pointInPolygon,
   polygonArea,
-  interiorsOverlap,
+  polygonIntersectionArea,
   requireSite,
   requireSitePolygon,
   roundFact,
@@ -58,14 +57,6 @@ function* regionCells(
       if (region(x, z)) yield { x, z }
     }
   }
-}
-
-/** The region's area on the lot, sampled at the cell centres of the lot's paint lattice. */
-function onLotM2(bounds: SiteBounds, region: Region): { areaM2: number; cellM: number } {
-  const lattice = createGrassPaintField(bounds, '#000000', 0)
-  let cells = 0
-  for (const _cell of regionCells(lattice, region)) cells += 1
-  return { areaM2: cells * lattice.spacing * lattice.spacing, cellM: lattice.spacing }
 }
 
 function samplePaint(paint: GrassPaintField, height: GrassPaintField, region: Region) {
@@ -164,34 +155,42 @@ function pondFacts(
   })
 }
 
-/** The requested area (the lot by default), refused when it covers no ground of the lot. */
-function requireArea(input: ReadEnvironmentInput, sitePolygon: PlanPoint[]): PlanPoint[] {
+/** Less shared ground than this is contact, not overlap: an area touching the lot's edge. */
+const MIN_SHARED_AREA_M2 = 1e-6
+
+/**
+ * The requested area (the lot by default) and the ground it shares with the lot, exactly;
+ * refused when it shares none.
+ */
+function requireArea(
+  input: ReadEnvironmentInput,
+  sitePolygon: PlanPoint[],
+): { area: PlanPoint[]; onLotM2: number } {
   const area = input.area === undefined ? sitePolygon : asPolygon(input.area)
   if (!area || area.length < 3)
     refuse('invalid_polygon', '`area` is not a usable polygon (3+ points).')
   if (Math.abs(polygonArea(area)) <= 1e-9) refuse('footprint_empty', '`area` covers no ground.')
-  if (!interiorsOverlap(area, sitePolygon)) {
+  const onLotM2 = polygonIntersectionArea(area, sitePolygon)
+  if (onLotM2 <= MIN_SHARED_AREA_M2) {
     refuse('outside_property', '`area` shares no ground with the lot; only the lot is read.')
   }
-  return area
+  return { area, onLotM2 }
 }
 
 export const readEnvironment: AgentOperation<ReadEnvironmentInput> = (nodes, input) => {
   const site = requireSite(nodes)
   const sitePolygon = requireSitePolygon(site)
-  const area = requireArea(input, sitePolygon)
+  const { area, onLotM2 } = requireArea(input, sitePolygon)
   const region: Region = (x, z) => pointInPolygon(x, z, area) && pointInPolygon(x, z, sitePolygon)
   const bounds = siteBounds(sitePolygon)
   const terrain = persistedTerrainFieldOf(site)
   const hollowsLimit = Math.min(20, Math.max(0, Math.floor(input.hollowsLimit ?? 5)))
   const hollowScan = scanHollows(terrain, sitePolygon, region, hollowsLimit)
-  const onLot = onLotM2(bounds, region)
   return {
     result: {
       siteId: String(site.id),
       areaM2: roundFact(Math.abs(polygonArea(area))),
-      onLotM2: roundFact(onLot.areaM2),
-      onLotCellM: onLot.cellM,
+      onLotM2: roundFact(onLotM2),
       groundCover: groundCoverFacts(nodes, site, bounds, region),
       surface: surfaceFacts(nodes, site, bounds, region),
       ponds: pondFacts(nodes, site, sitePolygon, terrain),

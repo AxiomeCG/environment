@@ -1,4 +1,5 @@
 import { segmentsIntersect, type AnyNode, type SiteNode } from '@pascal-app/core'
+import { ShapeUtils, Vector2 } from 'three'
 import { refuse } from './refuse'
 import type { PlanPoint, SceneNodes } from './types'
 
@@ -169,53 +170,60 @@ function edgesOf(polygon: ReadonlyArray<PlanPoint>): [PlanPoint, PlanPoint][] {
   return edges
 }
 
-/** Points that witness a polygon's interior when one of them lies inside another polygon. */
-function probePoints(polygon: ReadonlyArray<PlanPoint>): PlanPoint[] {
-  const edges = edgesOf(polygon)
-  const centroid: PlanPoint = [
-    polygon.reduce((sum, point) => sum + point[0], 0) / polygon.length,
-    polygon.reduce((sum, point) => sum + point[1], 0) / polygon.length,
-  ]
-  return [
-    ...polygon,
-    ...edges.map(([a, b]): PlanPoint => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]),
-    centroid,
-  ]
+/** A simple polygon as triangles (ear clipping), concave ones included; none when degenerate. */
+function triangulate(polygon: ReadonlyArray<PlanPoint>): PlanPoint[][] {
+  const contour = polygon.map(([x, z]) => new Vector2(x, z))
+  return ShapeUtils.triangulateShape(contour, []).flatMap((indices) => {
+    const triangle = indices.map((index) => polygon[index])
+    return triangle.every((point) => point !== undefined) ? [triangle as PlanPoint[]] : []
+  })
 }
 
-function orientation(a: PlanPoint, b: PlanPoint, c: PlanPoint): number {
-  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-}
-
-/** Whether two segments cross at a point inside both: touching or running along does not count. */
-function segmentsCrossProperly(a: PlanPoint, b: PlanPoint, c: PlanPoint, d: PlanPoint): boolean {
-  const eps = 1e-12
-  const abC = orientation(a, b, c)
-  const abD = orientation(a, b, d)
-  const cdA = orientation(c, d, a)
-  const cdB = orientation(c, d, b)
-  return (
-    ((abC > eps && abD < -eps) || (abC < -eps && abD > eps)) &&
-    ((cdA > eps && cdB < -eps) || (cdA < -eps && cdB > eps))
-  )
+/** The part of a convex `subject` on the inner side of each edge of the convex `clip`. */
+function clipConvex(subject: PlanPoint[], clip: PlanPoint[]): PlanPoint[] {
+  const winding = Math.sign(polygonArea(clip)) || 1
+  let output = subject
+  for (const [a, b] of edgesOf(clip)) {
+    const side = (point: PlanPoint) =>
+      winding * ((b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0]))
+    const input = output
+    output = []
+    for (let index = 0; index < input.length; index += 1) {
+      const current = input[index]
+      const next = input[(index + 1) % input.length]
+      if (!current || !next) continue
+      const currentSide = side(current)
+      const nextSide = side(next)
+      if (currentSide >= 0) output.push(current)
+      if (currentSide >= 0 !== nextSide >= 0) {
+        const t = currentSide / (currentSide - nextSide)
+        output.push([
+          current[0] + (next[0] - current[0]) * t,
+          current[1] + (next[1] - current[1]) * t,
+        ])
+      }
+    }
+    if (output.length < 3) return []
+  }
+  return output
 }
 
 /**
- * Whether two polygons share ground of some area: a vertex, edge midpoint or centroid of either
- * strictly inside the other, or edges that cross. Touching along an edge or at a corner does not.
+ * The area two simple polygons share, exactly: both are cut into triangles and every pair of
+ * triangles is intersected. Polygons that only touch along an edge or at a corner share none.
  */
-export function interiorsOverlap(
+export function polygonIntersectionArea(
   first: ReadonlyArray<PlanPoint>,
   second: ReadonlyArray<PlanPoint>,
-): boolean {
-  const inside = (point: PlanPoint, polygon: ReadonlyArray<PlanPoint>) =>
-    signedDistanceToPolygon(point[0], point[1], polygon) > 1e-9
-  if (probePoints(first).some((point) => inside(point, second))) return true
-  if (probePoints(second).some((point) => inside(point, first))) return true
-  const secondEdges = edgesOf(second)
-  return edgesOf(first).some(([a, b]) =>
-    secondEdges.some(([c, d]) => segmentsCrossProperly(a, b, c, d)),
-  )
+): number {
+  const secondTriangles = triangulate(second)
+  let area = 0
+  for (const triangle of triangulate(first)) {
+    for (const other of secondTriangles) {
+      area += Math.abs(polygonArea(clipConvex(triangle, other)))
+    }
+  }
+  return area
 }
 
 /** Whether a polyline passes through a polygon: a point inside it, or a segment crossing it. */

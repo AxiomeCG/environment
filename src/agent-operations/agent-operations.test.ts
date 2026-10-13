@@ -497,6 +497,41 @@ describe('read_environment', () => {
       [8, 8.01],
     ]
     expect(codeOf(() => runRead(grassed, { area: sliver }))).toBe('did-not-refuse')
+    // Sol's frame: a ring around the lot, touching all four of its edges, covering none of it.
+    const frame = [
+      [-2, -2],
+      [18, -2],
+      [18, 18],
+      [16, 18],
+      [16, 0],
+      [0, 0],
+      [0, 18],
+      [-2, 18],
+    ]
+    expect(codeOf(() => runRead(grassed, { area: frame }))).toBe('outside_property')
+  })
+
+  test('a concave lot reads itself, its on-lot area exact', () => {
+    // Sol's U-shaped lot: its vertex average lies in the notch, outside the U.
+    const site = SiteNode.parse({
+      id: 'site_u',
+      polygon: {
+        type: 'polygon',
+        points: [
+          [0, 0],
+          [10, 0],
+          [10, 10],
+          [8, 10],
+          [8, 2],
+          [2, 2],
+          [2, 10],
+          [0, 10],
+        ],
+      },
+      children: [],
+    })
+    const { result } = runRead({ [site.id]: site as AnyNode }, {})
+    expect(result.onLotM2).toBeCloseTo(100 - 6 * 8, 6)
   })
 
   test('reports only the rivers that cross the area, each over its whole course', () => {
