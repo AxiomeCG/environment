@@ -179,6 +179,10 @@ function duplicateIds(info: PondTargetInfo): AnyNodeId[] {
     .map((pond) => pond.id as AnyNodeId)
 }
 
+/**
+ * Writes the record that speaks for the joined ponds, seeded in the hollow being changed: once the
+ * water drops below their saddle, it stays where the person is working, not in a hollow gone dry.
+ */
 function updatePrimary(
   scene: PondSceneWriter,
   info: PondTargetInfo,
@@ -186,11 +190,12 @@ function updatePrimary(
 ): void {
   if (!info.pond) return
   const duplicates = duplicateIds(info)
+  const seed: [number, number] = [info.basin.seed[0], info.basin.seed[1]]
   applyPondChanges(scene, {
     update: [
       {
         id: info.pond.id as AnyNodeId,
-        data: patch as unknown as Partial<AnyNode>,
+        data: { ...patch, seed } as unknown as Partial<AnyNode>,
       },
     ],
     ...(duplicates.length > 0 ? { delete: duplicates } : {}),

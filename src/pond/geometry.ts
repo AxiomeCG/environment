@@ -21,6 +21,7 @@ import {
   type PondSurface,
 } from './basin'
 import { buildPondShoreGeometry, createPondShoreDistances } from './shoreline'
+import { pondHoldsWater } from './connectivity'
 import { buildPondPropGeometry } from './props'
 import {
   POND_KIND,
@@ -270,7 +271,7 @@ function connectedPondsForBasin(
   for (const sibling of siblings) {
     if ((sibling.type as string) !== POND_KIND) continue
     const parsed = PondNodeSchema.safeParse(sibling)
-    if (parsed.success && parsed.data.visible && parsed.data.id !== node.id) {
+    if (parsed.success && pondHoldsWater(parsed.data) && parsed.data.id !== node.id) {
       candidates.push(parsed.data)
     }
   }

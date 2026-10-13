@@ -10,12 +10,17 @@ const WET_EPSILON = 1e-4
 
 type SceneNodes = Readonly<Record<AnyNodeId, AnyNode>>
 
+/** Whether a pond record counts as water: a hidden one is not drawn, nor joined to others. */
+export function pondHoldsWater(pond: Pick<PondNode, 'visible'>): boolean {
+  return pond.visible !== false
+}
+
 function sitePonds(nodes: SceneNodes, siteId: string): PondNode[] {
   const ponds: PondNode[] = []
   for (const node of Object.values(nodes)) {
-    if ((node?.type as string) === POND_KIND && String(node.parentId) === siteId) {
-      ponds.push(node as unknown as PondNode)
-    }
+    if ((node?.type as string) !== POND_KIND || String(node.parentId) !== siteId) continue
+    const pond = node as unknown as PondNode
+    if (pondHoldsWater(pond)) ponds.push(pond)
   }
   return ponds
 }

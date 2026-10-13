@@ -189,6 +189,19 @@ function terrainLot(cols: number, rows: number, shape: (heights: Int16Array) => 
   return { [site.id]: site as AnyNode }
 }
 
+function pondsOf(nodes: Nodes): PondNodeValue[] {
+  return Object.values(nodes).filter(
+    (node) => String(node.type) === POND_KIND,
+  ) as unknown as PondNodeValue[]
+}
+
+/** The water a stored pond holds, as the renderer resolves it from its own seed and level. */
+function persistedSurface(site: SiteNode, pond: PondNodeValue) {
+  const terrain = persistedTerrainFieldOf(site)
+  const basin = terrain ? analyzePondBasin(terrain, site.polygon.points, pond.seed) : null
+  return basin ? buildPondSurface(basin, pond.waterLevel) : null
+}
+
 function codeOf(run: () => unknown): string {
   try {
     run()
@@ -663,6 +676,41 @@ describe('fill_pond', () => {
       (panelWater?.connectedPonds ?? []).map((pond) => pond.id).sort(),
     )
     expect(changes?.delete).toEqual(result.mergedPondIds as string[])
+  })
+
+  test('lowering joined ponds keeps the water in the hollow asked for, as stored', () => {
+    // Sol's round-2 case: the surviving record was seeded in the other hollow, now dry at 1 m.
+    const left = PondNode.parse({ id: 'pond_left', parentId: 'site_two_basins', seed: [2, 2], waterLevel: 1 })
+    const right = PondNode.parse({ id: 'pond_right', parentId: 'site_two_basins', seed: [5, 3], waterLevel: 4 })
+    const { nodes, site } = twoBasinLot([left, right])
+    const { result, changes } = run(nodes, { at: [2, 2], level: 1 })
+    const stored = pondsOf(applyChanges(nodes, changes))
+    expect(stored).toHaveLength(1)
+    const [pond] = stored
+    if (!pond) throw new Error('no pond left')
+    const persisted = persistedSurface(site, pond)
+    expect(persisted?.area ?? 0).toBeGreaterThan(1)
+    expect(result.areaM2).toBeCloseTo(persisted?.area ?? 0, 3)
+  })
+
+  test('hidden ponds take no part, as the renderer leaves them out', () => {
+    const shown = PondNode.parse({ id: 'pond_shown', parentId: 'site_bowl', seed: [2, 2], waterLevel: 1 })
+    const hidden = PondNode.parse({
+      id: 'pond_hidden',
+      parentId: 'site_bowl',
+      seed: [2.3, 2.3],
+      waterLevel: 4,
+      visible: false,
+    })
+    const { nodes } = bowlLot()
+    const scene: Nodes = {
+      ...nodes,
+      [shown.id]: shown as unknown as AnyNode,
+      [hidden.id]: hidden as unknown as AnyNode,
+    }
+    const { result, changes } = run(scene, { at: [2, 2], level: 1 })
+    expect(result.pondId).toBe('pond_shown')
+    expect(changes?.delete).toBeUndefined()
   })
 
   test('lowering and emptying keep the props, and say how many the water now hides', () => {

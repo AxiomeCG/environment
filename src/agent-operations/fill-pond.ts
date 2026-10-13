@@ -216,7 +216,10 @@ function stockProps(
   return withShownCount(props, 'water-lily', input.lilies, surface, seed)
 }
 
-/** The pond write: the primary record updated (connected ones merged into it), or a new pond. */
+/**
+ * The pond write: the primary record updated, seeded in this hollow as the panel seeds it, with
+ * the connected ones merged into it; or a new pond. The stored pond is then this basin's water.
+ */
 function pondChanges(
   site: SiteNode,
   basin: PondBasin,
@@ -228,6 +231,7 @@ function pondChanges(
   if (water.primary) {
     const pondId = String(water.primary.id)
     const data = {
+      seed: [basin.seed[0], basin.seed[1]],
       waterLevel: level,
       props,
       ...(input.quality ? { quality: input.quality } : {}),

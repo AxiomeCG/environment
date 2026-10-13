@@ -168,6 +168,29 @@ describe('pond scene actions', () => {
     })
   })
 
+  test('lowering joined ponds keeps the water in the hollow being changed', () => {
+    const left = PondNode.parse({
+      id: 'pond_low_left',
+      parentId: 'site_pond_actions',
+      seed: [2, 2],
+      waterLevel: 1,
+    })
+    const right = PondNode.parse({
+      id: 'pond_high_right',
+      parentId: 'site_pond_actions',
+      seed: [5, 3],
+      waterLevel: 4,
+    })
+    const site = pondSite([left.id, right.id])
+    const { scene, changes } = sceneWith([site, left, right])
+
+    // The left hollow's water is the right record's (the higher one speaks for joined ponds).
+    const result = commitPondLevelAction(scene, target(right.id, [2, 2]), 'lower', 'clear')
+
+    expect(result.ok).toBe(true)
+    expect(changes[0]?.update?.[0]).toMatchObject({ id: right.id, data: { seed: [2, 2] } })
+  })
+
   test('enforces the koi cap before committing a scene change', () => {
     const props = Array.from({ length: 32 }, (_, index) => pondProp(`koi_${index}`, 'koi'))
     const pond = PondNode.parse({
