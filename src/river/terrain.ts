@@ -113,11 +113,22 @@ export type RiverTerrainGrid = Readonly<{
 }>
 
 /**
- * Stable hash of everything that changes a river's excavation: the rivers'
- * grading fields, the Site boundary, and the terrain grid. The terrain stamp
- * records it at apply time; RiverSystem compares it against the live scene
- * and skips its write entirely when the Site already carries exactly this
- * carve (an apply and a reconcile must be one history entry, not two).
+ * Revision of the planner and carver, hashed into every applied-carve
+ * fingerprint. A stamp written by an earlier revision therefore never passes
+ * as applied: on load the Site is re-carved from the baseline that stamp
+ * tracks, keeping later sculpts. Bump it whenever a change alters what any
+ * river carves. Stamps written before revisions existed hashed none, so they
+ * never match either.
+ */
+const RIVER_CARVE_REVISION = 2
+
+/**
+ * Stable hash of everything that changes a river's excavation: the carver
+ * revision, the rivers' grading fields, the Site boundary, and the terrain
+ * grid. The terrain stamp records it at apply time; RiverSystem compares it
+ * against the live scene and skips its write entirely when the Site already
+ * carries exactly this carve (an apply and a reconcile must be one history
+ * entry, not two).
  */
 export function riverTerrainFingerprint(
   rivers: readonly RiverNode[],
@@ -143,7 +154,14 @@ export function riverTerrainFingerprint(
   const gridKey = grid
     ? { cols: grid.cols, rows: grid.rows, spacing: grid.spacing, step: grid.step, origin: grid.origin }
     : null
-  return hashString(JSON.stringify({ grading, boundary: boundary ?? null, grid: gridKey }))
+  return hashString(
+    JSON.stringify({
+      revision: RIVER_CARVE_REVISION,
+      grading,
+      boundary: boundary ?? null,
+      grid: gridKey,
+    }),
+  )
 }
 
 /**

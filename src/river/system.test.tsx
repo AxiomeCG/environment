@@ -8,12 +8,14 @@ import {
   type AnyNode,
   type AnyNodeId,
   type SceneApi,
+  type SiteNode as SiteNodeType,
 } from '@pascal-app/core'
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { createRiver, type RiverNodeChanges } from './actions'
+import { extractSourceAt, type HistoricalSource } from './historical-source'
 import { RiverNode } from './schema'
 import RiverSystem from './system'
-import { rebuildRiverTerrain } from './terrain'
+import { rebuildRiverTerrain, riverTerrainIsApplied, type RiverTerrainResult } from './terrain'
 
 // The renderer's CommonJS build requires three. Loading it only after this
 // file's ES imports have evaluated three keeps the test independent of which
@@ -86,6 +88,20 @@ function sculptWestEdge(): void {
       },
     ],
   })
+}
+
+/** Raise the far corner of a saved Site by 1 m, away from any river, as a later sculpt. */
+function sculptCorner(site: SiteNodeType): SiteNodeType {
+  const field = decodeTerrainField(site.terrain)
+  if (!field) throw new Error('expected persisted terrain')
+  const heights = new Int16Array(field.heights)
+  for (let row = field.rows - 4; row < field.rows; row += 1) {
+    for (let col = field.cols - 4; col < field.cols; col += 1) {
+      const index = row * field.cols + col
+      heights[index] = (heights[index] ?? 0) + Math.round(1 / field.step)
+    }
+  }
+  return SiteNode.parse({ ...site, terrain: encodeTerrainField({ ...field, heights }) })
 }
 
 const DOWNHILL_RIVER = {
@@ -211,20 +227,68 @@ describe('RiverSystem reconciliation', () => {
     }
   })
 
-  test('loading a saved river that meets itself at two levels removes its carve', async () => {
-    const ground = siteWith(fallingGround)
-    const asDrawn = RiverNode.parse({ id: 'river_saved_crossing', parentId: SITE_ID, ...crossingRiver, flow: 'as_drawn' })
-    const carved = rebuildRiverTerrain(ground, [asDrawn])
-    const savedSite = SiteNode.parse({ ...ground, terrain: carved.terrainData, metadata: carved.metadata })
-    setSceneNodes([savedSite, { ...asDrawn, flow: 'downhill' } as unknown as AnyNode])
-    const { sceneApi, writes } = recordingSceneApi()
+  describe('saves stamped by an earlier carver', () => {
+    // 1436490 carved and stamped a downhill river crossing itself, before
+    // the planner refused such rivers; its stamp matches today's inputs.
+    const EARLIER_CARVER_COMMIT = '1436490'
+    let earlier: HistoricalSource | null = null
+    let carveAsSaved: ((site: SiteNodeType, rivers: readonly unknown[]) => RiverTerrainResult) | null =
+      null
+    beforeAll(async () => {
+      earlier = extractSourceAt(EARLIER_CARVER_COMMIT)
+      const terrainModule = (await earlier.load('src/river/terrain.ts')) as {
+        rebuildRiverTerrain: (site: SiteNodeType, rivers: readonly unknown[]) => RiverTerrainResult
+      }
+      carveAsSaved = terrainModule.rebuildRiverTerrain
+    })
+    afterAll(() => earlier?.dispose())
 
-    const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
-    try {
-      expect(writes).toHaveLength(1)
-      expect(currentSite().terrain).toEqual(ground.terrain)
-    } finally {
-      await renderer.unmount()
+    /** The Site exactly as the earlier version saved it with these rivers. */
+    function savedByEarlierCarver(ground: SiteNodeType, rivers: readonly RiverNode[]): SiteNodeType {
+      if (!carveAsSaved) throw new Error('The earlier carver did not load.')
+      const saved = carveAsSaved(ground, rivers)
+      return SiteNode.parse({ ...ground, terrain: saved.terrainData, metadata: saved.metadata })
     }
+
+    test('a downhill crossing carved and stamped before refusals existed is restored on load', async () => {
+      // Review round 3 input: the crossing on ground falling 10 % toward +x.
+      const ground = siteWith(fallingGround)
+      const crossing = RiverNode.parse({ id: 'river_saved_crossing', parentId: SITE_ID, ...crossingRiver })
+      const savedSite = savedByEarlierCarver(ground, [crossing])
+      expect(savedSite.terrain).not.toEqual(ground.terrain)
+      setSceneNodes([savedSite, crossing as unknown as AnyNode])
+      const { sceneApi, writes } = recordingSceneApi()
+
+      const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+      try {
+        expect(writes).toHaveLength(1)
+        expect(currentSite().terrain).toEqual(ground.terrain)
+      } finally {
+        await renderer.unmount()
+      }
+    })
+
+    test('an earlier stamp is re-carved from its own baseline, keeping later sculpts', async () => {
+      const ground = siteWith(fallingGround)
+      const straight = RiverNode.parse({
+        id: 'river_saved_straight',
+        parentId: SITE_ID,
+        ...DOWNHILL_RIVER,
+        flow: 'as_drawn',
+      })
+      const savedSite = sculptCorner(savedByEarlierCarver(ground, [straight]))
+      setSceneNodes([savedSite, straight as unknown as AnyNode])
+      const { sceneApi, writes } = recordingSceneApi()
+
+      const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+      try {
+        // Re-stamped once; the as-drawn carve and the sculpt are both unchanged.
+        expect(writes).toHaveLength(1)
+        expect(currentSite().terrain).toEqual(savedSite.terrain)
+        expect(riverTerrainIsApplied(currentSite(), [straight])).toBe(true)
+      } finally {
+        await renderer.unmount()
+      }
+    })
   })
 })

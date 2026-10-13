@@ -1,8 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
 import {
   createTerrainField,
   encodeTerrainField,
@@ -10,6 +6,7 @@ import {
   type SiteNode as SiteNodeType,
   type TerrainField,
 } from '@pascal-app/core'
+import { extractSourceAt, type HistoricalSource } from './historical-source'
 import { RiverNode } from './schema'
 import { rebuildRiverTerrain } from './terrain'
 
@@ -18,33 +15,35 @@ import { rebuildRiverTerrain } from './terrain'
  * oracle: a river saved before v3 must carve exactly as it did there.
  */
 const PRE_V3_COMMIT = '1aa0bc3'
-const REPOSITORY_ROOT = resolve(import.meta.dir, '../..')
 
 type PreV3Carver = Readonly<{
   parseRiver: (raw: unknown) => unknown
   carve: (site: SiteNodeType, rivers: readonly unknown[]) => { terrain: TerrainField }
 }>
 
-let checkout = ''
+let source: HistoricalSource | null = null
 let preV3: PreV3Carver | null = null
 
 beforeAll(async () => {
-  checkout = mkdtempSync(join(tmpdir(), 'river-pre-v3-'))
-  const archive = join(checkout, 'src.tar')
-  execFileSync('git', ['-C', REPOSITORY_ROOT, 'archive', `--output=${archive}`, PRE_V3_COMMIT, 'src'])
-  execFileSync('tar', ['-x', '-f', archive, '-C', checkout])
-  symlinkSync(join(REPOSITORY_ROOT, 'node_modules'), join(checkout, 'node_modules'))
-  const terrainModule = await import(join(checkout, 'src/river/terrain.ts'))
-  const schemaModule = await import(join(checkout, 'src/river/schema.ts'))
-  preV3 = {
-    parseRiver: (raw) => schemaModule.RiverNode.parse(raw),
-    carve: (site, rivers) => terrainModule.rebuildRiverTerrain(site, rivers),
-  }
+  source = extractSourceAt(PRE_V3_COMMIT)
+  preV3 = await loadCarver(source)
 })
 
-afterAll(() => {
-  if (checkout) rmSync(checkout, { recursive: true, force: true })
-})
+afterAll(() => source?.dispose())
+
+/** The carve entry point and river schema of an extracted source, as untyped functions. */
+async function loadCarver(extracted: HistoricalSource) {
+  const terrainModule = (await extracted.load('src/river/terrain.ts')) as {
+    rebuildRiverTerrain: PreV3Carver['carve']
+  }
+  const schemaModule = (await extracted.load('src/river/schema.ts')) as {
+    RiverNode: { parse: PreV3Carver['parseRiver'] }
+  }
+  return {
+    parseRiver: (raw: unknown) => schemaModule.RiverNode.parse(raw),
+    carve: terrainModule.rebuildRiverTerrain,
+  }
+}
 
 /** The fixture of the review: a 20 m lot at 0.5 m spacing and 1 cm height steps. */
 function terrainFrom(heightAt: (x: number, z: number) => number): TerrainField {
