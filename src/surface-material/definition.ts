@@ -49,8 +49,12 @@ export const surfaceMaterialDefinition: SurfaceMaterialDefinition = {
     deletable: false,
   },
 
-  // No inspector fields; deleting a Surface takes its paint tiles along.
-  parametrics: { groups: [], onDeleteCascade: paintTilesDeletedWith },
+  // Deleting a Surface takes its paint tiles along; it still shows no inspector.
+  parametrics: {
+    groups: [],
+    customPanel: () => import('./no-inspector'),
+    onDeleteCascade: paintTilesDeletedWith,
+  },
   geometry: buildSurfaceMaterialGeometry,
   bake: 'replace',
   bakeGeometry: buildSurfaceMaterialBakeGeometry,

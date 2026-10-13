@@ -327,4 +327,10 @@ describe('paint tiles', () => {
       grassTileIds.length,
     )
   })
+
+  test('the Surface still shows no inspector now that its descriptor carries the cascade', async () => {
+    const panel = await surfaceMaterialDefinition.parametrics?.customPanel?.()
+    const render = panel?.default as unknown as (() => unknown) | undefined
+    expect(render?.()).toBeNull()
+  })
 })
