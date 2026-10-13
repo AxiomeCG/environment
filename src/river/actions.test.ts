@@ -229,3 +229,55 @@ describe('river authoring scene actions', () => {
     expect(commits).toEqual([])
   })
 })
+
+describe('downhill rivers that meet themselves', () => {
+  // A path that crosses itself at (8, 8): the first reach passes there early,
+  // the last reach passes there again after running down to x = 14.
+  const crossing = [
+    [2, 2],
+    [14, 14],
+    [2, 14],
+    [14, 2],
+  ] as const
+
+  function siteFallingTowardPositiveX() {
+    const terrain = createTerrainField({ origin: [0, 0], spacing: 1, cols: 17, rows: 17, step: 0.01 })
+    for (let row = 0; row < terrain.rows; row += 1) {
+      for (let col = 0; col < terrain.cols; col += 1) {
+        terrain.heights[row * terrain.cols + col] = Math.round((2 - 0.1 * col) / terrain.step)
+      }
+    }
+    return SiteNode.parse({ ...flatSite(), terrain: encodeTerrainField(terrain) })
+  }
+
+  test('refuses a downhill crossing whose reaches would meet at two water levels', () => {
+    const { commits, scene } = mutableScene(siteFallingTowardPositiveX())
+
+    const result = createRiver(scene, SITE_ID, { ...DEFAULTS, flow: 'downhill', points: crossing })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('cross')
+    expect(commits).toEqual([])
+  })
+
+  test('accepts a downhill crossing on level ground, where both reaches share one level', () => {
+    const { commits, scene } = mutableScene(flatSite())
+
+    const result = createRiver(scene, SITE_ID, { ...DEFAULTS, flow: 'downhill', points: crossing })
+
+    expect(result.ok).toBe(true)
+    expect(commits).toHaveLength(1)
+  })
+
+  test('refuses switching an as-drawn crossing to downhill on sloping ground', () => {
+    const { commits, scene } = mutableScene(siteFallingTowardPositiveX())
+    const created = createRiver(scene, SITE_ID, { ...DEFAULTS, points: crossing })
+    if (!created.river) throw new Error('expected the as-drawn crossing to be created')
+
+    const switched = updateRiver(scene, created.river.id, { flow: 'downhill' })
+
+    expect(switched.ok).toBe(false)
+    expect(switched.message).toContain('cross')
+    expect(commits).toHaveLength(1)
+  })
+})

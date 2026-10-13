@@ -54,6 +54,13 @@ export type SampledRiverPath = Readonly<{
   length: number
   authoredStartDistance: number
   authoredEndDistance: number
+  /**
+   * Station of each sample along the authored polyline, taken from the spline
+   * span it was sampled on (caps clamp to the nearest authored end). Per-point
+   * sizes interpolate on these stations, so a reach keeps its own width and
+   * depth where the path crosses itself or closes into a loop.
+   */
+  authoredStations: readonly number[]
 }>
 
 export type RiverTerrainResult = Readonly<{
@@ -80,6 +87,11 @@ export function riverTerrainBaseline(site: SiteNode): TerrainField | null {
   if (!current) return baseline
   if (!sameGrid(current, baseline) || !sameGrid(current, applied)) return current
   return reconcileExternalTerrainEdits(baseline, applied, current)
+}
+
+/** The river-free terrain a carve of this Site starts from; flat when the Site has none yet. */
+export function riverSourceTerrain(site: SiteNode): TerrainField {
+  return riverTerrainBaseline(site) ?? createSiteTerrainField(site)
 }
 
 /** River ids represented by the Site's last applied excavation, when known. */
@@ -324,10 +336,17 @@ export function sampleRiverPath(
         )
       : []
   const sourcePrefix = sourceSamples.slice(0, -1)
-  const sampled = [...sourcePrefix, ...authoredSamples, ...outletSamples.slice(1)]
+  const outletSuffix = outletSamples.slice(1)
+  const sampled = [...sourcePrefix, ...authoredSamples, ...outletSuffix]
+  const sampledStations = [
+    ...sourcePrefix.map(() => 0),
+    ...authoredSpanStations(authored, authoredSamples.length),
+    ...outletSuffix.map(() => authoredLength),
+  ]
   const authoredStartIndex = sourcePrefix.length
   const authoredEndIndex = authoredStartIndex + authoredSamples.length - 1
   const points: SampledRiverPoint[] = []
+  const authoredStations: number[] = []
   let normalizedAuthoredStartIndex = 0
   let normalizedAuthoredEndIndex = 0
   for (let index = 0; index < sampled.length; index += 1) {
@@ -336,6 +355,7 @@ export function sampleRiverPath(
     const previous = points.at(-1)
     if (!previous || Math.hypot(candidate[0] - previous[0], candidate[2] - previous[2]) > 1e-6) {
       points.push(candidate)
+      authoredStations.push(sampledStations[index] ?? 0)
     }
     if (index === authoredStartIndex) normalizedAuthoredStartIndex = points.length - 1
     if (index === authoredEndIndex) normalizedAuthoredEndIndex = points.length - 1
@@ -358,8 +378,31 @@ export function sampleRiverPath(
         length,
         authoredStartDistance: distances[normalizedAuthoredStartIndex] ?? 0,
         authoredEndDistance: distances[normalizedAuthoredEndIndex] ?? length,
+        authoredStations,
       }
     : null
+}
+
+/**
+ * Authored-polyline station of each spline sample. The alignment sampler is
+ * uniform in the span parameter and gives every authored span the same number
+ * of segments (a two-point path is subdivided uniformly), so a sample's span
+ * and in-span fraction follow from its index alone.
+ */
+function authoredSpanStations(
+  authored: readonly (readonly [number, number])[],
+  sampleCount: number,
+): number[] {
+  const cumulative = cumulativeLengths(authored)
+  const spanCount = authored.length - 1
+  const segmentCount = Math.max(1, sampleCount - 1)
+  return Array.from({ length: sampleCount }, (_, index) => {
+    const spanPosition = (index / segmentCount) * spanCount
+    const span = Math.min(spanCount - 1, Math.floor(spanPosition))
+    const spanStart = cumulative[span] ?? 0
+    const spanEnd = cumulative[span + 1] ?? spanStart
+    return lerp(spanStart, spanEnd, spanPosition - span)
+  })
 }
 
 /**
@@ -465,117 +508,38 @@ export function riverEndpointSize(
   }
 }
 
-/**
- * Width at a distance along the sampled path: per-point values interpolated
- * along the authored polyline, scaled by the cap profile. Sample points in
- * the cap extensions clamp to the nearest authored end value.
- */
-export function riverWidthAtDistance(
-  river: RiverNode,
-  path: SampledRiverPath,
-  distance: number,
+/** Per-point sizes resolved at their stations along the authored polyline. */
+type RiverAuthoredSizes = Readonly<{
+  stationsM: readonly number[]
+  widthsM: readonly number[]
+  depthsM: readonly number[]
+}>
+
+function authoredSizesOf(river: RiverNode): RiverAuthoredSizes {
+  return {
+    stationsM: cumulativeLengths(sanitizePoints(river.points)),
+    widthsM: sanitizedPointValues(river, river.pointWidths, river.width),
+    depthsM: sanitizedPointValues(river, river.pointDepths, river.depth),
+  }
+}
+
+/** Per-point values interpolated linearly at one authored station. */
+function valueAtStation(
+  stations: readonly number[],
+  values: readonly number[],
+  stationM: number,
 ): number {
-  const authoredDistance = authoredDistanceAt(river, path, distance)
-  const base = valueAlongAuthored(
-    river,
-    sanitizedPointValues(river, river.pointWidths, river.width),
-    authoredDistance,
-  )
-  return base * riverPathWidthScale(path, river, distance)
-}
-
-/** Depth at a distance along the sampled path; see `riverWidthAtDistance`. */
-export function riverDepthAtDistance(
-  river: RiverNode,
-  path: SampledRiverPath,
-  distance: number,
-): number {
-  const authoredDistance = authoredDistanceAt(river, path, distance)
-  const base = valueAlongAuthored(
-    river,
-    sanitizedPointValues(river, river.pointDepths, river.depth),
-    authoredDistance,
-  )
-  return base * riverPathDepthScale(path, river, distance)
-}
-
-function authoredDistances(river: RiverNode): number[] {
-  const authored = sanitizePoints(river.points)
-  const distances = [0]
-  for (let index = 1; index < authored.length; index += 1) {
-    distances.push(
-      distances[index - 1]! +
-        Math.hypot(
-          authored[index]![0] - authored[index - 1]![0],
-          authored[index]![1] - authored[index - 1]![1],
-        ),
-    )
+  const first = values[0] ?? 0
+  if (stationM <= 0) return first
+  for (let index = 1; index < stations.length; index += 1) {
+    const spanEnd = stations[index] ?? 0
+    if (stationM > spanEnd) continue
+    const spanStart = stations[index - 1] ?? 0
+    const amount = spanEnd - spanStart <= EPSILON ? 0 : (stationM - spanStart) / (spanEnd - spanStart)
+    const startValue = values[index - 1] ?? first
+    return lerp(startValue, values[index] ?? startValue, amount)
   }
-  return distances
-}
-
-function valueAlongAuthored(river: RiverNode, values: readonly number[], distance: number): number {
-  const distances = authoredDistances(river)
-  if (values.length === 0) return 0
-  if (distance <= 0) return values[0]!
-  for (let index = 1; index < distances.length; index += 1) {
-    if (distance > distances[index]!) continue
-    const span = distances[index]! - distances[index - 1]!
-    const amount = span <= EPSILON ? 0 : (distance - distances[index - 1]!) / span
-    const start = values[index - 1] ?? values.at(-1)!
-    const end = values[index] ?? start
-    return start + (end - start) * amount
-  }
-  return values.at(-1)!
-}
-
-/**
- * Map a sampled-path distance onto authored-polyline distance by projecting
- * the sample onto the authored segments. The spline stays close to its
- * control polyline, so the nearest projection is a stable station mapping.
- */
-function authoredDistanceAt(river: RiverNode, path: SampledRiverPath, distance: number): number {
-  const authored = sanitizePoints(river.points)
-  const distances = authoredDistances(river)
-  const sample = pointAtDistance(path, distance)
-  let best = 0
-  let bestDistanceSquared = Number.POSITIVE_INFINITY
-  for (let index = 1; index < authored.length; index += 1) {
-    const start = authored[index - 1]!
-    const end = authored[index]!
-    const dx = end[0] - start[0]
-    const dz = end[1] - start[1]
-    const lengthSquared = dx * dx + dz * dz
-    const amount =
-      lengthSquared <= EPSILON
-        ? 0
-        : clamp01(((sample[0] - start[0]) * dx + (sample[2] - start[1]) * dz) / lengthSquared)
-    const offsetX = sample[0] - (start[0] + dx * amount)
-    const offsetZ = sample[2] - (start[1] + dz * amount)
-    const distanceSquared = offsetX * offsetX + offsetZ * offsetZ
-    if (distanceSquared < bestDistanceSquared) {
-      bestDistanceSquared = distanceSquared
-      best = distances[index - 1]! + Math.sqrt(lengthSquared) * amount
-    }
-  }
-  return best
-}
-
-function pointAtDistance(path: SampledRiverPath, distance: number): SampledRiverPoint {
-  if (distance <= 0) return path.points[0]!
-  for (let index = 1; index < path.points.length; index += 1) {
-    if (distance > path.distances[index]!) continue
-    const start = path.points[index - 1]!
-    const end = path.points[index]!
-    const span = path.distances[index]! - path.distances[index - 1]!
-    const amount = span <= EPSILON ? 0 : (distance - path.distances[index - 1]!) / span
-    return [
-      start[0] + (end[0] - start[0]) * amount,
-      start[1] + (end[1] - start[1]) * amount,
-      start[2] + (end[2] - start[2]) * amount,
-    ]
-  }
-  return path.points.at(-1)!
+  return values.at(-1) ?? first
 }
 
 export type RiverPlanSample = Readonly<{
@@ -619,8 +583,17 @@ export function planRiver(
 ): RiverPlan | null {
   const path = sampleRiverPath(terrain, river, boundary)
   if (!path) return null
-  const widths = path.distances.map((distance) => riverWidthAtDistance(river, path, distance))
-  const depths = path.distances.map((distance) => riverDepthAtDistance(river, path, distance))
+  const sizes = authoredSizesOf(river)
+  const widths = path.distances.map(
+    (distance, index) =>
+      valueAtStation(sizes.stationsM, sizes.widthsM, path.authoredStations[index] ?? 0) *
+      riverPathWidthScale(path, river, distance),
+  )
+  const depths = path.distances.map(
+    (distance, index) =>
+      valueAtStation(sizes.stationsM, sizes.depthsM, path.authoredStations[index] ?? 0) *
+      riverPathDepthScale(path, river, distance),
+  )
   const stations: RiverProfileStation[] = path.points.map((point, index) => ({
     distanceM: path.distances[index]!,
     groundY: point[1],
@@ -684,6 +657,36 @@ function solveOrderedProfile(
       // Slope sign follows the authored direction, so report descent as negative here.
       slopePct: -sample.slopePct,
     }))
+}
+
+/**
+ * Largest water-level difference where a river's channel meets itself: two
+ * stations whose channels overlap in plan although the course between them
+ * is longer than their separation plus both half-widths (a crossing, a loop
+ * closing on itself, or hairpin legs whose banks touch). Bends within one
+ * reach never qualify. Zero when the river never meets itself.
+ */
+export function riverPlanSelfOverlapGapM(plan: RiverPlan): number {
+  const { points } = plan.path
+  let gapM = 0
+  for (let first = 0; first < plan.samples.length; first += 1) {
+    for (let second = first + 1; second < plan.samples.length; second += 1) {
+      const earlier = plan.samples[first]
+      const later = plan.samples[second]
+      const earlierPoint = points[first]
+      const laterPoint = points[second]
+      if (!earlier || !later || !earlierPoint || !laterPoint) continue
+      const contactM = (earlier.widthM + later.widthM) * 0.5
+      const apartM = Math.hypot(
+        laterPoint[0] - earlierPoint[0],
+        laterPoint[2] - earlierPoint[2],
+      )
+      const courseM = later.distanceM - earlier.distanceM
+      if (apartM >= contactM || courseM <= apartM + contactM) continue
+      gapM = Math.max(gapM, Math.abs(earlier.waterY - later.waterY))
+    }
+  }
+  return gapM
 }
 
 function bendShiftAt(
@@ -1252,6 +1255,18 @@ function sanitizePoints(
     }
   }
   return sanitized
+}
+
+function cumulativeLengths(points: readonly (readonly [number, number])[]): number[] {
+  const lengths: number[] = []
+  let total = 0
+  let previous: readonly [number, number] | undefined
+  for (const point of points) {
+    if (previous) total += Math.hypot(point[0] - previous[0], point[1] - previous[1])
+    lengths.push(total)
+    previous = point
+  }
+  return lengths
 }
 
 function polylineLength(points: readonly (readonly [number, number])[]): number {

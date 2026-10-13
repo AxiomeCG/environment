@@ -19,6 +19,8 @@ import {
   riverTerrainIsApplied,
   riverTerrainPayloadBytes,
   sampleRiverPath,
+  type RiverPlan,
+  type RiverPlanSample,
   type RiverTerrainResult,
 } from './terrain'
 
@@ -486,3 +488,55 @@ function terrainFromFunction(heightAtX: (x: number) => number): TerrainField {
   }
   return { ...terrain, heights }
 }
+
+function sampleNearest(plan: RiverPlan, distanceM: number): RiverPlanSample {
+  return plan.samples.reduce((best, sample) =>
+    Math.abs(sample.distanceM - distanceM) < Math.abs(best.distanceM - distanceM) ? sample : best,
+  )
+}
+
+describe('per-point sizes keep their spline span', () => {
+  // Sol's review input: the path crosses itself, so a spatial nearest-segment
+  // lookup confuses the narrow first reach with the wide last one.
+  const crossingPoints: [number, number][] = [
+    [-8, -8],
+    [8, 8],
+    [-8, 8],
+    [8, -8],
+  ]
+
+  test('a self-crossing river keeps each reach on its own width', () => {
+    const terrain = flatTerrain()
+    const node = river('river_crossing', {
+      points: crossingPoints,
+      pointWidths: [2, 2, 12, 12],
+      pointDepths: [1, 1, 4, 4],
+    })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    // Stations from the review: 12.17 m lies on the first (narrow) reach near
+    // the crossing, 52.42 m on the last (wide) reach.
+    expect(sampleNearest(plan, 12.17).widthM).toBeCloseTo(2, 6)
+    expect(sampleNearest(plan, 52.42).widthM).toBeCloseTo(12, 6)
+    expect(sampleNearest(plan, 12.17).depthM).toBeCloseTo(1, 6)
+    expect(sampleNearest(plan, 52.42).depthM).toBeCloseTo(4, 6)
+  })
+
+  test('a loop closing on its first point keeps distinct end sizes', () => {
+    const terrain = flatTerrain()
+    const node = river('river_loop', {
+      points: [
+        [0, -8],
+        [8, 0],
+        [0, 8],
+        [-8, 0],
+        [0, -8],
+      ],
+      pointWidths: [2, 6, 6, 6, 12],
+    })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    expect(plan.authoredStartWidthM).toBeCloseTo(2, 6)
+    expect(plan.authoredEndWidthM).toBeCloseTo(12, 6)
+  })
+})
