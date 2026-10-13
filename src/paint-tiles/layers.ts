@@ -3,13 +3,15 @@ import { resolveGrassHeightField } from '../ground-cover/height-field'
 import {
   DEFAULT_GRASS_PAINT_COLOR,
   resolveGrassPaintField,
+  siteBounds,
   type GrassPaintField,
   type SiteBounds,
 } from '../ground-cover/paint-field'
-import type { GrassFieldNode } from '../ground-cover/schema'
+import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
 import { resolveSurfaceMaterialField, type SurfaceMaterialField } from '../surface-material/field'
-import type { SurfaceMaterialNode } from '../surface-material/schema'
+import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
 import { composePaintTiles, paintTilesOf } from './compose'
+import type { PaintTileMap } from './schema'
 
 /**
  * Each painted map as everything reads it: the node's own map (or its unpainted default) with the
@@ -53,4 +55,29 @@ export function siteChildrenIn(
   context: Pick<GeometryContext, 'resolve'>,
 ): unknown[] {
   return site.children.map((id) => context.resolve(id as never))
+}
+
+/**
+ * The map a write targets as the scene holds it now: the painted node's map with its tiles over
+ * it. Null when the node or its site is gone, or the node has no such map.
+ */
+export function resolvePaintedMap(
+  nodes: Readonly<Record<string, unknown>>,
+  target: { siteId: string; targetId: string; map: PaintTileMap },
+): GrassPaintField | null {
+  const site = nodes[target.siteId] as SiteNode | undefined
+  const node = nodes[target.targetId] as { type?: unknown } | undefined
+  if (site?.type !== 'site' || !node) return null
+  const bounds = siteBounds(site.polygon.points)
+  const candidates = Object.values(nodes)
+  if (node.type === GRASS_FIELD_KIND) {
+    const grass = node as GrassFieldNode
+    return target.map === 'heightMap'
+      ? resolveGroundCoverHeight(grass, candidates, bounds)
+      : resolveGroundCoverPaint(grass, candidates, bounds)
+  }
+  if (node.type === SURFACE_MATERIAL_KIND && target.map === 'paintMap') {
+    return resolveSurfacePaint(node as SurfaceMaterialNode, candidates, bounds)
+  }
+  return null
 }

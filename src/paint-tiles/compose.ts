@@ -47,6 +47,17 @@ export function sharesLattice(
   return Math.abs(tile.spacing - field.spacing) <= field.spacing * 1e-9
 }
 
+/** Whether two fields hold the same cells: one spacing, one origin, one size. */
+export function onSameLattice(first: GrassPaintField, second: GrassPaintField): boolean {
+  return (
+    first.cols === second.cols &&
+    first.rows === second.rows &&
+    first.spacing === second.spacing &&
+    first.origin[0] === second.origin[0] &&
+    first.origin[1] === second.origin[1]
+  )
+}
+
 /** A tile on the field's own lattice: its pixels replace the cells they sit on. */
 function blitTile(field: GrassPaintField, tile: PaintTileNode): void {
   const values = decodePaintTileValues(tile.tile)

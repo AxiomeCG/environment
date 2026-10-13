@@ -1,4 +1,4 @@
-import type { AnyNode } from '@pascal-app/core'
+import { SiteNode, type AnyNode } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
 import {
   createGrassPaintField,
@@ -11,6 +11,9 @@ import {
   beginPaintStroke,
   currentPaintField,
 } from '../ground-cover/paint-stroke'
+import { createGroundCoverNode } from '../ground-cover/create-node'
+import { paintAt } from '../ground-cover/paint-field'
+import { commitPaintWrite, type PaintWriter } from './commit'
 import {
   changedPaintTileTargets,
   composePaintTiles,
@@ -23,6 +26,7 @@ import {
   type PaintTileChanges,
   type PaintTileTarget,
 } from './plan'
+import { resolveGroundCoverPaint } from './layers'
 import { decodePixelRuns, encodePixelRuns } from './runs'
 import { PAINT_TILE_SIDE, PaintTileData } from './schema'
 
@@ -246,5 +250,44 @@ describe('paint tiles', () => {
     expect(paintTileFloorplanDependencies({ id: 'grass-field_tiles' }, nodes).map(String)).toEqual(
       ids.sort(),
     )
+  })
+
+  test('a stroke begun before newer paint landed writes only its own cells over it', () => {
+    // Sol's round-2 case: the stroke's snapshot is empty, newer paint at [2, 2] lands in the
+    // same tile, then the older stroke at [1, 1] commits.
+    const site = SiteNode.parse({
+      id: 'site_tiles',
+      polygon: { type: 'polygon', points: square(16) },
+    })
+    const grass = createGroundCoverNode(site)
+    let nodes: Nodes = { [site.id]: site as AnyNode, [grass.id]: grass as unknown as AnyNode }
+    const scene: PaintWriter = {
+      nodes: () => nodes as never,
+      applyChanges: (changes) => {
+        nodes = applyTiles(nodes, changes as PaintTileChanges)
+      },
+    }
+    const target: PaintTileTarget = { siteId: site.id, targetId: grass.id, map: 'paintMap' }
+    const bounds = siteBounds(square(16))
+    const snapshot = resolveGroundCoverPaint(grass, Object.values(nodes), bounds)
+    const stale = beginPaintStroke({
+      field: snapshot,
+      boundary: square(16),
+      settings: { radius: 0.4 },
+    })
+    advancePaintStroke(stale, 1, 1)
+    const newer = beginPaintStroke({
+      field: snapshot,
+      boundary: square(16),
+      settings: { radius: 0.4 },
+    })
+    advancePaintStroke(newer, 2, 2)
+
+    commitPaintWrite(scene, target, newer.snapshot, currentPaintField(newer))
+    commitPaintWrite(scene, target, stale.snapshot, currentPaintField(stale))
+
+    const painted = resolveGroundCoverPaint(grass, Object.values(nodes), bounds)
+    expect(paintAt(painted, 1, 1).a).toBe(1)
+    expect(paintAt(painted, 2, 2).a).toBe(1)
   })
 })

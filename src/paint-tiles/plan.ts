@@ -1,6 +1,6 @@
 import type { AnyNode, AnyNodeId } from '@pascal-app/core'
 import type { GrassPaintField } from '../ground-cover/paint-field'
-import { sharesLattice } from './compose'
+import { onSameLattice, sharesLattice } from './compose'
 import {
   encodePaintTile,
   PAINT_TILE_SIDE,
@@ -110,13 +110,7 @@ function blockOverlapsTile(
 }
 
 function assertSameLattice(before: GrassPaintField, after: GrassPaintField): void {
-  if (
-    before.cols !== after.cols ||
-    before.rows !== after.rows ||
-    before.spacing !== after.spacing ||
-    before.origin[0] !== after.origin[0] ||
-    before.origin[1] !== after.origin[1]
-  ) {
+  if (!onSameLattice(before, after)) {
     throw new RangeError('A paint write compares two fields on one lattice')
   }
 }
