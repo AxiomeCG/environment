@@ -15,6 +15,8 @@ import { inspectPondTarget, targetPondAtSeed } from '../pond/actions'
 import { analyzePondBasin, buildPondSurface } from '../pond/basin'
 import { resolveRenderablePondProps } from '../pond/props'
 import { POND_KIND, PondNode, type PondNode as PondNodeValue } from '../pond/schema'
+import { RiverNode, type RiverNode as RiverNodeValue } from '../river/schema'
+import { rebuildRiverTerrain, riverTerrainBaseline, sampleRiverPath } from '../river/terrain'
 import { resolveGroundCoverPaint, resolveSurfacePaint } from '../paint-tiles/layers'
 import {
   surfaceMaterialWeightsAt,
@@ -129,6 +131,41 @@ function renderedProps(site: SiteNode, pond: PondNodeValue) {
   const shown = resolveRenderablePondProps(pond.props, buildPondSurface(basin, pond.waterLevel))
   const koi = shown.filter(({ prop }) => prop.kind === 'koi').length
   return { koi, lilies: shown.length - koi }
+}
+
+function runRead(nodes: Nodes, input: unknown) {
+  const operation = environmentAgentOperations.read_environment
+  if (!operation) throw new Error('read_environment missing')
+  return operation(nodes, input as never, { activeLevelId: null })
+}
+
+/** The flat 16 m lot with rivers, carved into its terrain as the river system carves them. */
+function withRivers(rivers: RiverNodeValue[]): Nodes {
+  const { nodes, siteId } = flatLot()
+  const site = nodes[siteId] as SiteNode
+  const carved = rebuildRiverTerrain(site, rivers)
+  const nextSite = {
+    ...site,
+    terrain: carved.terrainData,
+    metadata: carved.metadata,
+    children: rivers.map((river) => river.id),
+  } as SiteNode
+  const next: Nodes = { [siteId]: nextSite as AnyNode }
+  for (const river of rivers) next[river.id] = river as unknown as AnyNode
+  return next
+}
+
+/** A rectangular lot over a 1 m terrain grid of `cols` x `rows` heights (0.01 m steps). */
+function terrainLot(cols: number, rows: number, shape: (heights: Int16Array) => void): Nodes {
+  const terrain = createTerrainField({ origin: [0, 0], spacing: 1, cols, rows, step: 0.01 })
+  shape(terrain.heights)
+  const site = SiteNode.parse({
+    id: 'site_terrain',
+    polygon: { type: 'polygon', points: [[0, 0], [cols - 1, 0], [cols - 1, rows - 1], [0, rows - 1]] },
+    terrain: encodeTerrainField(terrain),
+    children: [],
+  })
+  return { [site.id]: site as AnyNode }
 }
 
 function codeOf(run: () => unknown): string {
@@ -303,6 +340,91 @@ describe('read_environment', () => {
     expect(hollows.length).toBe(1)
     expect(hollows[0]?.bottomM).toBeCloseTo(0, 6)
     expect(hollows[0]?.spillLevelM).toBeCloseTo(4, 6)
+  })
+
+  test('reads only the lot: an area off it is refused, one straddling its edge is clipped', () => {
+    const { nodes } = flatLot()
+    const grassed = applyChanges(nodes, runLayGround(nodes, [{ site: true, ground: 'grass', featherM: 0 }]).changes)
+    expect(codeOf(() => runRead(grassed, { area: [[20, 20], [21, 20], [21, 21], [20, 21]] }))).toBe(
+      'outside_property',
+    )
+    const { result } = runRead(grassed, { area: [[14, 14], [18, 14], [18, 18], [14, 18]] })
+    const groundCover = result.groundCover as { coveredM2: number; coverageOfAreaPct: number }
+    expect(result.areaM2).toBe(16)
+    // 2x2 m of the area is on the lot, give or take one lattice row along each cut.
+    expect(result.onLotM2 as number).toBeGreaterThan(4)
+    expect(result.onLotM2 as number).toBeLessThan(4.3)
+    expect(groundCover.coveredM2).toBeCloseTo(result.onLotM2 as number, 2)
+    expect(groundCover.coverageOfAreaPct).toBe(100)
+  })
+
+  test('reports a river along its whole course, water and bed apart', () => {
+    const river = RiverNode.parse({
+      id: 'river_across',
+      parentId: 'site_flat',
+      points: [[4, 8], [12, 8]],
+      width: 2,
+      source: 'mountain',
+      outlet: 'sea',
+    })
+    const { result } = runRead(withRivers([river]), {})
+    const [facts] = result.rivers as {
+      lengthM: number
+      start: { atM: number[]; waterM: number; bedM: number }
+      end: { atM: number[] }
+      drawn: boolean
+    }[]
+    // A mountain source and a sea outlet run the course on to the lot's edges.
+    expect(facts?.drawn).toBe(true)
+    expect(facts?.lengthM).toBeCloseTo(16, 6)
+    expect(facts?.start.atM).toEqual([0, 8])
+    expect(facts?.end.atM).toEqual([16, 8])
+    expect(facts?.start.waterM).toBeGreaterThan(facts?.start.bedM ?? 0)
+  })
+
+  test('measures a curved river on the course the renderer draws, not its authored segments', () => {
+    const river = RiverNode.parse({
+      id: 'river_bend',
+      parentId: 'site_flat',
+      points: [[2, 4], [8, 12], [14, 4]],
+      width: 2,
+    })
+    const nodes = withRivers([river])
+    const site = nodes.site_flat as SiteNode
+    const baseline = riverTerrainBaseline(site)
+    const course = baseline ? sampleRiverPath(baseline, river, site.polygon.points) : null
+    const [facts] = runRead(nodes, {}).result.rivers as { lengthM: number }[]
+    expect(facts?.lengthM).toBeCloseTo(course?.length ?? 0, 3)
+    expect(facts?.lengthM).not.toBeCloseTo(20, 1)
+  })
+
+  test('takes a flat bottom of many cells as one hollow, so a second hollow is still found', () => {
+    // Sol's fixture: a 40 x 5 m flat bottom, and a single-cell pit beyond it.
+    const nodes = terrainLot(51, 7, (heights) => {
+      heights.fill(600)
+      for (let row = 1; row <= 5; row += 1) {
+        for (let col = 1; col <= 40; col += 1) heights[row * 51 + col] = 0
+      }
+      heights[3 * 51 + 47] = 100
+    })
+    const { result } = runRead(nodes, { hollowsLimit: 5 })
+    expect((result.hollows as { atM: number[] }[]).map((hollow) => hollow.atM)).toEqual([
+      [1, 1],
+      [47, 3],
+    ])
+    expect(result.hollowsTruncated).toBe(false)
+  })
+
+  test('says when the scan gave up before the hollow limit', () => {
+    // Forty dips on the lot's edge drain off it; the pit inside is past the scan's budget.
+    const nodes = terrainLot(90, 7, (heights) => {
+      heights.fill(600)
+      for (let dip = 0; dip < 40; dip += 1) heights[1 + dip * 2] = 100
+      heights[3 * 90 + 85] = 300
+    })
+    const { result } = runRead(nodes, { hollowsLimit: 5 })
+    expect(result.hollows).toEqual([])
+    expect(result.hollowsTruncated).toBe(true)
   })
 })
 

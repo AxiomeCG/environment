@@ -1,4 +1,4 @@
-import type { AnyNode, SiteNode } from '@pascal-app/core'
+import { segmentsIntersect, type AnyNode, type SiteNode } from '@pascal-app/core'
 import { refuse } from './refuse'
 import type { PlanPoint, SceneNodes } from './types'
 
@@ -148,4 +148,29 @@ export function roundFact(value: number): number {
 export function hash01(seed: number, x: number, z: number): number {
   const phase = Math.sin(x * 12.9898 + z * 78.233 + seed * 37.719) * 43758.5453
   return phase - Math.floor(phase)
+}
+
+function edgesOf(polygon: ReadonlyArray<PlanPoint>): [PlanPoint, PlanPoint][] {
+  const edges: [PlanPoint, PlanPoint][] = []
+  for (let index = 0; index < polygon.length; index += 1) {
+    const first = polygon[index]
+    const second = polygon[(index + 1) % polygon.length]
+    if (first && second) edges.push([first, second])
+  }
+  return edges
+}
+
+/** Whether two polygons share ground: a vertex of either inside the other, or crossing edges. */
+export function polygonsOverlap(
+  first: ReadonlyArray<PlanPoint>,
+  second: ReadonlyArray<PlanPoint>,
+): boolean {
+  if (first.some((point) => pointInPolygon(point[0], point[1], second))) return true
+  if (second.some((point) => pointInPolygon(point[0], point[1], first))) return true
+  const secondEdges = edgesOf(second)
+  return edgesOf(first).some(([a, b]) =>
+    secondEdges.some(([c, d]) =>
+      segmentsIntersect([a[0], a[1]], [b[0], b[1]], [c[0], c[1]], [d[0], d[1]]),
+    ),
+  )
 }
