@@ -13,6 +13,7 @@ import {
   RiverSelectField,
   type RiverSelectOption,
 } from './controls-fields'
+import { riverPlanLimits, type RiverLimit } from './limits'
 import { resolvePointValues } from './planner'
 import type {
   RiverEndEnd,
@@ -455,7 +456,8 @@ export function RiverProfileSection({
   onChange,
   river,
   site,
-}: SettingsProps & { river: RiverNode | null; site: SiteNode | null }) {
+  siblings,
+}: SettingsProps & ReadoutProps) {
   return (
     <RiverPanelGroup title="Water profile">
       <RiverSelectField
@@ -479,31 +481,71 @@ export function RiverProfileSection({
         Downhill water never rises: it cuts through high ground and crosses dips on an
         embankment. As drawn follows the terrain exactly as placed.
       </RiverHint>
-      <RiverPlanReadout river={river} site={site} />
+      <RiverPlanReadout river={river} siblings={siblings} site={site} />
     </RiverPanelGroup>
   )
 }
 
-/** What the selected or drafted river's plan says: why it is not built, or its facts. */
-export function RiverPlanReadout({ river, site }: { river: RiverNode | null; site: SiteNode | null }) {
-  const plan = useMemo(() => {
-    if (!river || !site || river.parentId !== site.id) return null
-    // The river-free ground the carve starts from, never a live preview's
-    // excavation: what is reported is what an apply would build.
-    return planRiver(riverSourceTerrain(site), river, site.polygon.points)
-  }, [river, site])
-  if (!plan) return null
-  if (plan.refusal) {
+type ReadoutProps = Readonly<{
+  river: RiverNode | null
+  site: SiteNode | null
+  /** The Site's other rivers, which this one may meet. */
+  siblings: readonly RiverNode[]
+}>
+
+/**
+ * What the selected or drafted river's plan says: why it is not built, or its
+ * facts and anything about it the river tool does not solve yet.
+ */
+export function RiverPlanReadout({ river, site, siblings }: ReadoutProps) {
+  const readout = useMemo(() => planReadout({ river, site, siblings }), [river, site, siblings])
+  if (!readout) return null
+  if (readout.plan.refusal) {
     return (
       <p
         className="rounded-md bg-destructive/10 px-3 py-2 text-[11px] leading-relaxed text-destructive"
         role="alert"
       >
-        {`Not built: ${plan.refusal.message}`}
+        {`Not built: ${readout.plan.refusal.message}`}
       </p>
     )
   }
-  return <RiverFactsList facts={plan.facts} />
+  return (
+    <>
+      <RiverFactsList facts={readout.plan.facts} />
+      {readout.limits.length > 0 ? <RiverLimitsList limits={readout.limits} /> : null}
+    </>
+  )
+}
+
+/**
+ * Plans on the river-free ground the carve starts from, never a live
+ * preview's excavation: what is reported is what an apply would build.
+ */
+function planReadout({ river, site, siblings }: ReadoutProps) {
+  if (!river || !site || river.parentId !== site.id) return null
+  const terrain = riverSourceTerrain(site)
+  const plan = planRiver(terrain, river, site.polygon.points)
+  if (!plan) return null
+  const siblingPlans = siblings.flatMap((sibling) => {
+    if (sibling.id === river.id) return []
+    const siblingPlan = planRiver(terrain, sibling, site.polygon.points)
+    return siblingPlan ? [siblingPlan] : []
+  })
+  return { plan, limits: riverPlanLimits(river, plan, siblingPlans) }
+}
+
+function RiverLimitsList({ limits }: { limits: readonly RiverLimit[] }) {
+  return (
+    <ul
+      className="flex flex-col gap-1 rounded-md bg-sidebar-accent/40 px-3 py-2 text-[11px] leading-relaxed text-sidebar-foreground/80"
+      role="note"
+    >
+      {limits.map((limit) => (
+        <li key={limit.code}>{`Not supported: ${limit.message}`}</li>
+      ))}
+    </ul>
+  )
 }
 
 /** What a buildable river is, and what it costs in earthworks. */

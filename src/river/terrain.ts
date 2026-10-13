@@ -26,7 +26,7 @@ import {
   type RiverProfileStation,
 } from './planner'
 import type { RiverNode } from './schema'
-import { channelSelfOverlapGapM } from './self-overlap'
+import { channelSelfOverlapGapM, type ChannelStation } from './self-overlap'
 
 const RIVER_TERRAIN_METADATA_KEY = 'environmentRiverTerrain'
 const RIVER_TERRAIN_METADATA_VERSION = 1
@@ -761,7 +761,21 @@ function solveOrderedProfile(
  * Where a downhill river meets itself, both reaches must share one water
  * level; a larger difference than this would show as a step in the water.
  */
-const SELF_OVERLAP_LEVEL_TOLERANCE_M = 0.05
+export const SELF_OVERLAP_LEVEL_TOLERANCE_M = 0.05
+
+/** The planned channel's centreline stations, for measuring where channels meet. */
+export function channelStations(
+  path: SampledRiverPath,
+  samples: readonly RiverPlanSample[],
+): ChannelStation[] {
+  return samples.map((sample, index) => ({
+    x: path.points[index]?.[0] ?? 0,
+    z: path.points[index]?.[2] ?? 0,
+    courseM: sample.distanceM,
+    halfWidthM: sample.widthM * 0.5,
+    waterY: sample.waterY,
+  }))
+}
 
 /**
  * A downhill river whose channel meets itself at two water levels cannot be
@@ -772,14 +786,7 @@ function selfOverlapRefusal(
   path: SampledRiverPath,
   samples: readonly RiverPlanSample[],
 ): RiverPlanRefusal | null {
-  const stations = samples.map((sample, index) => ({
-    x: path.points[index]?.[0] ?? 0,
-    z: path.points[index]?.[2] ?? 0,
-    courseM: sample.distanceM,
-    halfWidthM: sample.widthM * 0.5,
-    waterY: sample.waterY,
-  }))
-  const levelGapM = channelSelfOverlapGapM(stations)
+  const levelGapM = channelSelfOverlapGapM(channelStations(path, samples))
   if (levelGapM <= SELF_OVERLAP_LEVEL_TOLERANCE_M) return null
   return {
     code: 'self_crossing',

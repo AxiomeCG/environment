@@ -1,8 +1,8 @@
 /**
- * Where a river's channel meets itself: a crossing, a loop closing on itself,
- * or hairpin legs whose banks touch. Measured between the channel's segments,
- * not its sample points, so a narrow crossing that falls between two samples
- * is found however coarsely the river is sampled.
+ * Where a river's channel meets itself (a crossing, a loop closing on itself,
+ * or hairpin legs whose banks touch) or another channel. Measured between the
+ * channels' segments, not their sample points, so a narrow crossing that
+ * falls between two samples is found however coarsely the river is sampled.
  */
 
 /** One centreline station of a planned channel, in plan coordinates. */
@@ -64,24 +64,57 @@ function channelSegments(stations: readonly ChannelStation[]): ChannelSegment[] 
   return segments
 }
 
-/** Water-level difference where two segments' channels touch, or 0 if they do not. */
+/**
+ * Largest water-level difference where two different channels overlap in
+ * plan, such as two rivers crossing. Zero when they never touch.
+ */
+export function channelsMeetGapM(
+  first: readonly ChannelStation[],
+  second: readonly ChannelStation[],
+): number {
+  const secondSegments = channelSegments(second)
+  let gapM = 0
+  for (const firstSegment of channelSegments(first)) {
+    for (const secondSegment of secondSegments) {
+      const contact = segmentContact(firstSegment, secondSegment)
+      if (contact) gapM = Math.max(gapM, Math.abs(contact.onFirst.waterY - contact.onSecond.waterY))
+    }
+  }
+  return gapM
+}
+
+/** Water-level difference where two segments of one channel touch, or 0 if they do not. */
 function contactLevelGapM(first: ChannelSegment, second: ChannelSegment): number {
+  const contact = segmentContact(first, second)
+  if (!contact) return 0
+  const { onFirst, onSecond, apartM, contactM } = contact
+  if (Math.abs(onSecond.courseM - onFirst.courseM) <= apartM + contactM) return 0
+  return Math.abs(onFirst.waterY - onSecond.waterY)
+}
+
+type SegmentContact = Readonly<{
+  onFirst: ChannelStation
+  onSecond: ChannelStation
+  apartM: number
+  contactM: number
+}>
+
+/** Where two segments' channels overlap in plan, at their closest points, or null. */
+function segmentContact(first: ChannelSegment, second: ChannelSegment): SegmentContact | null {
   if (
     first.maxX < second.minX ||
     second.maxX < first.minX ||
     first.maxZ < second.minZ ||
     second.maxZ < first.minZ
   ) {
-    return 0
+    return null
   }
   const { firstAmount, secondAmount } = closestSegmentParameters(first, second)
   const onFirst = stationAlong(first, firstAmount)
   const onSecond = stationAlong(second, secondAmount)
   const apartM = Math.hypot(onSecond.x - onFirst.x, onSecond.z - onFirst.z)
   const contactM = onFirst.halfWidthM + onSecond.halfWidthM
-  if (apartM >= contactM) return 0
-  if (Math.abs(onSecond.courseM - onFirst.courseM) <= apartM + contactM) return 0
-  return Math.abs(onFirst.waterY - onSecond.waterY)
+  return apartM < contactM ? { onFirst, onSecond, apartM, contactM } : null
 }
 
 function stationAlong(segment: ChannelSegment, amount: number): ChannelStation {

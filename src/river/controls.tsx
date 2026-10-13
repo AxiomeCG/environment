@@ -13,6 +13,7 @@ import {
   deleteRiver,
   riverNodeOf,
   resolveActiveRiverSite,
+  riversForSite,
   updateRiver,
   type RiverSelectionContext,
 } from './actions'
@@ -54,6 +55,7 @@ export function RiverControls() {
       <RiverProfileSection
         onChange={changeSettings}
         river={panel.plannedRiver}
+        siblings={panel.siblingRivers}
         site={panel.activeSite}
         values={values}
       />
@@ -83,6 +85,8 @@ type RiverPanel = Readonly<{
   selectedRiver: RiverNode | null
   /** The selected river, or the draft being drawn: the one whose plan the panel reports. */
   plannedRiver: RiverNode | null
+  /** The active Site's other rivers, which the planned one may meet. */
+  siblingRivers: readonly RiverNode[]
   values: RiverSettings
   seaOutletAvailable: boolean
   path: RiverPathState
@@ -112,11 +116,21 @@ function useRiverPanel(): RiverPanel {
     const river = riverNodeOf(nodes[selection.selectedIds[0] as AnyNodeId])
     return river?.parentId === activeSite?.id ? river : null
   }, [activeSite, nodes, selection.selectedIds])
+  const plannedRiver = selectedRiver ?? (draft ? draftPreviewNode() : null)
+  const plannedRiverId = plannedRiver?.id ?? null
+  const siblingRivers = useMemo(
+    () =>
+      activeSite
+        ? riversForSite(nodes, activeSite.id).filter((river) => river.id !== plannedRiverId)
+        : [],
+    [activeSite, nodes, plannedRiverId],
+  )
   return {
     sceneApi,
     activeSite,
     selectedRiver,
-    plannedRiver: selectedRiver ?? (draft ? draftPreviewNode() : null),
+    plannedRiver,
+    siblingRivers,
     values: selectedRiver ? riverSettingsOf(selectedRiver) : storedSettings,
     seaOutletAvailable,
     path: {
