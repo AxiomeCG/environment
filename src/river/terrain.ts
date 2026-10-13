@@ -17,6 +17,7 @@ import {
 import {
   asDrawnProfile,
   resolvePointValues,
+  riverSectionDepthM,
   riverSectionShape,
   riverSectionTargetHeight,
   riverSurfaceInset,
@@ -532,7 +533,10 @@ export type RiverPlanSample = Readonly<{
   /** Bank-top height (water level plus surface inset) the section is built from. */
   channelTopY: number
   widthM: number
+  /** Depth the section reaches at its deepest line; the water is inset from this. */
   depthM: number
+  /** How much shallower than authored the section had to be (a too-narrow trapezoid). */
+  depthShortfallM: number
   slopePct: number
   embankmentM: number
   rapid: boolean
@@ -579,59 +583,81 @@ export function planRiver(
   const path = sampleRiverPath(terrain, river, boundary)
   if (!path) return null
   const sizes = authoredSizesOf(river)
-  const widths = path.distances.map(
-    (distance, index) =>
-      valueAtStation(sizes.stationsM, sizes.widthsM, path.authoredStations[index] ?? 0) *
-      riverPathWidthScale(path, river, distance),
-  )
-  const depths = path.distances.map(
-    (distance, index) =>
-      valueAtStation(sizes.stationsM, sizes.depthsM, path.authoredStations[index] ?? 0) *
-      riverPathDepthScale(path, river, distance),
+  const sections = path.distances.map((distance, index) =>
+    plannedSection(river, path, sizes, distance, path.authoredStations[index] ?? 0),
   )
   const stations: RiverProfileStation[] = path.points.map((point, index) => ({
-    distanceM: path.distances[index]!,
+    distanceM: path.distances[index] ?? 0,
     groundY: point[1],
-    depthM: depths[index]!,
+    depthM: sections[index]?.depthM ?? 0,
   }))
-  // Connected ends pin the flow: a mountain source feeds the start and a sea
-  // outlet drains the end, so both put upstream at the start. Otherwise the
-  // higher authored end is upstream; cap tips beyond it never decide.
-  const upstreamAtStart =
-    river.flow !== 'downhill' ||
-    river.source === 'mountain' ||
-    river.outlet === 'sea' ||
-    (stations[path.authoredStartIndex]?.groundY ?? 0) >=
-      (stations[path.authoredEndIndex]?.groundY ?? 0)
+  const upstreamAtStart = upstreamIsAtStart(river, path, stations)
   const profile =
     river.flow === 'downhill'
       ? solveOrderedProfile(river, path, stations, upstreamAtStart)
       : asDrawnProfile(stations)
-  const samples: RiverPlanSample[] = profile.map((entry, index) => ({
-    distanceM: entry.distanceM,
-    groundY: entry.groundY,
-    waterY: entry.waterY,
-    channelTopY: entry.waterY + riverSurfaceInset(depths[index]!),
-    widthM: widths[index]!,
-    depthM: depths[index]!,
-    slopePct: entry.slopePct,
-    embankmentM: entry.embankmentM,
-    rapid: entry.rapid,
-    bendShiftM: bendShiftAt(path, index, widths[index]! * 0.5, river.section.bendAsymmetry),
-  }))
-  const startSample = samples[path.authoredStartIndex]
-  const endSample = samples[path.authoredEndIndex]
+  const samples = profile.map((entry, index): RiverPlanSample => {
+    const section = sections[index] ?? { widthM: 0, depthM: 0, depthShortfallM: 0 }
+    return {
+      ...entry,
+      ...section,
+      channelTopY: entry.waterY + riverSurfaceInset(section.depthM),
+      bendShiftM: bendShiftAt(path, index, section.widthM * 0.5, river.section.bendAsymmetry),
+    }
+  })
   return {
     path,
     samples,
     facts: measureRiverFacts(terrain, river, path, samples),
     upstreamAtStart,
     maxReachM: Math.max(...samples.map((sample) => sectionReachM(river, sample))),
-    authoredStartWidthM: startSample?.widthM ?? river.width,
-    authoredEndWidthM: endSample?.widthM ?? river.width,
+    authoredStartWidthM: samples[path.authoredStartIndex]?.widthM ?? river.width,
+    authoredEndWidthM: samples[path.authoredEndIndex]?.widthM ?? river.width,
     sizes,
     refusal: river.flow === 'downhill' ? selfOverlapRefusal(path, samples) : null,
   }
+}
+
+type PlannedSection = Readonly<{ widthM: number; depthM: number; depthShortfallM: number }>
+
+/**
+ * Width and depth at one point of the path: per-point sizes at its authored
+ * station, shaped by the cap profile, with the depth the section can reach.
+ */
+function plannedSection(
+  river: RiverNode,
+  path: SampledRiverPath,
+  sizes: RiverAuthoredSizes,
+  distanceM: number,
+  stationM: number,
+): PlannedSection {
+  const widthM =
+    valueAtStation(sizes.stationsM, sizes.widthsM, stationM) *
+    riverPathWidthScale(path, river, distanceM)
+  const authoredDepthM =
+    valueAtStation(sizes.stationsM, sizes.depthsM, stationM) *
+    riverPathDepthScale(path, river, distanceM)
+  const depthM = riverSectionDepthM(river.section, widthM * 0.5, authoredDepthM)
+  return { widthM, depthM, depthShortfallM: authoredDepthM - depthM }
+}
+
+/**
+ * Connected ends pin the flow: a mountain source feeds the start and a sea
+ * outlet drains the end, so both put upstream at the start. Otherwise the
+ * higher authored end is upstream; cap tips beyond it never decide.
+ */
+function upstreamIsAtStart(
+  river: RiverNode,
+  path: SampledRiverPath,
+  stations: readonly RiverProfileStation[],
+): boolean {
+  return (
+    river.flow !== 'downhill' ||
+    river.source === 'mountain' ||
+    river.outlet === 'sea' ||
+    (stations[path.authoredStartIndex]?.groundY ?? 0) >=
+      (stations[path.authoredEndIndex]?.groundY ?? 0)
+  )
 }
 
 /**
@@ -771,21 +797,10 @@ function measureRiverFacts(
     embankedLengthM,
     maxEmbankmentM: Math.max(0, ...authored.map((sample) => sample.embankmentM)),
     rapidLengthM,
-    depthShortfallM: Math.max(0, ...authored.map((sample) => depthShortfallM(river, sample))),
+    depthShortfallM: Math.max(0, ...authored.map((sample) => sample.depthShortfallM)),
   }
 }
 
-/** Authored depth the section cannot reach at its deepest line, in metres. */
-function depthShortfallM(river: RiverNode, sample: RiverPlanSample): number {
-  const centreShape = riverSectionShape(
-    river.section.shape,
-    0,
-    sample.widthM * 0.5,
-    sample.depthM,
-    river.section.bankSlope,
-  )
-  return sample.depthM * (1 - centreShape)
-}
 
 /** Cut/fill areas of one cross-section, sampled laterally across the uncarved ground. */
 function crossSectionAreas(
@@ -1081,9 +1096,12 @@ function plannedTargetHeight(
     const widthM =
       valueAtStation(plan.sizes.stationsM, plan.sizes.widthsM, stationM) *
       riverPathWidthScale(path, river, supportedAlong)
-    const depthM =
+    const depthM = riverSectionDepthM(
+      river.section,
+      widthM * 0.5,
       valueAtStation(plan.sizes.stationsM, plan.sizes.depthsM, stationM) *
-      riverPathDepthScale(path, river, supportedAlong)
+        riverPathDepthScale(path, river, supportedAlong),
+    )
     const bendShiftM = lerp(startSample.bendShiftM, endSample.bendShiftM, supportedAmount)
     const channelTopY = lerp(startSample.channelTopY, endSample.channelTopY, supportedAmount)
     const centerGroundY = lerp(startSample.groundY, endSample.groundY, amount)

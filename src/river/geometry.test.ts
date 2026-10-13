@@ -8,7 +8,7 @@ import {
 } from '@pascal-app/core'
 import { buildRiverSurface, RIVER_MAX_WATER_TRIANGLES, riverFlowMaterialDirection } from './geometry'
 import { RiverNode, type RiverNode as RiverNodeType } from './schema'
-import { rebuildRiverTerrain } from './terrain'
+import { planRiver, rebuildRiverTerrain } from './terrain'
 
 const CONCAVE_BOUNDARY: Array<[number, number]> = [
   [-10, -8],
@@ -427,5 +427,34 @@ describe('downhill flow orientation', () => {
     const reversed = { ...river(), flowDirection: 'reverse' as const }
     expect(riverFlowMaterialDirection(RiverNode.parse({ ...reversed, flow: 'downhill' }))).toBe(1)
     expect(riverFlowMaterialDirection(RiverNode.parse({ ...reversed, flow: 'as_drawn' }))).toBe(-1)
+  })
+})
+
+describe('depth-limited sections', () => {
+  test('a trapezoid too narrow for its depth still holds water, inset from the depth it reaches', () => {
+    // Review round 2 input: 1 m wide, 8 m deep, banks at 10:1. The V reaches
+    // only 0.05 m, so an inset taken from the authored 8 m left no water.
+    const field = terrain()
+    const sourceSite = site(field, RECTANGULAR_BOUNDARY)
+    const node = RiverNode.parse({
+      ...river([
+        [-8, 0],
+        [8, 0],
+      ]),
+      width: 1,
+      depth: 8,
+      flow: 'downhill',
+      section: { shape: 'trapezoid', bankSlope: 10, bendAsymmetry: 0, bermM: 0, blendM: 2 },
+    })
+    const plan = planRiver(field, node, RECTANGULAR_BOUNDARY)
+    expect(plan?.facts.depthShortfallM).toBeCloseTo(7.95, 6)
+    const rebuilt = rebuildRiverTerrain(sourceSite, [node])
+    const carvedSite = SiteNode.parse({ ...sourceSite, terrain: rebuilt.terrainData, metadata: rebuilt.metadata })
+
+    const surface = buildRiverSurface(node, carvedSite, rebuilt.terrain, field)
+
+    expect(surface).not.toBeNull()
+    const centreWaterY = plan?.samples[plan.path.authoredStartIndex + 1]?.waterY ?? Number.NaN
+    expect(centreWaterY).toBeGreaterThan(surfaceHeightAt(rebuilt.terrain, -6, 0))
   })
 })

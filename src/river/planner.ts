@@ -175,6 +175,20 @@ export function riverSectionShape(
   return 0.94 * (1 - smoothstep(0.42, 1, normalized))
 }
 
+/**
+ * Depth a section reaches at its deepest line. A trapezoid too narrow for its
+ * depth keeps its bank slope and reaches only half-width / slope (see
+ * `riverSectionShape`); the curved bed always reaches its depth.
+ */
+export function riverSectionDepthM(
+  section: RiverSection,
+  halfWidthM: number,
+  depthM: number,
+): number {
+  if (section.shape !== 'trapezoid') return depthM
+  return Math.min(depthM, Math.max(0, halfWidthM) / section.bankSlope)
+}
+
 export type RiverSectionTargetInput = Readonly<{
   /** Signed lateral offset from the centerline, metres (sign picks the bank). */
   lateralM: number
