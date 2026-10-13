@@ -7,7 +7,9 @@ import {
   useScene,
   type AnyNode,
   type AnyNodeId,
+  subscribeSceneCommits,
   type SceneApi,
+  type SceneCommit,
   type SiteNode as SiteNodeType,
 } from '@pascal-app/core'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -227,10 +229,17 @@ describe('RiverSystem reconciliation', () => {
     }
   })
 
-  describe('saves stamped by an earlier carver', () => {
+  describe('saves stamped by an earlier carver, loaded and then mounted late', () => {
     // Sites exactly as the 1436490 carver saved them, frozen in
     // fixtures/earlier-carves.json (provenance in earlier-carves.ts).
     const { savedSites } = readEarlierCarveFixtures()
+    let commits: SceneCommit[] = []
+    let stopCommits = () => {}
+    beforeEach(() => {
+      commits = []
+      stopCommits = subscribeSceneCommits((commit) => commits.push(commit))
+    })
+    afterEach(() => stopCommits())
 
     function savedCase(name: string) {
       const saved = savedSites[name]
@@ -242,17 +251,72 @@ describe('RiverSystem reconciliation', () => {
       return { site, rivers, ground: encodeTerrainField(baseline) }
     }
 
-    test('a downhill crossing carved and stamped before refusals existed is restored on load', async () => {
+    /**
+     * What the host does on load: hydrate the scene, then make it the undo
+     * floor. Commits from the load itself are not the system's.
+     */
+    function loadScene(nodes: readonly AnyNode[]): void {
+      setSceneNodes(nodes)
+      useScene.temporal.getState().clear()
+      commits = []
+    }
+
+    test('an earlier save whose carve still holds is verified with no write', async () => {
+      // Review round 4 input: a straight as-drawn river on ground falling 10 %.
+      const { site, rivers } = savedCase('asDrawnStraight')
+      loadScene([site, ...(rivers as unknown as AnyNode[])])
+      const loadedNodes = useScene.getState().nodes
+      const { sceneApi, writes } = recordingSceneApi()
+
+      const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+      try {
+        expect(writes).toHaveLength(0)
+        expect(useScene.getState().nodes).toBe(loadedNodes)
+        expect(useScene.temporal.getState().pastStates).toHaveLength(0)
+        expect(commits).toHaveLength(0)
+      } finally {
+        await renderer.unmount()
+      }
+    })
+
+    test('a downhill crossing carved before refusals existed is restored with no undo step', async () => {
       // Review round 3 input: the crossing on ground falling 10 % toward +x.
       const { site, rivers, ground } = savedCase('downhillCrossing')
       expect(site.terrain).not.toEqual(ground)
-      setSceneNodes([site, ...(rivers as unknown as AnyNode[])])
+      loadScene([site, ...(rivers as unknown as AnyNode[])])
       const { sceneApi, writes } = recordingSceneApi()
 
       const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
       try {
         expect(writes).toHaveLength(1)
         expect(currentSite().terrain).toEqual(ground)
+        expect(useScene.temporal.getState().pastStates).toHaveLength(0)
+        expect(commits).toHaveLength(0)
+      } finally {
+        await renderer.unmount()
+      }
+    })
+
+    test('undo after that restore never brings the refused carve back', async () => {
+      const { site, rivers, ground } = savedCase('downhillCrossing')
+      loadScene([site, ...(rivers as unknown as AnyNode[])])
+      // A recorded edit made before the system mounts (the lazy chunk loads late).
+      createSceneApi(useScene).applyChanges?.({
+        update: [{ id: site.id as AnyNodeId, data: { name: 'Renamed lot' } as Partial<AnyNode> }],
+      })
+      const { sceneApi } = recordingSceneApi()
+      const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+      try {
+        expect(useScene.temporal.getState().pastStates).toHaveLength(1)
+
+        await act(async () => {
+          useScene.temporal.getState().undo()
+        })
+
+        expect(currentSite().name).toBe(site.name)
+        expect(currentSite().terrain).toEqual(ground)
+        expect(useScene.temporal.getState().pastStates).toHaveLength(0)
+        expect(useScene.temporal.getState().futureStates).toHaveLength(1)
       } finally {
         await renderer.unmount()
       }
@@ -261,12 +325,13 @@ describe('RiverSystem reconciliation', () => {
     test('an earlier stamp is re-carved from its own baseline, keeping later sculpts', async () => {
       const { site, rivers } = savedCase('asDrawnStraight')
       const sculpted = sculptCorner(site)
-      setSceneNodes([sculpted, ...(rivers as unknown as AnyNode[])])
+      loadScene([sculpted, ...(rivers as unknown as AnyNode[])])
       const { sceneApi, writes } = recordingSceneApi()
 
       const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
       try {
-        // Re-stamped once; the as-drawn carve and the sculpt are both unchanged.
+        // A sculpt since the save is an edit: re-carved once, as-drawn carve
+        // and sculpt both unchanged, and stamped current.
         expect(writes).toHaveLength(1)
         expect(currentSite().terrain).toEqual(sculpted.terrain)
         expect(riverTerrainIsApplied(currentSite(), rivers)).toBe(true)

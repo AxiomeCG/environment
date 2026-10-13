@@ -43,6 +43,8 @@ type RiverTerrainMetadata = Readonly<{
   riverIds: readonly string[] | null
   /** Hash of every grading-relevant river field, so reconciliation can tell an already-applied carve from a stale one without rebuilding. */
   fingerprint?: string
+  /** Carver revision that wrote this stamp; missing on stamps from before revisions existed. */
+  revision?: number
   originalMetadata?: SiteNode['metadata']
 }>
 
@@ -171,6 +173,19 @@ export function riverTerrainFingerprint(
  * terrain must still be the applied one: a sculpt since the apply leaves the
  * fingerprint intact but needs the river re-carved from the sculpted ground.
  */
+/**
+ * True when the Site is exactly as an earlier carver revision saved it: its
+ * stamp predates this revision and nothing has edited the terrain since. A
+ * reconcile of such a Site is a load migration, not a consequence of an edit.
+ */
+export function riverTerrainSavedByEarlierCarver(site: SiteNode): boolean {
+  const tracked = readRiverTerrainMetadata(site.metadata)
+  if (!tracked || tracked.revision === RIVER_CARVE_REVISION) return false
+  const persisted = persistedTerrainFieldOf(site)
+  const applied = decodeTerrainField(tracked.applied)
+  return Boolean(persisted && applied && sameHeights(persisted, applied))
+}
+
 export function riverTerrainIsApplied(site: SiteNode, rivers: readonly RiverNode[]): boolean {
   const tracked = readRiverTerrainMetadata(site.metadata)
   if (!tracked?.fingerprint || rivers.length === 0) return false
@@ -230,6 +245,7 @@ export function rebuildRiverTerrain(
       applied: terrainData,
       riverIds: validRivers.map((river) => String(river.id)),
       fingerprint: riverTerrainFingerprint(validRivers, site.polygon.points, current),
+      revision: RIVER_CARVE_REVISION,
       ...(originalMetadata === undefined ? {} : { originalMetadata }),
     } satisfies RiverTerrainMetadata
   }
@@ -1355,6 +1371,7 @@ function readRiverTerrainMetadata(metadata: SiteNode['metadata']): RiverTerrainM
     applied: encodeTerrainField(applied),
     riverIds,
     ...(typeof record.fingerprint === 'string' ? { fingerprint: record.fingerprint } : {}),
+    ...(typeof record.revision === 'number' ? { revision: record.revision } : {}),
     ...(record.originalMetadata === undefined ? {} : { originalMetadata: record.originalMetadata }),
   }
 }

@@ -1,8 +1,10 @@
 'use client'
 
 import {
+  acquireSceneHistoryPause,
   SiteNode,
   useLiveNodeOverrides,
+  useScene,
   useLiveTerrain,
   type AnyNode,
   type AnyNodeId,
@@ -10,7 +12,12 @@ import {
 } from '@pascal-app/core'
 import { useEffect } from 'react'
 import { RIVER_KIND, RiverNode } from './schema'
-import { rebuildRiverTerrain, riverTerrainFingerprint, riverTerrainIsApplied } from './terrain'
+import {
+  rebuildRiverTerrain,
+  riverTerrainFingerprint,
+  riverTerrainIsApplied,
+  riverTerrainSavedByEarlierCarver,
+} from './terrain'
 
 export type RiverSiteChange = Readonly<{
   siteId: string
@@ -89,28 +96,33 @@ function riverGradingChanged(current: AnyNode | undefined, previous: AnyNode | u
   )
 }
 
+export type RiverReconcileWrite = Readonly<{
+  update: Pick<SiteNode, 'terrain' | 'metadata'>
+  /** Correcting a Site as an earlier version saved it: a load migration, not an edit. */
+  migration: boolean
+}>
+
 /**
  * The terrain and metadata that bring a Site in line with its rivers, or null
  * when it already carries them. An apply stamps the Site with its carve, so
- * reconciling right after one writes nothing: no second history entry.
+ * reconciling right after one writes nothing: no second history entry. A Site
+ * saved by an earlier carver whose carve this one reproduces is not written
+ * either; its stamp is refreshed by the next real river change.
  */
 export function riverReconcileUpdate(
   site: SiteNode,
   rivers: readonly RiverNode[],
-): Pick<SiteNode, 'terrain' | 'metadata'> | null {
+): RiverReconcileWrite | null {
   const hasTracking =
     site.metadata !== null &&
     Object.prototype.hasOwnProperty.call(site.metadata, 'environmentRiverTerrain')
   if (rivers.length === 0 && !hasTracking) return null
   if (riverTerrainIsApplied(site, rivers)) return null
+  const migration = riverTerrainSavedByEarlierCarver(site)
   const rebuilt = rebuildRiverTerrain(site, rivers)
-  if (
-    terrainDataEqual(site.terrain, rebuilt.terrainData) &&
-    metadataEqual(site.metadata, rebuilt.metadata)
-  ) {
-    return null
-  }
-  return { terrain: rebuilt.terrainData, metadata: rebuilt.metadata }
+  const sameTerrain = terrainDataEqual(site.terrain, rebuilt.terrainData)
+  if (sameTerrain && (migration || metadataEqual(site.metadata, rebuilt.metadata))) return null
+  return { update: { terrain: rebuilt.terrainData, metadata: rebuilt.metadata }, migration }
 }
 
 export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
@@ -119,33 +131,11 @@ export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
 
     const reconcile = (siteIds: ReadonlySet<string>) => {
       if (reconciling || siteIds.size === 0) return
-      const nodes = sceneApi.nodes()
-      const updates: Array<{ id: AnyNodeId; data: Partial<AnyNode> }> = []
-      for (const siteId of siteIds) {
-        const parsedSite = SiteNode.safeParse(nodes[siteId as AnyNodeId])
-        if (!parsedSite.success) continue
-        const site = parsedSite.data
-        const rivers = Object.values(nodes)
-          .filter(
-            (candidate) =>
-              candidate.parentId === site.id && (candidate.type as string) === RIVER_KIND,
-          )
-          .map((candidate) => RiverNode.safeParse(candidate))
-          .filter((parsed): parsed is { success: true; data: RiverNode } => parsed.success)
-          .map((parsed) => parsed.data)
-        const update = riverReconcileUpdate(site, rivers)
-        if (update) updates.push({ id: site.id as AnyNodeId, data: update as Partial<AnyNode> })
-      }
-      if (updates.length > 0) {
-        reconciling = true
-        try {
-          if (!sceneApi.applyChanges) {
-            throw new Error('RiverSystem requires SceneApi.applyChanges for reconciliation.')
-          }
-          sceneApi.applyChanges({ update: updates })
-        } finally {
-          reconciling = false
-        }
+      reconciling = true
+      try {
+        applyReconcileWrites(sceneApi, reconcileWrites(sceneApi.nodes(), siteIds))
+      } finally {
+        reconciling = false
       }
       markRiversOfSites(sceneApi, siteIds)
     }
@@ -156,58 +146,123 @@ export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
         const changes = riverSiteChanges(currentNodes, previousNodes)
         reconcile(new Set(changes.map((change) => change.siteId)))
       }) ?? (() => {})
-
-    const unsubscribeTerrain = useLiveTerrain.subscribe((current, previous) => {
-      const siteIds = new Set([
-        ...current.strokes.keys(),
-        ...current.remoteStrokes.keys(),
-        ...previous.strokes.keys(),
-        ...previous.remoteStrokes.keys(),
-      ])
-      const changed = new Set<string>()
-      for (const siteId of siteIds) {
-        const currentField =
-          current.strokes.get(siteId)?.field ?? current.remoteStrokes.get(siteId)?.field
-        const previousField =
-          previous.strokes.get(siteId)?.field ?? previous.remoteStrokes.get(siteId)?.field
-        if (currentField !== previousField) changed.add(siteId)
-      }
-      markRiversOfSites(sceneApi, changed)
-    })
-
-    const unsubscribeBoundary = useLiveNodeOverrides.subscribe((current, previous) => {
-      const siteIds = new Set([...current.overrides.keys(), ...previous.overrides.keys()])
-      const changed = new Set<string>()
-      for (const siteId of siteIds) {
-        if (current.overrides.get(siteId)?.polygon !== previous.overrides.get(siteId)?.polygon) {
-          changed.add(siteId)
-        }
-      }
-      markRiversOfSites(sceneApi, changed)
-    })
-
-    const initialSites = new Set<string>()
-    for (const node of Object.values(sceneApi.nodes())) {
-      if ((node.type as string) === RIVER_KIND && node.parentId)
-        initialSites.add(node.parentId as string)
-      if (
-        node.type === 'site' &&
-        node.metadata &&
-        Object.prototype.hasOwnProperty.call(node.metadata, 'environmentRiverTerrain')
-      ) {
-        initialSites.add(String(node.id))
-      }
-    }
-    reconcile(initialSites)
+    const unsubscribePreviews = subscribeLivePreviews(sceneApi)
+    reconcile(riverSitesOf(sceneApi.nodes()))
 
     return () => {
       unsubscribeScene()
-      unsubscribeTerrain()
-      unsubscribeBoundary()
+      unsubscribePreviews()
     }
   }, [sceneApi])
 
   return null
+}
+
+/**
+ * Edits are ordinary writes. Undoing must never bring back a carve the
+ * current planner refuses, so a load migration records no undo step and no
+ * local scene commit.
+ */
+function applyReconcileWrites(
+  sceneApi: SceneApi,
+  { edits, migrations }: Readonly<{ edits: SiteUpdate[]; migrations: SiteUpdate[] }>,
+): void {
+  applySiteUpdates(sceneApi, edits)
+  if (migrations.length === 0) return
+  const releaseHistory = acquireSceneHistoryPause(useScene)
+  try {
+    applySiteUpdates(sceneApi, migrations)
+  } finally {
+    releaseHistory()
+  }
+}
+
+/** Sites with rivers, or with a river carve still tracked after their last river went. */
+function riverSitesOf(nodes: Readonly<Record<string, AnyNode>>): Set<string> {
+  const siteIds = new Set<string>()
+  for (const node of Object.values(nodes)) {
+    if ((node.type as string) === RIVER_KIND && node.parentId) siteIds.add(node.parentId as string)
+    if (
+      node.type === 'site' &&
+      node.metadata &&
+      Object.prototype.hasOwnProperty.call(node.metadata, 'environmentRiverTerrain')
+    ) {
+      siteIds.add(String(node.id))
+    }
+  }
+  return siteIds
+}
+
+/** Redraw rivers while their Site's terrain or boundary is previewed live. */
+function subscribeLivePreviews(sceneApi: SceneApi): () => void {
+  const unsubscribeTerrain = useLiveTerrain.subscribe((current, previous) => {
+    const siteIds = new Set([
+      ...current.strokes.keys(),
+      ...current.remoteStrokes.keys(),
+      ...previous.strokes.keys(),
+      ...previous.remoteStrokes.keys(),
+    ])
+    const changed = new Set<string>()
+    for (const siteId of siteIds) {
+      const currentField =
+        current.strokes.get(siteId)?.field ?? current.remoteStrokes.get(siteId)?.field
+      const previousField =
+        previous.strokes.get(siteId)?.field ?? previous.remoteStrokes.get(siteId)?.field
+      if (currentField !== previousField) changed.add(siteId)
+    }
+    markRiversOfSites(sceneApi, changed)
+  })
+  const unsubscribeBoundary = useLiveNodeOverrides.subscribe((current, previous) => {
+    const siteIds = new Set([...current.overrides.keys(), ...previous.overrides.keys()])
+    const changed = new Set<string>()
+    for (const siteId of siteIds) {
+      if (current.overrides.get(siteId)?.polygon !== previous.overrides.get(siteId)?.polygon) {
+        changed.add(siteId)
+      }
+    }
+    markRiversOfSites(sceneApi, changed)
+  })
+  return () => {
+    unsubscribeTerrain()
+    unsubscribeBoundary()
+  }
+}
+
+type SiteUpdate = Readonly<{ id: AnyNodeId; data: Partial<AnyNode> }>
+
+/** The Site writes that bring these Sites in line with their rivers, split by kind. */
+function reconcileWrites(
+  nodes: Readonly<Record<string, AnyNode>>,
+  siteIds: ReadonlySet<string>,
+): Readonly<{ edits: SiteUpdate[]; migrations: SiteUpdate[] }> {
+  const edits: SiteUpdate[] = []
+  const migrations: SiteUpdate[] = []
+  for (const siteId of siteIds) {
+    const parsedSite = SiteNode.safeParse(nodes[siteId])
+    if (!parsedSite.success) continue
+    const site = parsedSite.data
+    const rivers = Object.values(nodes)
+      .filter(
+        (candidate) => candidate.parentId === site.id && (candidate.type as string) === RIVER_KIND,
+      )
+      .map((candidate) => RiverNode.safeParse(candidate))
+      .filter((parsed): parsed is { success: true; data: RiverNode } => parsed.success)
+      .map((parsed) => parsed.data)
+    const write = riverReconcileUpdate(site, rivers)
+    if (!write) continue
+    const update = { id: site.id as AnyNodeId, data: write.update as Partial<AnyNode> }
+    if (write.migration) migrations.push(update)
+    else edits.push(update)
+  }
+  return { edits, migrations }
+}
+
+function applySiteUpdates(sceneApi: SceneApi, updates: readonly SiteUpdate[]): void {
+  if (updates.length === 0) return
+  if (!sceneApi.applyChanges) {
+    throw new Error('RiverSystem requires SceneApi.applyChanges for reconciliation.')
+  }
+  sceneApi.applyChanges({ update: [...updates] })
 }
 
 function markRiversOfSites(sceneApi: SceneApi, siteIds: ReadonlySet<string>): void {
