@@ -9,12 +9,16 @@ import {
   type AnyNodeId,
   type SceneApi,
 } from '@pascal-app/core'
-import { act, create } from '@react-three/test-renderer'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { createRiver, type RiverNodeChanges } from './actions'
 import { RiverNode } from './schema'
 import RiverSystem from './system'
 import { rebuildRiverTerrain } from './terrain'
+
+// The renderer's CommonJS build requires three. Loading it only after this
+// file's ES imports have evaluated three keeps the test independent of which
+// test files ran before it (alone, Bun refuses that require mid-evaluation).
+const { act, create } = await import('@react-three/test-renderer')
 
 const SITE_ID = 'site_river_system'
 

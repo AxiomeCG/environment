@@ -7,7 +7,6 @@ import {
 } from '@pascal-app/core'
 import { useEditor, useInteractionScope } from '@pascal-app/editor'
 import { useViewer } from '@pascal-app/viewer'
-import { act, create } from '@react-three/test-renderer'
 import { expect, test } from 'bun:test'
 import { StrictMode, type ComponentType, type ReactNode } from 'react'
 import { OrthographicCamera, Raycaster, Vector2, Vector3 } from 'three'
@@ -18,6 +17,11 @@ import { RiverNode } from './schema'
 import { useRiverStore } from './store'
 import { rebuildRiverTerrain } from './terrain'
 import { cancelRiverInteraction, reverseRiverFlow, RiverTool } from './tool'
+
+// The renderer's CommonJS build requires three. Loading it only after this
+// file's ES imports have evaluated three keeps the test independent of which
+// test files ran before it (alone, Bun refuses that require mid-evaluation).
+const { act, create } = await import('@react-three/test-renderer')
 
 test('StrictMode body replay preserves first Edit path intent until true unmount', async () => {
   const previousRiver = useRiverStore.getState()
