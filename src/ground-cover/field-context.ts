@@ -3,19 +3,17 @@ import {
   type GeometryContext,
   type TerrainField,
 } from '@pascal-app/core'
-import { resolveGrassHeightField } from './height-field'
+import {
+  resolveGroundCoverHeight,
+  resolveGroundCoverPaint,
+  siteChildrenIn,
+} from '../paint-tiles/layers'
 import { buildGrassObstacleField, collectSiteNodes } from './obstacle-adapter'
 import {
   createGrassObstacleTopology,
   type GrassObstacleField,
 } from './obstacle-field'
-import {
-  DEFAULT_GRASS_PAINT_COLOR,
-  resolveGrassPaintField,
-  siteBounds,
-  type GrassPaintField,
-  type SiteBounds,
-} from './paint-field'
+import { siteBounds, type GrassPaintField, type SiteBounds } from './paint-field'
 import type { GrassFieldNode } from './schema'
 
 export type GroundCoverFields = {
@@ -37,12 +35,9 @@ export function resolveGroundCoverFields(
 
   const boundary = site.polygon.points
   const bounds = siteBounds(boundary)
-  const paint = resolveGrassPaintField(
-    node.paintMap,
-    bounds,
-    DEFAULT_GRASS_PAINT_COLOR,
-  )
-  const height = resolveGrassHeightField(node.heightMap, bounds)
+  const siteChildren = siteChildrenIn(site, context)
+  const paint = resolveGroundCoverPaint(node, siteChildren, bounds)
+  const height = resolveGroundCoverHeight(node, siteChildren, bounds)
   const nodes = collectSiteNodes(site, context.resolve)
   const obstacles = buildGrassObstacleField(
     site,

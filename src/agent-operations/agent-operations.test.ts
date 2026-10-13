@@ -7,18 +7,12 @@ import {
 import { describe, expect, test } from 'bun:test'
 import { layGroundTool } from '../agent-tools'
 import { createGroundCoverNode } from '../ground-cover/create-node'
-import {
-  DEFAULT_GRASS_PAINT_COLOR,
-  paintAt,
-  resolveGrassPaintField,
-  siteBounds,
-  type GrassPaintField,
-} from '../ground-cover/paint-field'
+import { paintAt, siteBounds, type GrassPaintField } from '../ground-cover/paint-field'
 import { advancePaintStroke, beginPaintStroke, currentPaintField } from '../ground-cover/paint-stroke'
 import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
 import { POND_KIND, PondNode } from '../pond/schema'
+import { resolveGroundCoverPaint, resolveSurfacePaint } from '../paint-tiles/layers'
 import {
-  resolveSurfaceMaterialField,
   surfaceMaterialWeightsAt,
   type SurfaceMaterialField,
 } from '../surface-material/field'
@@ -29,16 +23,16 @@ import type { SceneChanges } from './types'
 
 type Nodes = Record<string, AnyNode>
 
-function flatLot(): { nodes: Nodes; siteId: string } {
+function flatLot(side = 16): { nodes: Nodes; siteId: string } {
   const site = SiteNode.parse({
     id: 'site_flat',
     polygon: {
       type: 'polygon',
       points: [
         [0, 0],
-        [16, 0],
-        [16, 16],
-        [0, 16],
+        [side, 0],
+        [side, side],
+        [0, side],
       ],
     },
     children: [],
@@ -90,9 +84,10 @@ function groundFieldsOf(nodes: Nodes, siteId: string): { paint: GrassPaintField;
   const ofKind = (kind: string) => Object.values(nodes).find((node) => String(node.type) === kind)
   const grass = ofKind(GRASS_FIELD_KIND) as unknown as GrassFieldNode | undefined
   const surface = ofKind(SURFACE_MATERIAL_KIND) as unknown as SurfaceMaterialNode | undefined
+  if (!grass || !surface) throw new Error('the site has no Ground cover or Surface')
   return {
-    paint: resolveGrassPaintField(grass?.paintMap, bounds, DEFAULT_GRASS_PAINT_COLOR),
-    surface: resolveSurfaceMaterialField(surface?.paintMap, bounds),
+    paint: resolveGroundCoverPaint(grass, Object.values(nodes), bounds),
+    surface: resolveSurfacePaint(surface, Object.values(nodes), bounds),
   }
 }
 
@@ -121,7 +116,25 @@ describe('lay_ground', () => {
     expect(kinds).toContain(SURFACE_MATERIAL_KIND)
     for (const entry of changes?.create ?? []) expect(entry.parentId).toBe(siteId)
     expect(result.grassCoveragePct).toBeGreaterThan(95)
-    expect(result.updateBytes).toBeGreaterThan(0)
+  })
+
+  test('writes only paint tiles, each change well under the 64 KiB a shared operation carries', () => {
+    for (const side of [16, 100]) {
+      const { nodes } = flatLot(side)
+      const first = runLayGround(nodes, [{ site: true, ground: 'grass' }])
+      const created = applyChanges(nodes, first.changes)
+      const second = runLayGround(created, [
+        { path: { points: [[side / 2, 0], [side / 2, side]], widthM: 1.2 }, ground: 'path' },
+      ])
+      for (const { result } of [first, second]) {
+        expect(result.tilesChanged).toBeGreaterThan(0)
+        expect(result.largestTileChangeBytes).toBeLessThan(result.collaborationCapBytes as number)
+      }
+      // The path rewrites the tiles it crosses: a column of them, not the lot.
+      expect(second.changes?.create).toBeUndefined()
+      expect((second.changes?.update ?? []).every((entry) => entry.id.startsWith('paint-tile_'))).toBe(true)
+      expect(second.result.tilesChanged).toBeLessThan(first.result.tilesChanged as number)
+    }
   })
 
   test('a path laid after a lawn cuts through it', () => {
@@ -151,11 +164,7 @@ describe('lay_ground', () => {
     // The panel's own node, painted by the person's brush over the same spot.
     const site = nodes[siteId] as SiteNode
     const panelNode = createGroundCoverNode(site)
-    const panelField = resolveGrassPaintField(
-      panelNode.paintMap,
-      siteBounds(site.polygon.points),
-      DEFAULT_GRASS_PAINT_COLOR,
-    )
+    const panelField = resolveGroundCoverPaint(panelNode, [], siteBounds(site.polygon.points))
     const stroke = beginPaintStroke({ field: panelField, boundary: site.polygon.points })
     advancePaintStroke(stroke, 2, 2)
     expect(paintAt(currentPaintField(stroke), 15, 15).a).toBe(0)

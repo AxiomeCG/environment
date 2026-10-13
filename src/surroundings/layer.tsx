@@ -13,7 +13,9 @@ import { riverTerrainBaseline } from '../river/terrain'
 import { useEnvironmentStore } from '../store'
 import { loadPresentationAlbedos } from '../surface-material/materials'
 import type { PresentationAlbedos } from '../surface-material/materials'
-import { decodeSurfaceMaterialField } from '../surface-material/field'
+import { siteBounds } from '../ground-cover/paint-field'
+import { paintTilesOf } from '../paint-tiles/compose'
+import { resolveSurfacePaint } from '../paint-tiles/layers'
 import { SURFACE_MATERIAL_KIND } from '../surface-material/schema'
 import type { SurfaceMaterialNode } from '../surface-material/schema'
 import {
@@ -460,10 +462,24 @@ export default function SurroundingsLayer({
     }
     return undefined
   })
-  const surfaceField = useMemo(
-    () => decodeSurfaceMaterialField(surfaceMaterial?.paintMap),
-    [surfaceMaterial?.paintMap],
+  const surfaceTiles = useScene(
+    useShallow((state) =>
+      site && surfaceMaterial
+        ? paintTilesOf(
+            site.children.map((id) => state.nodes[id as AnyNodeId]),
+            surfaceMaterial.id,
+            'paintMap',
+          )
+        : [],
+    ),
   )
+  const sitePolygon = site?.polygon
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the field depends on the surface's id and map, not on the rest of the node.
+  const surfaceField = useMemo(() => {
+    if (!sitePolygon || !surfaceMaterial) return null
+    if (!surfaceMaterial.paintMap && surfaceTiles.length === 0) return null
+    return resolveSurfacePaint(surfaceMaterial, surfaceTiles, siteBounds(sitePolygon.points))
+  }, [sitePolygon, surfaceMaterial?.id, surfaceMaterial?.paintMap, surfaceTiles])
   const invalidate = useThree((state) => state.invalidate)
   const activeSiteId = active ? site?.id : undefined
   const [propertySurface, setPropertySurface] = useState<{

@@ -4,22 +4,18 @@ import {
   type SiteNode,
   type TerrainField,
 } from '@pascal-app/core'
-import { localGrassHeightScaleAt, resolveGrassHeightField } from '../ground-cover/height-field'
-import {
-  DEFAULT_GRASS_PAINT_COLOR,
-  paintAt,
-  resolveGrassPaintField,
-  siteBounds,
-  type GrassPaintField,
-} from '../ground-cover/paint-field'
+import { localGrassHeightScaleAt } from '../ground-cover/height-field'
+import { paintAt, siteBounds, type GrassPaintField } from '../ground-cover/paint-field'
 import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
 import { analyzePondBasin, buildPondSurface, type PondBasin } from '../pond/basin'
 import { POND_KIND, type PondNode } from '../pond/schema'
 import { RIVER_KIND, type RiverNode } from '../river/schema'
 import {
-  resolveSurfaceMaterialField,
-  surfaceMaterialWeightsAt,
-} from '../surface-material/field'
+  resolveGroundCoverHeight,
+  resolveGroundCoverPaint,
+  resolveSurfacePaint,
+} from '../paint-tiles/layers'
+import { surfaceMaterialWeightsAt } from '../surface-material/field'
 import { SURFACE_MATERIAL_IDS } from '../surface-material/material-types'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
 import { refuse } from './refuse'
@@ -61,8 +57,8 @@ function groundCoverFacts(
       cellM: null,
     }
   }
-  const paint = resolveGrassPaintField(node.paintMap, bounds, DEFAULT_GRASS_PAINT_COLOR)
-  const height = resolveGrassHeightField(node.heightMap, bounds)
+  const paint = resolveGroundCoverPaint(node, Object.values(nodes), bounds)
+  const height = resolveGroundCoverHeight(node, Object.values(nodes), bounds)
   const stats = samplePaint(paint, height, area)
   return {
     present: true,
@@ -112,7 +108,7 @@ function surfaceFacts(
   for (const id of SURFACE_MATERIAL_IDS) byMaterialM2[id] = 0
   if (!node) return { present: false, byMaterialM2, cellM: null }
 
-  const field = resolveSurfaceMaterialField(node.paintMap, bounds)
+  const field = resolveSurfacePaint(node, Object.values(nodes), bounds)
   const cellM2 = field.spacing * field.spacing
   for (let row = 0; row < field.rows; row += 1) {
     const z = field.origin[1] + row * field.spacing

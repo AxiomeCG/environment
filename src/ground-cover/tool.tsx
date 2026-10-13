@@ -18,18 +18,13 @@ import { Plane, Raycaster, Vector2, Vector3 } from 'three'
 import { useEnvironmentStore } from '../store'
 import { useSceneApiNodes } from '../use-scene-api-nodes'
 import GrassFieldBrushCursor from './brush-cursor'
-import { resolveGrassHeightField } from './height-field'
+import { commitPaintWrite } from '../paint-tiles/commit'
+import { resolveGroundCoverHeight, resolveGroundCoverPaint } from '../paint-tiles/layers'
 import {
   getGrassHeightRuntime,
   updateGrassHeightTexture,
 } from './height-texture'
-import {
-  DEFAULT_GRASS_PAINT_COLOR,
-  encodeGrassPaintField,
-  resolveGrassPaintField,
-  siteBounds,
-  type GrassPaintField,
-} from './paint-field'
+import { siteBounds, type GrassPaintField } from './paint-field'
 import { groundCoverPaintSettings } from './paint-settings'
 import {
   advancePaintStroke,
@@ -50,19 +45,15 @@ import {
 } from './paint-tool-lifecycle'
 import type { GrassFieldNode } from './schema'
 
-type PaintableGrassFieldNode = GrassFieldNode & {
-  paintMap?: unknown
-  heightMap?: unknown
-}
-
 type PaintTarget = {
   building: BuildingNode
-  grassField: PaintableGrassFieldNode
+  grassField: GrassFieldNode
   site: SiteNode
 }
 
 type ActivePaintStroke = {
   grassFieldId: string
+  siteId: string
   kind: 'density' | 'height'
   pointerId: number
   stroke: PaintStroke
@@ -75,7 +66,7 @@ function resolvePaintTarget(
 ): PaintTarget | null {
   const activeSite = resolveActivePaintSite(nodes, activeLevelId)
   if (!activeSite) return null
-  const grassFields = (Object.values(nodes) as unknown as PaintableGrassFieldNode[]).filter(
+  const grassFields = (Object.values(nodes) as unknown as GrassFieldNode[]).filter(
     (node) => node.type === 'environment:ground-cover' && node.parentId === activeSite.site.id,
   )
   return grassFields.length === 1
@@ -225,19 +216,14 @@ export function GrassFieldPaintTool() {
       const kind = latest.current.brushTool.endsWith('-height')
         ? 'height'
         : 'density'
+      const sceneNodes = Object.values(sceneApi.nodes())
+      const bounds = siteBounds(site.polygon.points)
       const field: GrassPaintField =
         kind === 'height'
           ? (getGrassHeightRuntime(grassField.id)?.field ??
-            resolveGrassHeightField(
-              grassField.heightMap,
-              siteBounds(site.polygon.points),
-            ))
+            resolveGroundCoverHeight(grassField, sceneNodes, bounds))
           : (getGrassPaintRuntime(grassField.id)?.field ??
-            resolveGrassPaintField(
-              grassField.paintMap,
-              siteBounds(site.polygon.points),
-              DEFAULT_GRASS_PAINT_COLOR,
-            ))
+            resolveGroundCoverPaint(grassField, sceneNodes, bounds))
       const stroke = beginPaintStroke({
         field,
         boundary: site.polygon.points,
@@ -253,6 +239,7 @@ export function GrassFieldPaintTool() {
       })
       activeStrokeRef.current = {
         grassFieldId: grassField.id,
+        siteId: site.id,
         kind,
         pointerId: event.pointerId,
         stroke,
@@ -280,12 +267,15 @@ export function GrassFieldPaintTool() {
       releaseEnvironmentPaintStroke(ownerRef.current)
       releasePointer(event.pointerId)
 
-      const field = currentPaintField(active.stroke)
-      sceneApi.update(
-        active.grassFieldId as AnyNodeId,
-        (active.kind === 'height'
-          ? { heightMap: encodeGrassPaintField(field) }
-          : { paintMap: encodeGrassPaintField(field) }) as unknown as Partial<AnyNode>,
+      commitPaintWrite(
+        sceneApi,
+        {
+          siteId: active.siteId,
+          targetId: active.grassFieldId,
+          map: active.kind === 'height' ? 'heightMap' : 'paintMap',
+        },
+        active.stroke.snapshot,
+        currentPaintField(active.stroke),
       )
     }
 

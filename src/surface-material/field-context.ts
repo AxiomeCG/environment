@@ -1,5 +1,6 @@
 import { type GeometryContext, type SiteNode, terrainFieldOf } from '@pascal-app/core'
-import { resolveSurfaceMaterialField, type SurfaceMaterialField } from './field'
+import { resolveSurfacePaint, siteChildrenIn } from '../paint-tiles/layers'
+import type { SurfaceMaterialField } from './field'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from './schema'
 import { siteBounds } from '../ground-cover/paint-field'
 
@@ -21,7 +22,7 @@ export function resolveSurfaceMaterial(
     node,
     site,
     boundary: site.polygon.points,
-    field: resolveSurfaceMaterialField(node.paintMap, siteBounds(site.polygon.points)),
+    field: resolveSurfacePaint(node, siteChildrenIn(site, context), siteBounds(site.polygon.points)),
     terrain: terrainFieldOf(site),
   }
 }

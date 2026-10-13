@@ -1,5 +1,6 @@
 import type { NodeDefinition } from '@pascal-app/core'
 import type { FloorplanNodeExtension } from '@pascal-app/editor'
+import { paintTileFloorplanDependencies } from '../paint-tiles/compose'
 import {
   buildSurfaceMaterialBakeGeometry,
   buildSurfaceMaterialBakeGeometryAsync,
@@ -54,6 +55,7 @@ export const surfaceMaterialDefinition: SurfaceMaterialDefinition = {
   bakeGeometryAsync: buildSurfaceMaterialBakeGeometryAsync,
   bakeReplaceRenderer: { module: () => import('./static-renderer') },
   floorplan: buildSurfaceMaterialFloorplan,
+  floorplanDependencies: paintTileFloorplanDependencies,
   floorplanScope: 'site',
   system: { module: () => import('./system'), priority: 1 },
   tool: () => import('./tool'),

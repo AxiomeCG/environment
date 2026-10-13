@@ -2,6 +2,7 @@ import type { AnyNodeDefinition, Plugin } from '@pascal-app/core'
 import type { EditorHostPanel } from '@pascal-app/editor'
 import { ENVIRONMENT_PLUGIN_LOGO } from './art'
 import { grassFieldDefinition } from './ground-cover/definition'
+import { paintTileDefinition } from './paint-tiles/definition'
 import { pondDefinition } from './pond/definition'
 import { riverDefinition } from './river/definition'
 import { surfaceMaterialDefinition } from './surface-material/definition'
@@ -17,6 +18,7 @@ export const environmentPlugin: Plugin = {
     surfaceMaterialDefinition as unknown as AnyNodeDefinition,
     pondDefinition as unknown as AnyNodeDefinition,
     riverDefinition as unknown as AnyNodeDefinition,
+    paintTileDefinition as unknown as AnyNodeDefinition,
   ],
 }
 

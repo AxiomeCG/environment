@@ -11,11 +11,9 @@ import { rgbToHex, siteBounds } from '../ground-cover/paint-field'
 import { beginPaintStroke } from '../ground-cover/paint-stroke'
 import { resolveActivePaintSite } from '../ground-cover/paint-target'
 import { useEnvironmentStore } from '../store'
+import { commitPaintWrite } from '../paint-tiles/commit'
+import { resolveSurfacePaint } from '../paint-tiles/layers'
 import { useSceneApiNodes } from '../use-scene-api-nodes'
-import {
-  encodeSurfaceMaterialField,
-  resolveSurfaceMaterialField,
-} from './field'
 import {
   SURFACE_MATERIAL_AVERAGE_COLOR,
   SURFACE_MATERIAL_PAINT_COLOR,
@@ -70,8 +68,9 @@ export default function SurfaceMaterialFloorplanTool({
 
   const start = (): FloorplanPaintSession => {
     const stroke = beginPaintStroke({
-      field: resolveSurfaceMaterialField(
-        target.surface.paintMap,
+      field: resolveSurfacePaint(
+        target.surface,
+        Object.values(sceneApi.nodes()),
         siteBounds(target.site.polygon.points),
       ),
       boundary: target.site.polygon.points,
@@ -83,9 +82,11 @@ export default function SurfaceMaterialFloorplanTool({
         updateSurfacePaintTextures(target.surface.id, field)
       },
       commit: (field) => {
-        sceneApi.update(
-          target.surface.id as AnyNodeId,
-          { paintMap: encodeSurfaceMaterialField(field) } as unknown as Partial<AnyNode>,
+        commitPaintWrite(
+          sceneApi,
+          { siteId: target.site.id, targetId: target.surface.id, map: 'paintMap' },
+          stroke.snapshot,
+          field,
         )
       },
       cancel: () => {

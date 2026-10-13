@@ -5,33 +5,24 @@ import type { FloorplanToolContext } from '@pascal-app/editor'
 import { useMemo } from 'react'
 import { useEnvironmentStore } from '../store'
 import { useSceneApiNodes } from '../use-scene-api-nodes'
-import { resolveGrassHeightField } from './height-field'
+import { commitPaintWrite } from '../paint-tiles/commit'
+import { resolveGroundCoverHeight, resolveGroundCoverPaint } from '../paint-tiles/layers'
 import {
   FloorplanPaintToolLayer,
   type FloorplanPaintSession,
 } from './floorplan-paint-tool'
 import { getGrassHeightRuntime, updateGrassHeightTexture } from './height-texture'
 import { getGrassObstacleRuntime } from './obstacle-texture'
-import {
-  DEFAULT_GRASS_PAINT_COLOR,
-  encodeGrassPaintField,
-  resolveGrassPaintField,
-  siteBounds,
-} from './paint-field'
+import { siteBounds } from './paint-field'
 import { groundCoverCursorColor, groundCoverPaintSettings } from './paint-settings'
 import { beginPaintStroke } from './paint-stroke'
 import { resolveActivePaintSite } from './paint-target'
 import { getGrassPaintRuntime, updateGrassPaintTexture } from './paint-texture'
 import { GRASS_FIELD_KIND, type GrassFieldNode } from './schema'
 
-type PaintableGrassFieldNode = GrassFieldNode & {
-  heightMap?: unknown
-  paintMap?: unknown
-}
-
 type GroundCoverPaintTarget = {
   building: BuildingNode
-  grassField: PaintableGrassFieldNode
+  grassField: GrassFieldNode
   site: SiteNode
 }
 
@@ -41,7 +32,7 @@ function resolveGroundCoverPaintTarget(
 ): GroundCoverPaintTarget | null {
   const activeSite = resolveActivePaintSite(nodes, activeLevelId)
   if (!activeSite) return null
-  const fields = (Object.values(nodes) as unknown as PaintableGrassFieldNode[]).filter(
+  const fields = (Object.values(nodes) as unknown as GrassFieldNode[]).filter(
     (node) => node.type === GRASS_FIELD_KIND && node.parentId === activeSite.site.id,
   )
   return fields.length === 1
@@ -75,10 +66,10 @@ export default function GroundCoverFloorplanTool({
     const runtime = heightStroke
       ? getGrassHeightRuntime(target.grassField.id)
       : getGrassPaintRuntime(target.grassField.id)
+    const sceneNodes = Object.values(sceneApi.nodes())
     const field = heightStroke
-      ? (runtime?.field ?? resolveGrassHeightField(target.grassField.heightMap, bounds))
-      : (runtime?.field ??
-        resolveGrassPaintField(target.grassField.paintMap, bounds, DEFAULT_GRASS_PAINT_COLOR))
+      ? (runtime?.field ?? resolveGroundCoverHeight(target.grassField, sceneNodes, bounds))
+      : (runtime?.field ?? resolveGroundCoverPaint(target.grassField, sceneNodes, bounds))
     const stroke = beginPaintStroke({
       field,
       boundary: target.site.polygon.points,
@@ -94,11 +85,15 @@ export default function GroundCoverFloorplanTool({
         updatePreview(target.grassField.id, nextField)
       },
       commit: (nextField) => {
-        sceneApi.update(
-          target.grassField.id as AnyNodeId,
-          (heightStroke
-            ? { heightMap: encodeGrassPaintField(nextField) }
-            : { paintMap: encodeGrassPaintField(nextField) }) as unknown as Partial<AnyNode>,
+        commitPaintWrite(
+          sceneApi,
+          {
+            siteId: target.site.id,
+            targetId: target.grassField.id,
+            map: heightStroke ? 'heightMap' : 'paintMap',
+          },
+          stroke.snapshot,
+          nextField,
         )
       },
       cancel: () => {

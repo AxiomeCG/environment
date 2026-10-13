@@ -11,6 +11,7 @@ import {
 } from '@pascal-app/core'
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useRef } from 'react'
+import { changedPaintTileTargets } from '../paint-tiles/compose'
 import {
   updateGrassFieldObstacles,
   updateGrassFieldTerrain,
@@ -53,7 +54,8 @@ export function grassFieldGeometryInputsEqual(
     (previous.flowerDensity ?? 0) === (current.flowerDensity ?? 0) &&
     (!flowersEnabled || previous.density === current.density) &&
     grassPaintMapsEqual(previous.paintMap, current.paintMap) &&
-    grassPaintMapsEqual(previous.heightMap, current.heightMap)
+    grassPaintMapsEqual(previous.heightMap, current.heightMap) &&
+    (previous.unpaintedCoverage ?? 1) === (current.unpaintedCoverage ?? 1)
   )
 }
 export type GrassFieldSiteChange = {
@@ -106,7 +108,13 @@ export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
 
   useEffect(() => {
     const deferredObstacleSites = new Set<string>()
-    const unsubscribeScene = sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
+    const unsubscribeScene = sceneApi.subscribeNodes?.((currentNodes, previousNodes, changedIds) => {
+      // A stroke commits only paint tiles; the Ground cover they paint redraws from them.
+      for (const targetId of changedPaintTileTargets(currentNodes, previousNodes, changedIds)) {
+        if ((currentNodes[targetId as AnyNodeId]?.type as string) === GRASS_FIELD_KIND) {
+          sceneApi.markDirty(targetId as AnyNodeId)
+        }
+      }
       const changes = grassFieldSiteChanges(currentNodes, previousNodes)
       for (const change of changes) {
         const node = currentNodes[change.id as AnyNodeId]

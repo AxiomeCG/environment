@@ -29,6 +29,11 @@ export const GrassFieldNode = BaseNode.extend({
   obstacleFlattening: z.number().min(0).max(100).default(60),
   paintMap: GrassPaintFieldData.optional(),
   heightMap: GrassPaintFieldData.optional(),
+  /**
+   * Coverage (0-1) of ground that neither the paint map nor a paint tile covers. Nodes saved before
+   * paint tiles have none, which reads as full coverage; new ones start at 0, with no grass.
+   */
+  unpaintedCoverage: z.number().min(0).max(1).optional(),
 })
 
 export type GrassFieldNode = z.infer<typeof GrassFieldNode>

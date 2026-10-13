@@ -1,5 +1,6 @@
 import type { NodeDefinition } from '@pascal-app/core'
 import type { FloorplanNodeExtension } from '@pascal-app/editor'
+import { paintTileFloorplanDependencies } from '../paint-tiles/compose'
 import { buildGrassFieldBakeGeometry, buildGrassFieldBakeGeometryAsync } from './bake-geometry'
 import { buildGrassFieldFloorplan } from './floorplan'
 import { buildGrassFieldGeometry } from './geometry'
@@ -29,7 +30,7 @@ type GrassFieldDefinition = Omit<
 
 export const grassFieldDefinition: GrassFieldDefinition = {
   kind: 'environment:ground-cover',
-  schemaVersion: 3,
+  schemaVersion: 4,
   schema: GrassFieldNode,
   category: 'furnish',
 
@@ -70,6 +71,7 @@ export const grassFieldDefinition: GrassFieldDefinition = {
   bakeGeometryAsync: buildGrassFieldBakeGeometryAsync,
   bakeReplaceRenderer: { module: () => import('./static-renderer') },
   floorplan: buildGrassFieldFloorplan,
+  floorplanDependencies: paintTileFloorplanDependencies,
   floorplanScope: 'site',
   system: { module: () => import('./system'), priority: 1 },
   tool: () => import('./tool'),

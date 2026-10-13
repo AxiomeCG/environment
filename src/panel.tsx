@@ -38,17 +38,25 @@ import EnvironmentSelector, {
 } from './environment-selector'
 import FrontageSelector from './surroundings/frontage-selector'
 import { SURROUNDINGS_PRESET_IDS, SURROUNDINGS_PRESET_POLICIES } from './surroundings/presets'
-import { createGrassHeightField } from './ground-cover/height-field'
-import { updateGrassHeightTexture } from './ground-cover/height-texture'
+import { createGroundCoverNode } from './ground-cover/create-node'
+import { NEUTRAL_GRASS_HEIGHT_COLOR } from './ground-cover/height-field'
+import { getGrassHeightRuntime, updateGrassHeightTexture } from './ground-cover/height-texture'
 import {
   CLEARED_GRASS_PAINT_COLOR,
-  createGrassPaintField,
-  encodeGrassPaintField,
+  hexToRgb,
   siteBounds,
+  uniformPaintField,
+  type GrassPaintField,
 } from './ground-cover/paint-field'
-import { updateGrassPaintTexture } from './ground-cover/paint-texture'
-import { createGroundCoverNode } from './ground-cover/create-node'
-import { getMissingGrassFieldDefaults } from './ground-cover/schema'
+import { getGrassPaintRuntime, updateGrassPaintTexture } from './ground-cover/paint-texture'
+import { getMissingGrassFieldDefaults, type GrassFieldNode } from './ground-cover/schema'
+import { commitPaintWrite, type PaintWriter } from './paint-tiles/commit'
+import {
+  resolveGroundCoverHeight,
+  resolveGroundCoverPaint,
+  resolveSurfacePaint,
+} from './paint-tiles/layers'
+import type { PaintTileMap } from './paint-tiles/schema'
 import {
   activatePondTool,
   activateGroundCoverTool,
@@ -65,11 +73,6 @@ import PondControls from './pond/controls'
 import RiverControls from './river/controls'
 import { type GroundCoverBrushTool, useEnvironmentStore } from './store'
 import { createSurfaceMaterialNode } from './surface-material/create-node'
-import {
-  createSurfaceMaterialField,
-  encodeSurfaceMaterialField,
-  resolveSurfaceMaterialField,
-} from './surface-material/field'
 import { SURFACE_MATERIAL_PRESENTATION } from './surface-material/materials'
 import type { SurfaceMaterialNode } from './surface-material/schema'
 import { updateSurfacePaintTextures } from './surface-material/texture'
@@ -584,31 +587,36 @@ function GroundCoverPaintControls() {
   const resolveGroundCover = () => {
     const field = getOrCreateGroundCover()
     if (!field?.parentId) return null
-    const scene = useScene.getState()
-    const parent = scene.nodes[field.parentId as AnyNodeId]
+    const parent = useScene.getState().nodes[field.parentId as AnyNodeId]
     if (parent?.type !== 'site') return null
-    return { field, scene, site: parent as SiteNode }
+    return { field, site: parent as SiteNode }
   }
 
   const replaceField = (density: number, color = brush.color) => {
     const target = resolveGroundCover()
     if (!target) return
-    const paintField = createGrassPaintField(siteBounds(target.site.polygon.points), color, density)
-    updateGrassPaintTexture(target.field.id as string, paintField)
-    target.scene.updateNode(
-      target.field.id as AnyNodeId,
-      { paintMap: encodeGrassPaintField(paintField) } as Partial<AnyNode>,
+    const before = groundCoverMapField(target.field, target.site, 'paintMap')
+    const after = uniformPaintField(before, hexToRgb(color), Math.round(density * 255))
+    updateGrassPaintTexture(target.field.id as string, after)
+    commitPaintWrite(
+      panelPaintWriter,
+      { siteId: target.site.id, targetId: target.field.id as string, map: 'paintMap' },
+      before,
+      after,
     )
   }
 
   const resetHeight = () => {
     const target = resolveGroundCover()
     if (!target) return
-    const heightField = createGrassHeightField(siteBounds(target.site.polygon.points))
-    updateGrassHeightTexture(target.field.id as string, heightField)
-    target.scene.updateNode(
-      target.field.id as AnyNodeId,
-      { heightMap: encodeGrassPaintField(heightField) } as Partial<AnyNode>,
+    const before = groundCoverMapField(target.field, target.site, 'heightMap')
+    const after = uniformPaintField(before, hexToRgb(NEUTRAL_GRASS_HEIGHT_COLOR), 255)
+    updateGrassHeightTexture(target.field.id as string, after)
+    commitPaintWrite(
+      panelPaintWriter,
+      { siteId: target.site.id, targetId: target.field.id as string, map: 'heightMap' },
+      before,
+      after,
     )
   }
 
@@ -1153,25 +1161,24 @@ function SurfacePaintControls() {
   const replaceSurface = (fillMaterial?: SurfaceMaterialId) => {
     const surface = getOrCreateSurfaceMaterial()
     if (!surface?.parentId) return
-    const site = useScene.getState().nodes[surface.parentId as AnyNodeId]
+    const scene = useScene.getState()
+    const site = scene.nodes[surface.parentId as AnyNodeId]
     if (site?.type !== 'site') return
-    const field = createSurfaceMaterialField(siteBounds(site.polygon.points))
-    const color = fillMaterial ? SURFACE_MATERIAL_PAINT_COLOR[fillMaterial] : null
-    if (color) {
-      for (let index = 0; index < field.values.length; index += 4) {
-        field.values[index] = color.r
-        field.values[index + 1] = color.g
-        field.values[index + 2] = color.b
-        field.values[index + 3] = 255
-      }
-    }
-    updateSurfacePaintTextures(surface.id, field)
-    useScene
-      .getState()
-      .updateNode(
-        surface.id as AnyNodeId,
-        { paintMap: encodeSurfaceMaterialField(field) } as Partial<AnyNode>,
-      )
+    const before = resolveSurfacePaint(
+      surface as unknown as SurfaceMaterialNode,
+      Object.values(scene.nodes),
+      siteBounds(site.polygon.points),
+    )
+    const after = fillMaterial
+      ? uniformPaintField(before, SURFACE_MATERIAL_PAINT_COLOR[fillMaterial], 255)
+      : uniformPaintField(before, { r: 0, g: 0, b: 0 }, 0)
+    updateSurfacePaintTextures(surface.id, after)
+    commitPaintWrite(
+      panelPaintWriter,
+      { siteId: site.id, targetId: surface.id as string, map: 'paintMap' },
+      before,
+      after,
+    )
   }
   const presentation = SURFACE_MATERIAL_PRESENTATION.find((item) => item.id === material)!
   return (
@@ -1307,6 +1314,22 @@ function SurfacePaintControls() {
   )
 }
 
+/** The panel writes through the scene store: one commit, one undo step. */
+const panelPaintWriter: PaintWriter = {
+  nodes: () => useScene.getState().nodes,
+  applyChanges: (changes) => useScene.getState().applyNodeChanges(changes),
+}
+
+/** A Ground cover map as the person sees it now: the live texture's field, else the scene's. */
+function groundCoverMapField(field: AnyNode, site: SiteNode, map: PaintTileMap): GrassPaintField {
+  const node = field as unknown as GrassFieldNode
+  const nodes = Object.values(useScene.getState().nodes)
+  const bounds = siteBounds(site.polygon.points)
+  return map === 'heightMap'
+    ? (getGrassHeightRuntime(node.id)?.field ?? resolveGroundCoverHeight(node, nodes, bounds))
+    : (getGrassPaintRuntime(node.id)?.field ?? resolveGroundCoverPaint(node, nodes, bounds))
+}
+
 function getOrCreateGroundCover(): AnyNode | null {
   const scene = useScene.getState()
   let field = Object.values(scene.nodes).find((node) => (node.type as string) === GROUND_COVER_TOOL)
@@ -1342,9 +1365,6 @@ function getOrCreateSurfaceMaterial(): AnyNode | null {
   const site = scene.nodes[siteId] as SiteNode
   const created = createSurfaceMaterialNode(site)
   scene.createNode(created as unknown as AnyNode, siteId as AnyNodeId)
-  updateSurfacePaintTextures(
-    created.id,
-    resolveSurfaceMaterialField(created.paintMap, siteBounds(site.polygon.points)),
-  )
+  updateSurfacePaintTextures(created.id, resolveSurfacePaint(created, [], siteBounds(site.polygon.points)))
   return created as unknown as AnyNode
 }

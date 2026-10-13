@@ -32,7 +32,7 @@ export type GrassPaintField = {
   readonly values: Uint8Array
 }
 
-function encodeBase64(bytes: Uint8Array): string {
+export function encodeBase64(bytes: Uint8Array): string {
   let output = ''
   for (let index = 0; index < bytes.length; index += 3) {
     const first = bytes[index] ?? 0
@@ -50,7 +50,8 @@ function encodeBase64(bytes: Uint8Array): string {
   return output
 }
 
-function decodeCanonicalBase64(text: string): Uint8Array | null {
+/** The bytes of `text` when it is the canonical base64 of them, else null. */
+export function decodeCanonicalBase64(text: string): Uint8Array | null {
   if (text.length % 4 !== 0 || !BASE64_PATTERN.test(text)) return null
 
   const padding = text.endsWith('==') ? 2 : text.endsWith('=') ? 1 : 0
@@ -170,6 +171,22 @@ export function createGrassPaintField(
   return { ...extent, values }
 }
 
+/** A field on `lattice`'s cells holding one colour at one alpha everywhere: a fill or a clear. */
+export function uniformPaintField(
+  lattice: GrassPaintField,
+  color: RgbBytes,
+  alpha: number,
+): GrassPaintField {
+  const values = new Uint8Array(lattice.cols * lattice.rows * 4)
+  for (let index = 0; index < values.length; index += 4) {
+    values[index] = color.r
+    values[index + 1] = color.g
+    values[index + 2] = color.b
+    values[index + 3] = alpha
+  }
+  return { ...lattice, values }
+}
+
 export function encodeGrassPaintField(field: GrassPaintField): GrassPaintFieldData {
   assertGrassPaintField(field)
   return GrassPaintFieldData.parse({
@@ -210,19 +227,25 @@ export function grassPaintFieldCoversBounds(field: GrassPaintField, bounds: Site
   )
 }
 
+/**
+ * The field over `bounds` from its persisted raster. Ground no raster covers (all of it when there
+ * is none) holds `defaultColorHex` at `defaultDensity`: full coverage for maps saved before
+ * unpainted ground could be empty.
+ */
 export function resolveGrassPaintField(
   data: unknown,
   bounds: SiteBounds,
   defaultColorHex: string,
+  defaultDensity = 1,
 ): GrassPaintField {
   const normalizedBounds = normalizeBounds(bounds)
   const existing = decodeGrassPaintField(data)
-  if (!existing) return createGrassPaintField(normalizedBounds, defaultColorHex, 1)
+  if (!existing) return createGrassPaintField(normalizedBounds, defaultColorHex, defaultDensity)
 
   const resolved = createGrassPaintField(
     normalizedBounds,
     defaultColorHex,
-    1,
+    defaultDensity,
     Math.min(DEFAULT_GRASS_PAINT_FIELD_SPACING, existing.spacing),
   )
   const tolerance = Math.max(existing.spacing, resolved.spacing) * 1e-9

@@ -1,6 +1,6 @@
 import { segmentsIntersect, type AnyNode, type SiteNode } from '@pascal-app/core'
 import { createGroundCoverNode } from '../ground-cover/create-node'
-import { encodeLocalHeightScale, resolveGrassHeightField } from '../ground-cover/height-field'
+import { encodeLocalHeightScale } from '../ground-cover/height-field'
 import { buildGrassObstacleField } from '../ground-cover/obstacle-adapter'
 import {
   createGrassObstacleTopology,
@@ -9,21 +9,26 @@ import {
 } from '../ground-cover/obstacle-field'
 import {
   DEFAULT_GRASS_PAINT_COLOR,
-  encodeGrassPaintField,
   hexToRgb,
-  resolveGrassPaintField,
   siteBounds,
   type GrassPaintField,
   type RgbBytes,
 } from '../ground-cover/paint-field'
 import { blendPaintCell, type PaintCellBlend } from '../ground-cover/paint-stroke'
 import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
-import { createSurfaceMaterialNode } from '../surface-material/create-node'
+import { paintTilesOf } from '../paint-tiles/compose'
 import {
-  encodeSurfaceMaterialField,
-  resolveSurfaceMaterialField,
-  type SurfaceMaterialField,
-} from '../surface-material/field'
+  resolveGroundCoverHeight,
+  resolveGroundCoverPaint,
+  resolveSurfacePaint,
+} from '../paint-tiles/layers'
+import {
+  mergePaintTileChanges,
+  planPaintTileChanges,
+  type PaintTileChanges,
+} from '../paint-tiles/plan'
+import { PAINT_TILE_KIND, type PaintTileMap } from '../paint-tiles/schema'
+import { createSurfaceMaterialNode } from '../surface-material/create-node'
 import {
   SURFACE_MATERIAL_PAINT_COLOR,
   type SurfaceMaterialId,
@@ -42,7 +47,7 @@ import {
   signedDistanceToPolygon,
   siteChildOfKind,
 } from './scene'
-import type { AgentOperation, PlanPoint, SceneChanges, SceneNodes } from './types'
+import type { AgentOperation, PlanPoint, SceneNodes } from './types'
 
 export type LayGroundKind = 'grass' | 'earth' | 'path' | 'paving' | 'none'
 
@@ -60,7 +65,7 @@ export type LayGroundInput = { areas: LayGroundAreaInput[] }
 
 const MAX_AREAS = 20
 const DEFAULT_FEATHER_M = 0.3
-/** The collaboration layer's per-operation cap, stated next to `updateBytes` as a fact. */
+/** The collaboration layer's per-operation cap, stated next to the largest tile change as a fact. */
 const COLLABORATION_CAP_BYTES = 65_536
 
 const GROUND_SURFACE: Record<LayGroundKind, SurfaceMaterialId | null> = {
@@ -88,15 +93,18 @@ type ResolvedArea = ResolvedShape & {
   tint: RgbBytes | null
 }
 
-/** The site's two paint layers as this call finds (or creates) them, and the fields it paints. */
+/** One painted map: as the scene has it, and the copy this call paints. */
+type PaintedMap = { targetId: string; map: PaintTileMap; before: GrassPaintField; after: GrassPaintField }
+
+/** The site's two paint layers as this call finds (or creates) them, and the maps it paints. */
 type GroundLayers = {
   grassNode: GrassFieldNode
   grassCreated: boolean
   surfaceNode: SurfaceMaterialNode
   surfaceCreated: boolean
-  paint: GrassPaintField
-  height: GrassPaintField | null
-  surface: SurfaceMaterialField
+  paint: PaintedMap
+  height: PaintedMap | null
+  surface: PaintedMap
   obstacles: GrassObstacleField
 }
 
@@ -232,15 +240,23 @@ function resolveGroundLayers(
   )
   const grassNode = existingGrass ?? createGroundCoverNode(site)
   const surfaceNode = existingSurface ?? createSurfaceMaterialNode(site)
-  const paintsHeight = areas.some((area) => area.grassHeight !== null)
+  const sceneNodes = Object.values(nodes)
+  const painted = (targetId: string, map: PaintTileMap, before: GrassPaintField): PaintedMap => ({
+    targetId,
+    map,
+    before,
+    after: { ...before, values: new Uint8Array(before.values) },
+  })
   return {
     grassNode,
     grassCreated: existingGrass === null,
     surfaceNode,
     surfaceCreated: existingSurface === null,
-    paint: resolveGrassPaintField(grassNode.paintMap, bounds, DEFAULT_GRASS_PAINT_COLOR),
-    height: paintsHeight ? resolveGrassHeightField(grassNode.heightMap, bounds) : null,
-    surface: resolveSurfaceMaterialField(surfaceNode.paintMap, bounds),
+    paint: painted(grassNode.id, 'paintMap', resolveGroundCoverPaint(grassNode, sceneNodes, bounds)),
+    height: areas.some((area) => area.grassHeight !== null)
+      ? painted(grassNode.id, 'heightMap', resolveGroundCoverHeight(grassNode, sceneNodes, bounds))
+      : null,
+    surface: painted(surfaceNode.id, 'paintMap', resolveSurfacePaint(surfaceNode, sceneNodes, bounds)),
     obstacles: buildGrassObstacleField(site, nodes, createGrassObstacleTopology(bounds)),
   }
 }
@@ -346,14 +362,14 @@ function refuseUnpaintable(area: ResolvedArea, facts: AreaFacts, sitePolygon: Pl
 
 /** Lay one area on every layer, in the order the brush tools would, and report its facts. */
 function layArea(area: ResolvedArea, sitePolygon: PlanPoint[], layers: GroundLayers) {
-  const facts = measureArea(area, sitePolygon, layers.paint, layers.obstacles)
-  refuseUnpaintable(area, facts, sitePolygon, layers.paint.spacing)
-  paintLayer(layers.paint, area, sitePolygon, grassBlend(area), (x, z) =>
+  const facts = measureArea(area, sitePolygon, layers.paint.after, layers.obstacles)
+  refuseUnpaintable(area, facts, sitePolygon, layers.paint.after.spacing)
+  paintLayer(layers.paint.after, area, sitePolygon, grassBlend(area), (x, z) =>
     isGrassAllowedAt(layers.obstacles, x, z),
   )
-  paintLayer(layers.surface, area, sitePolygon, surfaceBlend(area))
+  paintLayer(layers.surface.after, area, sitePolygon, surfaceBlend(area))
   if (layers.height && area.grassHeight !== null) {
-    paintLayer(layers.height, area, sitePolygon, heightBlend(area.grassHeight))
+    paintLayer(layers.height.after, area, sitePolygon, heightBlend(area.grassHeight))
   }
   return {
     index: area.index,
@@ -379,29 +395,50 @@ function lotGrassCoveragePct(paint: GrassPaintField, sitePolygon: PlanPoint[]): 
   return cells === 0 ? 0 : (covered / cells) * 100
 }
 
-/** The painted layers as node changes: created nodes whole, existing ones by their maps. */
-function groundLayerChanges(site: SiteNode, layers: GroundLayers): SceneChanges {
-  const grassData = {
-    paintMap: encodeGrassPaintField(layers.paint),
-    ...(layers.height ? { heightMap: encodeGrassPaintField(layers.height) } : {}),
+/**
+ * The painted layers as node changes: a missing Ground cover or Surface is created as the panel
+ * creates it, and only the tiles of each map that changed are written.
+ */
+function groundLayerChanges(nodes: SceneNodes, site: SiteNode, layers: GroundLayers): PaintTileChanges {
+  const siteId = String(site.id)
+  const sceneNodes = Object.values(nodes)
+  const tileChanges = [layers.paint, layers.height, layers.surface]
+    .filter((painted): painted is PaintedMap => painted !== null)
+    .map((painted) =>
+      planPaintTileChanges(
+        { siteId, targetId: painted.targetId, map: painted.map },
+        paintTilesOf(sceneNodes, painted.targetId, painted.map),
+        painted.before,
+        painted.after,
+      ),
+    )
+  const createdNodes = [
+    ...(layers.grassCreated ? [layers.grassNode] : []),
+    ...(layers.surfaceCreated ? [layers.surfaceNode] : []),
+  ].map((node) => ({ node: node as unknown as AnyNode, parentId: site.id }))
+  return mergePaintTileChanges(
+    createdNodes.length > 0 ? { create: createdNodes } : {},
+    ...tileChanges,
+  )
+}
+
+/** How large the write is, tile by tile, next to the 64 KiB a shared operation may carry. */
+function writeSizeFacts(nodes: SceneNodes, changes: PaintTileChanges) {
+  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value ?? null)).length
+  const tileOf = (id: string) => (nodes[id] as { tile?: unknown } | undefined)?.tile
+  const tileChanges = [
+    ...(changes.create ?? [])
+      .filter(({ node }) => String(node.type) === PAINT_TILE_KIND)
+      .map(({ node }) => bytes(node)),
+    ...(changes.update ?? []).map(({ id, data }) => bytes(tileOf(id)) + bytes(data)),
+    ...(changes.delete ?? []).map((id) => bytes(nodes[id])),
+  ]
+  return {
+    tilesChanged: tileChanges.length,
+    largestTileChangeBytes: Math.max(0, ...tileChanges),
+    changeBytes: bytes(changes),
+    collaborationCapBytes: COLLABORATION_CAP_BYTES,
   }
-  const surfaceData = { paintMap: encodeSurfaceMaterialField(layers.surface) }
-  const changes: SceneChanges = {}
-  const create: NonNullable<SceneChanges['create']> = []
-  const update: NonNullable<SceneChanges['update']> = []
-  if (layers.grassCreated) {
-    create.push({ node: { ...layers.grassNode, ...grassData } as unknown as AnyNode, parentId: String(site.id) })
-  } else {
-    update.push({ id: String(layers.grassNode.id), data: grassData as Partial<AnyNode> })
-  }
-  if (layers.surfaceCreated) {
-    create.push({ node: { ...layers.surfaceNode, ...surfaceData } as unknown as AnyNode, parentId: String(site.id) })
-  } else {
-    update.push({ id: String(layers.surfaceNode.id), data: surfaceData as Partial<AnyNode> })
-  }
-  if (create.length > 0) changes.create = create
-  if (update.length > 0) changes.update = update
-  return changes
 }
 
 export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
@@ -410,17 +447,16 @@ export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
   const areas = resolveAreas(input, sitePolygon)
   const layers = resolveGroundLayers(nodes, site, areas)
   const areaFacts = areas.map((area) => layArea(area, sitePolygon, layers))
-  const changes = groundLayerChanges(site, layers)
+  const changes = groundLayerChanges(nodes, site, layers)
   return {
     result: {
       areas: areaFacts,
-      grassCoveragePct: roundFact(lotGrassCoveragePct(layers.paint, sitePolygon)),
-      grassCellM: layers.paint.spacing,
-      surfaceCellM: layers.surface.spacing,
+      grassCoveragePct: roundFact(lotGrassCoveragePct(layers.paint.after, sitePolygon)),
+      grassCellM: layers.paint.after.spacing,
+      surfaceCellM: layers.surface.after.spacing,
       groundCoverCreated: layers.grassCreated,
       surfaceCreated: layers.surfaceCreated,
-      updateBytes: new TextEncoder().encode(JSON.stringify(changes)).length,
-      collaborationCapBytes: COLLABORATION_CAP_BYTES,
+      ...writeSizeFacts(nodes, changes),
     },
     changes,
   }

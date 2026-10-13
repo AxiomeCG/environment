@@ -35,7 +35,9 @@ import { siteBounds } from '../ground-cover/paint-field'
 import { resolveActivePaintSite } from '../ground-cover/paint-target'
 import { useEnvironmentStore } from '../store'
 import { useSceneApiNodes } from '../use-scene-api-nodes'
-import { encodeSurfaceMaterialField, resolveSurfaceMaterialField, type SurfaceMaterialField } from './field'
+import { commitPaintWrite } from '../paint-tiles/commit'
+import { resolveSurfacePaint } from '../paint-tiles/layers'
+import type { SurfaceMaterialField } from './field'
 import { SURFACE_MATERIAL_PAINT_COLOR } from './material-types'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from './schema'
 import { updateSurfacePaintTextures } from './texture'
@@ -47,6 +49,7 @@ type PaintTarget = {
 }
 type ActiveStroke = {
   surfaceId: string
+  siteId: string
   pointerId: number
   stroke: PaintStroke
   terrain: TerrainField | null
@@ -143,12 +146,14 @@ export default function SurfaceMaterialPaintTool() {
       const point = groundPoint(event, current.site, terrain)
       if (!point) return
       if (!claimEnvironmentPaintStroke(ownerRef.current)) return
-      const field: SurfaceMaterialField = resolveSurfaceMaterialField(
-        current.surface.paintMap,
+      const field: SurfaceMaterialField = resolveSurfacePaint(
+        current.surface,
+        Object.values(sceneApi.nodes()),
         siteBounds(current.site.polygon.points),
       )
       activeStroke.current = {
         surfaceId: current.surface.id,
+        siteId: current.site.id,
         pointerId: event.pointerId,
         terrain,
         stroke: beginPaintStroke({
@@ -179,11 +184,11 @@ export default function SurfaceMaterialPaintTool() {
       activeStroke.current = null
       releaseEnvironmentPaintStroke(ownerRef.current)
       release(event.pointerId)
-      sceneApi.update(
-        active.surfaceId as AnyNodeId,
-        {
-          paintMap: encodeSurfaceMaterialField(currentPaintField(active.stroke)),
-        } as unknown as Partial<AnyNode>,
+      commitPaintWrite(
+        sceneApi,
+        { siteId: active.siteId, targetId: active.surfaceId, map: 'paintMap' },
+        active.stroke.snapshot,
+        currentPaintField(active.stroke),
       )
     }
     const handlePointerCancel = (event: PointerEvent) => {
