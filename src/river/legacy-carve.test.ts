@@ -1,169 +1,51 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import {
-  createTerrainField,
-  encodeTerrainField,
-  SiteNode,
-  type SiteNode as SiteNodeType,
-  type TerrainField,
-} from '@pascal-app/core'
-import { extractSourceAt, type HistoricalSource } from './historical-source'
+import { describe, expect, test } from 'bun:test'
+import { decodeTerrainField, SiteNode } from '@pascal-app/core'
+import { PRE_V3_COMMIT, readEarlierCarveFixtures } from './earlier-carves'
 import { RiverNode } from './schema'
 import { rebuildRiverTerrain } from './terrain'
 
 /**
- * The commit before river v3. Its own carver, extracted from git, is the
- * oracle: a river saved before v3 must carve exactly as it did there.
+ * Rivers saved before v3 must carve exactly as the pre-v3 carver did. The
+ * oracle is that carver's own output, frozen in fixtures/earlier-carves.json
+ * (see earlier-carves.ts for its provenance and how to rebuild it from git).
  */
-const PRE_V3_COMMIT = '1aa0bc3'
+const { preV3Carves } = readEarlierCarveFixtures()
 
-type PreV3Carver = Readonly<{
-  parseRiver: (raw: unknown) => unknown
-  carve: (site: SiteNodeType, rivers: readonly unknown[]) => { terrain: TerrainField }
-}>
-
-let source: HistoricalSource | null = null
-let preV3: PreV3Carver | null = null
-
-beforeAll(async () => {
-  source = extractSourceAt(PRE_V3_COMMIT)
-  preV3 = await loadCarver(source)
-})
-
-afterAll(() => source?.dispose())
-
-/** The carve entry point and river schema of an extracted source, as untyped functions. */
-async function loadCarver(extracted: HistoricalSource) {
-  const terrainModule = (await extracted.load('src/river/terrain.ts')) as {
-    rebuildRiverTerrain: PreV3Carver['carve']
-  }
-  const schemaModule = (await extracted.load('src/river/schema.ts')) as {
-    RiverNode: { parse: PreV3Carver['parseRiver'] }
-  }
-  return {
-    parseRiver: (raw: unknown) => schemaModule.RiverNode.parse(raw),
-    carve: terrainModule.rebuildRiverTerrain,
-  }
+const CASES: Readonly<Record<string, string>> = {
+  flatStraight: 'straight river with rounded caps on flat ground',
+  slopingStraight: 'straight river on ground falling 0.3 m per metre',
+  bentUneven: 'bending river on uneven ground',
+  connected: 'mountain source and sea outlet run to the boundary',
+  overlapping: 'overlapping rivers keep the deepest cut',
 }
 
-/** The fixture of the review: a 20 m lot at 0.5 m spacing and 1 cm height steps. */
-function terrainFrom(heightAt: (x: number, z: number) => number): TerrainField {
-  const terrain = createTerrainField({
-    origin: [-10, -10],
-    spacing: 0.5,
-    cols: 41,
-    rows: 41,
-    step: 0.01,
-  })
-  for (let row = 0; row < terrain.rows; row += 1) {
-    for (let col = 0; col < terrain.cols; col += 1) {
-      const x = terrain.origin[0] + col * terrain.spacing
-      const z = terrain.origin[1] + row * terrain.spacing
-      terrain.heights[row * terrain.cols + col] = Math.round(heightAt(x, z) / terrain.step)
-    }
-  }
-  return terrain
-}
-
-function siteOn(terrain: TerrainField): SiteNodeType {
-  return SiteNode.parse({
-    id: 'site_pre_v3',
-    polygon: {
-      type: 'polygon',
-      points: [
-        [-10, -10],
-        [10, -10],
-        [10, 10],
-        [-10, 10],
-      ],
-    },
-    terrain: encodeTerrainField(terrain),
-    children: [],
-  })
-}
-
-/** A river exactly as a pre-v3 scene stored it: none of the v3 fields. */
-function savedRiver(id: string, fields: Record<string, unknown>) {
-  return {
-    id,
-    type: 'environment:river',
-    parentId: 'site_pre_v3',
-    points: [
-      [-8, 0],
-      [8, 0],
-    ],
-    width: 4,
-    depth: 1,
-    source: 'rounded',
-    outlet: 'rounded',
-    ...fields,
-  }
-}
-
-function cellsCarvedDifferently(
-  terrain: TerrainField,
-  saved: readonly Record<string, unknown>[],
-): string[] {
-  if (!preV3) throw new Error('The pre-v3 carver did not load.')
-  const site = siteOn(terrain)
-  const expected = preV3.carve(site, saved.map(preV3.parseRiver)).terrain.heights
+function cellsCarvedDifferently(name: string): string[] {
+  const fixture = preV3Carves[name]
+  const expected = decodeTerrainField(fixture?.carvedTerrain)
+  if (!fixture || !expected) throw new Error(`Missing pre-v3 fixture ${name}.`)
+  const site = SiteNode.parse(fixture.site)
   const actual = rebuildRiverTerrain(
     site,
-    saved.map((raw) => RiverNode.parse(raw)),
+    fixture.rivers.map((saved) => RiverNode.parse(saved)),
   ).terrain.heights
   const differences: string[] = []
-  for (let index = 0; index < expected.length; index += 1) {
-    if (expected[index] === actual[index]) continue
-    const col = index % terrain.cols
-    const row = Math.floor(index / terrain.cols)
-    differences.push(`(${col}, ${row}): pre-v3 ${expected[index]}, now ${actual[index]}`)
+  for (let index = 0; index < expected.heights.length; index += 1) {
+    if (expected.heights[index] === actual[index]) continue
+    const col = index % expected.cols
+    const row = Math.floor(index / expected.cols)
+    differences.push(`(${col}, ${row}): pre-v3 ${expected.heights[index]}, now ${actual[index]}`)
   }
   return differences
 }
 
-describe('rivers saved before v3 carve exactly as the pre-v3 carver did', () => {
-  test('straight river with rounded caps on flat ground', () => {
-    expect(cellsCarvedDifferently(terrainFrom(() => 0), [savedRiver('river_flat', {})])).toEqual(
-      [],
-    )
+describe(`rivers saved before v3 carve exactly as the ${PRE_V3_COMMIT} carver did`, () => {
+  test('every frozen case is covered', () => {
+    expect(Object.keys(preV3Carves).sort()).toEqual(Object.keys(CASES).sort())
   })
 
-  test('straight river on ground falling 0.3 m per metre', () => {
-    expect(
-      cellsCarvedDifferently(terrainFrom((x) => -0.3 * x), [savedRiver('river_slope', {})]),
-    ).toEqual([])
-  })
-
-  test('bending river on uneven ground', () => {
-    const uneven = (x: number, z: number) => 0.6 * Math.sin(x * 0.7) + 0.4 * Math.cos(z * 0.5)
-    const bent = savedRiver('river_bent', {
-      points: [
-        [-8, -6],
-        [-3, 2],
-        [3, -2],
-        [8, 5],
-      ],
-      width: 3,
-      depth: 1.5,
+  for (const [name, behaviour] of Object.entries(CASES)) {
+    test(behaviour, () => {
+      expect(cellsCarvedDifferently(name)).toEqual([])
     })
-    expect(cellsCarvedDifferently(terrainFrom(uneven), [bent])).toEqual([])
-  })
-
-  test('mountain source and sea outlet run to the boundary', () => {
-    const connected = savedRiver('river_connected', { source: 'mountain', outlet: 'sea' })
-    expect(cellsCarvedDifferently(terrainFrom((x) => -0.3 * x), [connected])).toEqual([])
-  })
-
-  test('overlapping rivers keep the deepest cut', () => {
-    const across = savedRiver('river_across', { width: 3, depth: 0.6 })
-    const along = savedRiver('river_along', {
-      points: [
-        [0, -7],
-        [0.5, 0],
-        [0, 7],
-      ],
-      width: 6,
-      depth: 2,
-    })
-    expect(cellsCarvedDifferently(terrainFrom(() => 1), [across, along])).toEqual([])
-  })
+  }
 })
