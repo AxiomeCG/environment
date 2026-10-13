@@ -280,6 +280,24 @@ describe('downhill rivers that meet themselves', () => {
     expect(switched.message).toContain('cross')
     expect(commits).toHaveLength(1)
   })
+
+  test('accepts appearance-only edits on a river refused for meeting itself, without carving it', () => {
+    // A river can become refused outside the actions (a generic edit, an
+    // old save); its speed or water quality can still be changed, since
+    // neither touches the carve or the refusal.
+    const { commits, nodes, scene } = mutableScene(siteFallingTowardPositiveX())
+    const created = createRiver(scene, SITE_ID, { ...DEFAULTS, points: crossing })
+    if (!created.river) throw new Error('expected the as-drawn crossing to be created')
+    nodes[created.river.id as AnyNodeId] = { ...created.river, flow: 'downhill' } as unknown as AnyNode
+    const siteBefore = nodes[SITE_ID as AnyNodeId]
+
+    const sped = updateRiver(scene, created.river.id, { flowSpeed: 1 })
+
+    expect(sped.ok).toBe(true)
+    expect(commits).toHaveLength(2)
+    expect(commits[1]?.update?.map((update) => String(update.id))).toEqual([created.river.id])
+    expect(nodes[SITE_ID as AnyNodeId]).toBe(siteBefore)
+  })
 })
 
 test('refuses a narrow downhill crossing that falls between coarse samples', () => {

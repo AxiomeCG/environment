@@ -237,6 +237,9 @@ export function updateRiver(
     patch.maxSlopePct !== undefined ||
     patch.section !== undefined ||
     patch.ends !== undefined
+  // Appearance-only edits (speed, direction, quality, shoreline) are accepted
+  // even on a river the planner refuses: they change neither its carve nor
+  // its refusal, and refusing them would only get in the way while it is fixed.
   if (!excavationChanged) {
     applyRiverChanges(scene, { update: [riverUpdate] })
     return { ok: true, message: 'River updated.', river }
