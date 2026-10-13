@@ -322,6 +322,31 @@ describe('RiverSystem reconciliation', () => {
       }
     })
 
+    test('a river edit right after loading an earlier save stays an undoable edit', async () => {
+      const { site, rivers } = savedCase('asDrawnStraight')
+      loadScene([site, ...(rivers as unknown as AnyNode[])])
+      const { sceneApi, writes } = recordingSceneApi()
+      const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+      try {
+        expect(writes).toHaveLength(0)
+        const [river] = rivers
+        if (!river) throw new Error('expected the saved river')
+
+        await act(async () => {
+          // A parametric edit goes straight to the scene, past the river actions.
+          createSceneApi(useScene).applyChanges?.({
+            update: [{ id: river.id as AnyNodeId, data: { flow: 'downhill' } as Partial<AnyNode> }],
+          })
+        })
+
+        // The edit and the re-carve it causes are both recorded, not hidden as a migration.
+        expect(writes).toHaveLength(1)
+        expect(useScene.temporal.getState().pastStates).toHaveLength(2)
+      } finally {
+        await renderer.unmount()
+      }
+    })
+
     test('an earlier stamp is re-carved from its own baseline, keeping later sculpts', async () => {
       const { site, rivers } = savedCase('asDrawnStraight')
       const sculpted = sculptCorner(site)

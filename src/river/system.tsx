@@ -129,11 +129,12 @@ export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
   useEffect(() => {
     let reconciling = false
 
-    const reconcile = (siteIds: ReadonlySet<string>) => {
+    const reconcile = (siteIds: ReadonlySet<string>, riverEditedSiteIds: ReadonlySet<string>) => {
       if (reconciling || siteIds.size === 0) return
       reconciling = true
       try {
-        applyReconcileWrites(sceneApi, reconcileWrites(sceneApi.nodes(), siteIds))
+        const writes = reconcileWrites(sceneApi.nodes(), siteIds, riverEditedSiteIds)
+        applyReconcileWrites(sceneApi, writes)
       } finally {
         reconciling = false
       }
@@ -144,10 +145,13 @@ export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
       sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
         if (reconciling) return
         const changes = riverSiteChanges(currentNodes, previousNodes)
-        reconcile(new Set(changes.map((change) => change.siteId)))
+        reconcile(
+          new Set(changes.map((change) => change.siteId)),
+          new Set(changes.filter((change) => change.riverChanged).map((change) => change.siteId)),
+        )
       }) ?? (() => {})
     const unsubscribePreviews = subscribeLivePreviews(sceneApi)
-    reconcile(riverSitesOf(sceneApi.nodes()))
+    reconcile(riverSitesOf(sceneApi.nodes()), new Set())
 
     return () => {
       unsubscribeScene()
@@ -230,10 +234,15 @@ function subscribeLivePreviews(sceneApi: SceneApi): () => void {
 
 type SiteUpdate = Readonly<{ id: AnyNodeId; data: Partial<AnyNode> }>
 
-/** The Site writes that bring these Sites in line with their rivers, split by kind. */
+/**
+ * The Site writes that bring these Sites in line with their rivers, split by
+ * kind. A write caused by a river edit is always an edit, even on a Site
+ * still as an earlier carver saved it: the edit's consequence must be undoable.
+ */
 function reconcileWrites(
   nodes: Readonly<Record<string, AnyNode>>,
   siteIds: ReadonlySet<string>,
+  riverEditedSiteIds: ReadonlySet<string>,
 ): Readonly<{ edits: SiteUpdate[]; migrations: SiteUpdate[] }> {
   const edits: SiteUpdate[] = []
   const migrations: SiteUpdate[] = []
@@ -251,7 +260,7 @@ function reconcileWrites(
     const write = riverReconcileUpdate(site, rivers)
     if (!write) continue
     const update = { id: site.id as AnyNodeId, data: write.update as Partial<AnyNode> }
-    if (write.migration) migrations.push(update)
+    if (write.migration && !riverEditedSiteIds.has(siteId)) migrations.push(update)
     else edits.push(update)
   }
   return { edits, migrations }
