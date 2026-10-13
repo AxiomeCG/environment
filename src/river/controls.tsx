@@ -649,6 +649,14 @@ export function RiverControls() {
             <div className="text-right">
               {facts.rapidLengthM > 0 ? `${facts.rapidLengthM.toFixed(1)} m` : '—'}
             </div>
+            {facts.depthShortfallM > 0.005 ? (
+              <>
+                <div>Depth limited</div>
+                <div className="text-right">
+                  {`${facts.depthShortfallM.toFixed(2)} m short (bank slope)`}
+                </div>
+              </>
+            ) : null}
           </dl>
         ) : null}
       </section>

@@ -776,7 +776,20 @@ function measureRiverFacts(
     embankedLengthM,
     maxEmbankmentM: Math.max(0, ...authored.map((sample) => sample.embankmentM)),
     rapidLengthM,
+    depthShortfallM: Math.max(0, ...authored.map((sample) => depthShortfallM(river, sample))),
   }
+}
+
+/** Authored depth the section cannot reach at its deepest line, in metres. */
+function depthShortfallM(river: RiverNode, sample: RiverPlanSample): number {
+  const centreShape = riverSectionShape(
+    river.section.shape,
+    0,
+    sample.widthM * 0.5,
+    sample.depthM,
+    river.section.bankSlope,
+  )
+  return sample.depthM * (1 - centreShape)
 }
 
 /** Cut/fill areas of one cross-section, sampled laterally across the uncarved ground. */

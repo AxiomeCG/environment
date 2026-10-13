@@ -129,3 +129,24 @@ describe('rapids', () => {
     expect(profile.map((sample) => sample.rapid)).toEqual([false, true, true])
   })
 })
+
+describe('trapezoid feasibility', () => {
+  // Review input: half-width 2 m, depth 8 m, bank slope 2. The 16 m side run
+  // cannot fit inside the half-width.
+  const halfWidthM = 2
+  const depthM = 8
+  const bankSlope = 2
+
+  test('a trapezoid too narrow for its depth keeps a continuous bank to the rim', () => {
+    const depthAt = (lateralM: number) =>
+      depthM * riverSectionShape('trapezoid', lateralM, halfWidthM, depthM, bankSlope)
+    expect(depthAt(halfWidthM)).toBe(0)
+    expect(depthAt(halfWidthM - 0.001)).toBeLessThan(0.01)
+  })
+
+  test('it keeps the authored bank slope and reaches half-width / slope at the centre', () => {
+    const centreDepthM =
+      depthM * riverSectionShape('trapezoid', 0, halfWidthM, depthM, bankSlope)
+    expect(centreDepthM).toBeCloseTo(halfWidthM / bankSlope, 9)
+  })
+})

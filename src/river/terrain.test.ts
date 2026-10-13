@@ -578,3 +578,17 @@ describe('river facts', () => {
     expect(plan.facts.rapidLengthM).toBeCloseTo(plan.facts.lengthM, 6)
   })
 })
+
+describe('trapezoid sections', () => {
+  test('facts report how much shallower a too-narrow trapezoid had to be', () => {
+    const terrain = flatTerrain()
+    const section = { shape: 'trapezoid', bankSlope: 2, bendAsymmetry: 0, bermM: 0, blendM: 2 } as const
+    const narrowDeep = river('river_narrow_deep', { width: 4, depth: 8, section })
+    const plan = planRiver(terrain, narrowDeep, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    // 2 m half-width at a 2:1 bank slope reaches 1 m: 7 m short of the authored 8 m.
+    expect(plan.facts.depthShortfallM).toBeCloseTo(7, 6)
+    const fits = river('river_fits', { width: 4, depth: 0.5, section })
+    expect(planRiver(terrain, fits, siteWith(terrain).polygon.points)?.facts.depthShortfallM).toBe(0)
+  })
+})

@@ -149,7 +149,10 @@ export function resolvePointValues(
 /**
  * Channel cross-section as a 0..1 multiplier of depth at a lateral offset.
  * `curved` is the original rounded bed; `trapezoid` is a flat bed whose side
- * slopes run at the section's bank slope.
+ * slopes run at the section's bank slope. A trapezoid too narrow for its depth
+ * (side run longer than the half-width) keeps that slope and becomes a V
+ * reaching only half-width / slope: the shape stays continuous to the rim and
+ * the planner reports the shortfall in its facts.
  */
 export function riverSectionShape(
   shape: RiverSectionShape,
@@ -162,7 +165,8 @@ export function riverSectionShape(
   if (halfWidthM <= 1e-9 || distance >= halfWidthM) return 0
   if (shape === 'trapezoid') {
     const sideRunM = Math.max(1e-6, depthM * bankSlope)
-    const bedHalfM = Math.max(0, halfWidthM - sideRunM)
+    if (sideRunM > halfWidthM) return (halfWidthM - distance) / sideRunM
+    const bedHalfM = halfWidthM - sideRunM
     if (distance <= bedHalfM) return 1
     return Math.max(0, 1 - (distance - bedHalfM) / sideRunM)
   }
@@ -245,6 +249,11 @@ export type RiverFacts = Readonly<{
   maxEmbankmentM: number
   /** Length where the water runs at the maximum slope (see `RiverProfileSample.rapid`). */
   rapidLengthM: number
+  /**
+   * Most the channel had to be made shallower than authored to keep its banks
+   * at the authored slope (a trapezoid too narrow for its depth); 0 otherwise.
+   */
+  depthShortfallM: number
 }>
 
 export function smoothstep(edge0: number, edge1: number, value: number): number {
