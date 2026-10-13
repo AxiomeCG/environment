@@ -52,9 +52,17 @@ function latticeBlocks(field: GrassPaintField, target: PaintTileTarget): TileBlo
   const blocks: TileBlock[] = []
   const lastBlockRow = Math.floor((firstRow + field.rows - 1) / PAINT_TILE_SIDE)
   const lastBlockCol = Math.floor((firstCol + field.cols - 1) / PAINT_TILE_SIDE)
-  for (let blockRow = Math.floor(firstRow / PAINT_TILE_SIDE); blockRow <= lastBlockRow; blockRow += 1) {
+  for (
+    let blockRow = Math.floor(firstRow / PAINT_TILE_SIDE);
+    blockRow <= lastBlockRow;
+    blockRow += 1
+  ) {
     const rows = blockSpan(firstRow, field.rows, blockRow)
-    for (let blockCol = Math.floor(firstCol / PAINT_TILE_SIDE); blockCol <= lastBlockCol; blockCol += 1) {
+    for (
+      let blockCol = Math.floor(firstCol / PAINT_TILE_SIDE);
+      blockCol <= lastBlockCol;
+      blockCol += 1
+    ) {
       const cols = blockSpan(firstCol, field.cols, blockCol)
       blocks.push({
         key: paintTileId(target, blockCol, blockRow),
@@ -68,7 +76,11 @@ function latticeBlocks(field: GrassPaintField, target: PaintTileTarget): TileBlo
   return blocks
 }
 
-function blockChanged(before: GrassPaintField, after: GrassPaintField, block: LatticeBlock): boolean {
+function blockChanged(
+  before: GrassPaintField,
+  after: GrassPaintField,
+  block: LatticeBlock,
+): boolean {
   for (let row = block.row; row < block.row + block.rows; row += 1) {
     const start = (row * after.cols + block.col) * 4
     for (let index = start; index < start + block.cols * 4; index += 1) {
@@ -79,7 +91,11 @@ function blockChanged(before: GrassPaintField, after: GrassPaintField, block: La
 }
 
 /** Whether a tile from another lattice covers any cell of the block (out to half its spacing). */
-function blockOverlapsTile(field: GrassPaintField, block: LatticeBlock, tile: PaintTileData): boolean {
+function blockOverlapsTile(
+  field: GrassPaintField,
+  block: LatticeBlock,
+  tile: PaintTileData,
+): boolean {
   const reach = tile.spacing / 2
   const blockMinX = field.origin[0] + block.col * field.spacing
   const blockMinZ = field.origin[1] + block.row * field.spacing
@@ -131,7 +147,9 @@ export function planPaintTileChanges(
   const existingById = new Map(existing.map((tile) => [tile.id, tile]))
   const changes = writeBlocks(target, written, existingById, after)
   const writtenIds = new Set(written.map((block) => block.key))
-  const removed = stale.filter((tile) => !writtenIds.has(tile.id)).map((tile) => tile.id as AnyNodeId)
+  const removed = stale
+    .filter((tile) => !writtenIds.has(tile.id))
+    .map((tile) => tile.id as AnyNodeId)
   if (removed.length > 0) changes.delete = removed
   return changes
 }

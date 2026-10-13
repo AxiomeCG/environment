@@ -48,7 +48,10 @@ function floodPlateau(terrain: TerrainField, start: number, seen: Uint8Array) {
  * The terrain's local minima in the region, lowest first: one seed per flat bottom (a plateau
  * with nothing lower around it and something higher), however many cells it spans.
  */
-function minimumPlateaus(terrain: TerrainField, inRegion: (x: number, z: number) => boolean): Minimum[] {
+function minimumPlateaus(
+  terrain: TerrainField,
+  inRegion: (x: number, z: number) => boolean,
+): Minimum[] {
   const seen = new Uint8Array(terrain.cols * terrain.rows)
   const minima: Minimum[] = []
   for (let start = 0; start < seen.length; start += 1) {
@@ -56,10 +59,12 @@ function minimumPlateaus(terrain: TerrainField, inRegion: (x: number, z: number)
     const plateau = floodPlateau(terrain, start, seen)
     if (plateau.lower || !plateau.higher) continue
     const seed = plateau.cells
-      .map((cell): PlanPoint => [
-        terrain.origin[0] + (cell % terrain.cols) * terrain.spacing,
-        terrain.origin[1] + Math.floor(cell / terrain.cols) * terrain.spacing,
-      ])
+      .map(
+        (cell): PlanPoint => [
+          terrain.origin[0] + (cell % terrain.cols) * terrain.spacing,
+          terrain.origin[1] + Math.floor(cell / terrain.cols) * terrain.spacing,
+        ],
+      )
       .find((point) => inRegion(point[0], point[1]))
     if (seed) minima.push({ point: seed, height: plateau.height * terrain.step })
   }

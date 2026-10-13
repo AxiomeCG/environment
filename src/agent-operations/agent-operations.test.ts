@@ -9,7 +9,11 @@ import { describe, expect, test } from 'bun:test'
 import { layGroundTool } from '../agent-tools'
 import { createGroundCoverNode } from '../ground-cover/create-node'
 import { paintAt, siteBounds, type GrassPaintField } from '../ground-cover/paint-field'
-import { advancePaintStroke, beginPaintStroke, currentPaintField } from '../ground-cover/paint-stroke'
+import {
+  advancePaintStroke,
+  beginPaintStroke,
+  currentPaintField,
+} from '../ground-cover/paint-stroke'
 import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
 import { inspectPondTarget, targetPondAtSeed } from '../pond/actions'
 import { analyzePondBasin, buildPondSurface } from '../pond/basin'
@@ -18,10 +22,7 @@ import { POND_KIND, PondNode, type PondNode as PondNodeValue } from '../pond/sch
 import { RiverNode, type RiverNode as RiverNodeValue } from '../river/schema'
 import { rebuildRiverTerrain, riverTerrainBaseline, sampleRiverPath } from '../river/terrain'
 import { resolveGroundCoverPaint, resolveSurfacePaint } from '../paint-tiles/layers'
-import {
-  surfaceMaterialWeightsAt,
-  type SurfaceMaterialField,
-} from '../surface-material/field'
+import { surfaceMaterialWeightsAt, type SurfaceMaterialField } from '../surface-material/field'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
 import { environmentAgentOperations } from './index'
 import { refusalCode } from './refuse'
@@ -76,7 +77,8 @@ function applyChanges(nodes: Nodes, changes: SceneChanges | undefined): Nodes {
   for (const { node, parentId } of changes?.create ?? []) {
     next[String(node.id)] = node
     const parent = parentId ? (next[parentId] as AnyNode & { children?: string[] }) : undefined
-    if (parent?.children) next[parent.id] = { ...parent, children: [...parent.children, String(node.id)] } as AnyNode
+    if (parent?.children)
+      next[parent.id] = { ...parent, children: [...parent.children, String(node.id)] } as AnyNode
   }
   for (const { id, data } of changes?.update ?? []) next[id] = { ...next[id], ...data } as AnyNode
   for (const id of changes?.delete ?? []) delete next[id]
@@ -84,7 +86,10 @@ function applyChanges(nodes: Nodes, changes: SceneChanges | undefined): Nodes {
 }
 
 /** The site's grass and surface fields as the renderer resolves them from the nodes. */
-function groundFieldsOf(nodes: Nodes, siteId: string): { paint: GrassPaintField; surface: SurfaceMaterialField } {
+function groundFieldsOf(
+  nodes: Nodes,
+  siteId: string,
+): { paint: GrassPaintField; surface: SurfaceMaterialField } {
   const site = nodes[siteId] as SiteNode
   const bounds = siteBounds(site.polygon.points)
   const ofKind = (kind: string) => Object.values(nodes).find((node) => String(node.type) === kind)
@@ -114,7 +119,15 @@ function twoBasinLot(ponds: PondNodeValue[] = []): { nodes: Nodes; site: SiteNod
   terrain.heights.set(TWO_BASIN_ROWS.flat())
   const site = SiteNode.parse({
     id: 'site_two_basins',
-    polygon: { type: 'polygon', points: [[0, 0], [6, 0], [6, 6], [0, 6]] },
+    polygon: {
+      type: 'polygon',
+      points: [
+        [0, 0],
+        [6, 0],
+        [6, 6],
+        [0, 6],
+      ],
+    },
     terrain: encodeTerrainField(terrain),
     children: ponds.map((pond) => pond.id),
   })
@@ -161,7 +174,15 @@ function terrainLot(cols: number, rows: number, shape: (heights: Int16Array) => 
   shape(terrain.heights)
   const site = SiteNode.parse({
     id: 'site_terrain',
-    polygon: { type: 'polygon', points: [[0, 0], [cols - 1, 0], [cols - 1, rows - 1], [0, rows - 1]] },
+    polygon: {
+      type: 'polygon',
+      points: [
+        [0, 0],
+        [cols - 1, 0],
+        [cols - 1, rows - 1],
+        [0, rows - 1],
+      ],
+    },
     terrain: encodeTerrainField(terrain),
     children: [],
   })
@@ -201,7 +222,16 @@ describe('lay_ground', () => {
       const first = runLayGround(nodes, [{ site: true, ground: 'grass' }])
       const created = applyChanges(nodes, first.changes)
       const second = runLayGround(created, [
-        { path: { points: [[side / 2, 0], [side / 2, side]], widthM: 1.2 }, ground: 'path' },
+        {
+          path: {
+            points: [
+              [side / 2, 0],
+              [side / 2, side],
+            ],
+            widthM: 1.2,
+          },
+          ground: 'path',
+        },
       ])
       for (const { result } of [first, second]) {
         expect(result.tilesChanged).toBeGreaterThan(0)
@@ -209,7 +239,9 @@ describe('lay_ground', () => {
       }
       // The path rewrites the tiles it crosses: a column of them, not the lot.
       expect(second.changes?.create).toBeUndefined()
-      expect((second.changes?.update ?? []).every((entry) => entry.id.startsWith('paint-tile_'))).toBe(true)
+      expect(
+        (second.changes?.update ?? []).every((entry) => entry.id.startsWith('paint-tile_')),
+      ).toBe(true)
       expect(second.result.tilesChanged).toBeLessThan(first.result.tilesChanged as number)
     }
   })
@@ -218,7 +250,17 @@ describe('lay_ground', () => {
     const { nodes, siteId } = flatLot()
     const { changes } = runLayGround(nodes, [
       { site: true, ground: 'grass' },
-      { path: { points: [[8, 0], [8, 16]], widthM: 1.2 }, ground: 'path', featherM: 0 },
+      {
+        path: {
+          points: [
+            [8, 0],
+            [8, 16],
+          ],
+          widthM: 1.2,
+        },
+        ground: 'path',
+        featherM: 0,
+      },
     ])
     const laid = groundFieldsOf(applyChanges(nodes, changes), siteId)
     expect(paintAt(laid.paint, 8, 8).a).toBe(0)
@@ -229,7 +271,16 @@ describe('lay_ground', () => {
   test('a small lawn on a fresh lot grows grass only inside it, as a panel stroke would', () => {
     const { nodes, siteId } = flatLot()
     const { result, changes } = runLayGround(nodes, [
-      { polygon: [[1, 1], [3, 1], [3, 3], [1, 3]], ground: 'grass', featherM: 0 },
+      {
+        polygon: [
+          [1, 1],
+          [3, 1],
+          [3, 3],
+          [1, 3],
+        ],
+        ground: 'grass',
+        featherM: 0,
+      },
     ])
     const laid = groundFieldsOf(applyChanges(nodes, changes), siteId)
     expect(paintAt(laid.paint, 2, 2).a).toBe(1)
@@ -250,7 +301,16 @@ describe('lay_ground', () => {
   test('featherM blends the edge instead of a hard cut', () => {
     const { nodes, siteId } = flatLot()
     const { changes } = runLayGround(nodes, [
-      { polygon: [[0, 0], [8, 0], [8, 16], [0, 16]], ground: 'grass', featherM: 2 },
+      {
+        polygon: [
+          [0, 0],
+          [8, 0],
+          [8, 16],
+          [0, 16],
+        ],
+        ground: 'grass',
+        featherM: 2,
+      },
     ])
     const laid = groundFieldsOf(applyChanges(nodes, changes), siteId)
     expect(paintAt(laid.paint, 4, 8).a).toBe(1)
@@ -279,7 +339,10 @@ describe('lay_ground', () => {
     expect(layGroundTool.annotations.idempotentHint).toBe(false)
     const { nodes, siteId } = flatLot()
     const area = { site: true, ground: 'earth', featherM: 2 }
-    const grassed = applyChanges(nodes, runLayGround(nodes, [{ site: true, ground: 'grass', featherM: 0 }]).changes)
+    const grassed = applyChanges(
+      nodes,
+      runLayGround(nodes, [{ site: true, ground: 'grass', featherM: 0 }]).changes,
+    )
     const once = applyChanges(grassed, runLayGround(grassed, [area]).changes)
     const twice = applyChanges(once, runLayGround(once, [area]).changes)
     expect(paintAt(groundFieldsOf(twice, siteId).paint, 0, 8).a).toBeLessThan(
@@ -289,9 +352,19 @@ describe('lay_ground', () => {
 
   test('refuses a degenerate polygon, naming its index', () => {
     const { nodes } = flatLot()
-    expect(codeOf(() => runLayGround(nodes, [{ polygon: [[0, 0], [1, 1]], ground: 'grass' }]))).toBe(
-      'invalid_polygon',
-    )
+    expect(
+      codeOf(() =>
+        runLayGround(nodes, [
+          {
+            polygon: [
+              [0, 0],
+              [1, 1],
+            ],
+            ground: 'grass',
+          },
+        ]),
+      ),
+    ).toBe('invalid_polygon')
   })
 
   test('refuses an area that misses the lot entirely', () => {
@@ -299,7 +372,15 @@ describe('lay_ground', () => {
     expect(
       codeOf(() =>
         runLayGround(nodes, [
-          { polygon: [[100, 100], [110, 100], [110, 110], [100, 110]], ground: 'grass' },
+          {
+            polygon: [
+              [100, 100],
+              [110, 100],
+              [110, 110],
+              [100, 110],
+            ],
+            ground: 'grass',
+          },
         ]),
       ),
     ).toBe('outside_property')
@@ -344,11 +425,30 @@ describe('read_environment', () => {
 
   test('reads only the lot: an area off it is refused, one straddling its edge is clipped', () => {
     const { nodes } = flatLot()
-    const grassed = applyChanges(nodes, runLayGround(nodes, [{ site: true, ground: 'grass', featherM: 0 }]).changes)
-    expect(codeOf(() => runRead(grassed, { area: [[20, 20], [21, 20], [21, 21], [20, 21]] }))).toBe(
-      'outside_property',
+    const grassed = applyChanges(
+      nodes,
+      runLayGround(nodes, [{ site: true, ground: 'grass', featherM: 0 }]).changes,
     )
-    const { result } = runRead(grassed, { area: [[14, 14], [18, 14], [18, 18], [14, 18]] })
+    expect(
+      codeOf(() =>
+        runRead(grassed, {
+          area: [
+            [20, 20],
+            [21, 20],
+            [21, 21],
+            [20, 21],
+          ],
+        }),
+      ),
+    ).toBe('outside_property')
+    const { result } = runRead(grassed, {
+      area: [
+        [14, 14],
+        [18, 14],
+        [18, 18],
+        [14, 18],
+      ],
+    })
     const groundCover = result.groundCover as { coveredM2: number; coverageOfAreaPct: number }
     expect(result.areaM2).toBe(16)
     // 2x2 m of the area is on the lot, give or take one lattice row along each cut.
@@ -362,7 +462,10 @@ describe('read_environment', () => {
     const river = RiverNode.parse({
       id: 'river_across',
       parentId: 'site_flat',
-      points: [[4, 8], [12, 8]],
+      points: [
+        [4, 8],
+        [12, 8],
+      ],
       width: 2,
       source: 'mountain',
       outlet: 'sea',
@@ -386,7 +489,11 @@ describe('read_environment', () => {
     const river = RiverNode.parse({
       id: 'river_bend',
       parentId: 'site_flat',
-      points: [[2, 4], [8, 12], [14, 4]],
+      points: [
+        [2, 4],
+        [8, 12],
+        [14, 4],
+      ],
       width: 2,
     })
     const nodes = withRivers([river])
@@ -532,9 +639,19 @@ describe('fill_pond', () => {
     }
   })
 
-  test('joins ponds as the panel does, at each pond\'s own water level', () => {
-    const left = PondNode.parse({ id: 'pond_left', parentId: 'site_two_basins', seed: [2, 2], waterLevel: 1 })
-    const right = PondNode.parse({ id: 'pond_right', parentId: 'site_two_basins', seed: [5, 3], waterLevel: 4 })
+  test("joins ponds as the panel does, at each pond's own water level", () => {
+    const left = PondNode.parse({
+      id: 'pond_left',
+      parentId: 'site_two_basins',
+      seed: [2, 2],
+      waterLevel: 1,
+    })
+    const right = PondNode.parse({
+      id: 'pond_right',
+      parentId: 'site_two_basins',
+      seed: [5, 3],
+      waterLevel: 4,
+    })
     const { nodes, site } = twoBasinLot([left, right])
     const { result, changes } = run(nodes, { at: [2, 2], level: 1 })
 
@@ -550,20 +667,33 @@ describe('fill_pond', () => {
 
   test('lowering and emptying keep the props, and say how many the water now hides', () => {
     const { nodes } = twoBasinLot()
-    const stocked = applyChanges(nodes, run(nodes, { at: [2, 2], level: 5, koi: 6, lilies: 6 }).changes)
+    const stocked = applyChanges(
+      nodes,
+      run(nodes, { at: [2, 2], level: 5, koi: 6, lilies: 6 }).changes,
+    )
     const pondOf = (scene: Nodes) =>
-      Object.values(scene).find((node) => String(node.type) === POND_KIND) as unknown as PondNodeValue
+      Object.values(scene).find(
+        (node) => String(node.type) === POND_KIND,
+      ) as unknown as PondNodeValue
     const storedProps = pondOf(stocked).props.length
 
     const lowered = run(stocked, { at: [2, 2], level: 1 })
     const loweredPond = pondOf(applyChanges(stocked, lowered.changes))
     expect(loweredPond.props).toHaveLength(storedProps)
-    expect((lowered.result.koi as number) + (lowered.result.lilies as number) + (lowered.result.hiddenProps as number)).toBe(storedProps)
+    expect(
+      (lowered.result.koi as number) +
+        (lowered.result.lilies as number) +
+        (lowered.result.hiddenProps as number),
+    ).toBe(storedProps)
 
     const emptied = run(stocked, { at: [2, 2], level: 'empty' })
     const emptiedPond = pondOf(applyChanges(stocked, emptied.changes))
     expect(emptiedPond.waterLevel).toBeNull()
     expect(emptiedPond.props).toHaveLength(storedProps)
-    expect([emptied.result.koi, emptied.result.lilies, emptied.result.hiddenProps]).toEqual([0, 0, storedProps])
+    expect([emptied.result.koi, emptied.result.lilies, emptied.result.hiddenProps]).toEqual([
+      0,
+      0,
+      storedProps,
+    ])
   })
 })

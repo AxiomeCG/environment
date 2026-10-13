@@ -40,7 +40,10 @@ export function paintTileIdsOf(candidates: Iterable<unknown>, targetId: string):
   return ids.sort()
 }
 
-export function sharesLattice(tile: Pick<GrassPaintField, 'spacing'>, field: GrassPaintField): boolean {
+export function sharesLattice(
+  tile: Pick<GrassPaintField, 'spacing'>,
+  field: GrassPaintField,
+): boolean {
   return Math.abs(tile.spacing - field.spacing) <= field.spacing * 1e-9
 }
 

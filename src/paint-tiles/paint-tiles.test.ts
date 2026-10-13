@@ -6,7 +6,11 @@ import {
   siteBounds,
   type GrassPaintField,
 } from '../ground-cover/paint-field'
-import { advancePaintStroke, beginPaintStroke, currentPaintField } from '../ground-cover/paint-stroke'
+import {
+  advancePaintStroke,
+  beginPaintStroke,
+  currentPaintField,
+} from '../ground-cover/paint-stroke'
 import {
   changedPaintTileTargets,
   composePaintTiles,
@@ -49,7 +53,11 @@ function applyTiles(nodes: Nodes, changes: PaintTileChanges): Nodes {
 
 /** A person's stroke across the middle of a lot, as the grass brush lays it. */
 function strokeAcross(field: GrassPaintField, side: number, settings = {}) {
-  const stroke = beginPaintStroke({ field, boundary: square(side), settings: { radius: 2, ...settings } })
+  const stroke = beginPaintStroke({
+    field,
+    boundary: square(side),
+    settings: { radius: 2, ...settings },
+  })
   for (let x = side * 0.25; x <= side * 0.75; x += 0.25) advancePaintStroke(stroke, x, side / 2)
   return stroke
 }
@@ -61,7 +69,10 @@ const target = (map: PaintTileTarget['map'] = 'paintMap'): PaintTileTarget => ({
 })
 
 function composed(nodes: Nodes, base: GrassPaintField): GrassPaintField {
-  return composePaintTiles(base, paintTilesOf(Object.values(nodes), 'grass-field_tiles', 'paintMap'))
+  return composePaintTiles(
+    base,
+    paintTilesOf(Object.values(nodes), 'grass-field_tiles', 'paintMap'),
+  )
 }
 
 /** Bytes of each tile change as a shared operation carries it: the old tile and the new. */
@@ -97,9 +108,16 @@ describe('pixel runs', () => {
     expect(decodePixelRuns(runs, 7)).toBeNull()
     expect(decodePixelRuns(runs, 9)).toBeNull()
     expect(decodePixelRuns(runs.subarray(0, runs.length - 1), 8)).toBeNull()
-    expect(PaintTileData.safeParse({
-      type: 'paint-tile', origin: [0, 0], spacing: 1, cols: 2, rows: 2, runs: 'AAAAAAA=',
-    }).success).toBe(false)
+    expect(
+      PaintTileData.safeParse({
+        type: 'paint-tile',
+        origin: [0, 0],
+        spacing: 1,
+        cols: 2,
+        rows: 2,
+        runs: 'AAAAAAA=',
+      }).success,
+    ).toBe(false)
   })
 })
 
@@ -116,7 +134,11 @@ describe('paint tiles', () => {
 
   test('a stroke writes only the tiles it touched', () => {
     const base = lotField(16)
-    const stroke = beginPaintStroke({ field: base, boundary: square(16), settings: { radius: 0.5 } })
+    const stroke = beginPaintStroke({
+      field: base,
+      boundary: square(16),
+      settings: { radius: 0.5 },
+    })
     advancePaintStroke(stroke, 1, 1)
     const changes = planPaintTileChanges(target(), [], stroke.snapshot, currentPaintField(stroke))
     // A 1 m dab at [1, 1] (cells 0-30 at 0.05 m) lies inside the first 64-cell block.
@@ -134,11 +156,19 @@ describe('paint tiles', () => {
   test('a repeated stroke updates the same tiles, and an unchanged field writes nothing', () => {
     const base = lotField(16)
     const first = strokeAcross(base, 16)
-    const created = applyTiles({}, planPaintTileChanges(target(), [], first.snapshot, currentPaintField(first)))
+    const created = applyTiles(
+      {},
+      planPaintTileChanges(target(), [], first.snapshot, currentPaintField(first)),
+    )
     const tiles = paintTilesOf(Object.values(created), 'grass-field_tiles', 'paintMap')
     const before = composed(created, base)
     const second = strokeAcross(before, 16, { color: '#5a8f3c' })
-    const changes = planPaintTileChanges(target(), tiles, second.snapshot, currentPaintField(second))
+    const changes = planPaintTileChanges(
+      target(),
+      tiles,
+      second.snapshot,
+      currentPaintField(second),
+    )
     expect(changes.create).toBeUndefined()
     expect(changes.update?.length).toBeGreaterThan(0)
     expect(planPaintTileChanges(target(), tiles, before, before)).toEqual({})
@@ -151,9 +181,18 @@ describe('paint tiles', () => {
       const first = strokeAcross(base, side, noisy)
       const created = planPaintTileChanges(target(), [], first.snapshot, currentPaintField(first))
       const nodes = applyTiles({}, created)
-      const second = strokeAcross(composed(nodes, base), side, { ...noisy, seed: 7, color: '#80a040' })
+      const second = strokeAcross(composed(nodes, base), side, {
+        ...noisy,
+        seed: 7,
+        color: '#80a040',
+      })
       const tiles = paintTilesOf(Object.values(nodes), 'grass-field_tiles', 'paintMap')
-      const updated = planPaintTileChanges(target(), tiles, second.snapshot, currentPaintField(second))
+      const updated = planPaintTileChanges(
+        target(),
+        tiles,
+        second.snapshot,
+        currentPaintField(second),
+      )
       expect(updated.update?.length).toBeGreaterThan(0)
       for (const bytes of [...tileChangeBytes({}, created), ...tileChangeBytes(nodes, updated)]) {
         expect(bytes).toBeLessThan(OPERATION_CHANGE_BYTES)
@@ -165,7 +204,10 @@ describe('paint tiles', () => {
     // A 20 m lot paints at 0.05 m; grown to 40 m, its lattice coarsens past 513 cells a side.
     const small = lotField(20)
     const stroke = strokeAcross(small, 20)
-    let nodes = applyTiles({}, planPaintTileChanges(target(), [], stroke.snapshot, currentPaintField(stroke)))
+    let nodes = applyTiles(
+      {},
+      planPaintTileChanges(target(), [], stroke.snapshot, currentPaintField(stroke)),
+    )
     const grown = lotField(40)
     expect(grown.spacing).toBeGreaterThan(small.spacing)
     const resampled = composed(nodes, grown)
@@ -177,7 +219,11 @@ describe('paint tiles', () => {
     expect(at(resampled, 10, 10)).toBe(255)
     expect(at(resampled, 30, 30)).toBe(0)
 
-    const next = beginPaintStroke({ field: resampled, boundary: square(40), settings: { radius: 1 } })
+    const next = beginPaintStroke({
+      field: resampled,
+      boundary: square(40),
+      settings: { radius: 1 },
+    })
     advancePaintStroke(next, 35, 35)
     const stale = paintTilesOf(Object.values(nodes), 'grass-field_tiles', 'paintMap')
     const changes = planPaintTileChanges(target(), stale, next.snapshot, currentPaintField(next))
@@ -190,7 +236,10 @@ describe('paint tiles', () => {
   test('a tile commit names the node to redraw, in 3D and in plan', () => {
     const base = lotField(16)
     const stroke = strokeAcross(base, 16)
-    const nodes = applyTiles({}, planPaintTileChanges(target(), [], stroke.snapshot, currentPaintField(stroke)))
+    const nodes = applyTiles(
+      {},
+      planPaintTileChanges(target(), [], stroke.snapshot, currentPaintField(stroke)),
+    )
     const ids = Object.keys(nodes)
     expect(changedPaintTileTargets(nodes, {}, ids)).toEqual(new Set(['grass-field_tiles']))
     expect(changedPaintTileTargets({}, nodes, ids)).toEqual(new Set(['grass-field_tiles']))

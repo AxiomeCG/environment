@@ -94,7 +94,12 @@ type ResolvedArea = ResolvedShape & {
 }
 
 /** One painted map: as the scene has it, and the copy this call paints. */
-type PaintedMap = { targetId: string; map: PaintTileMap; before: GrassPaintField; after: GrassPaintField }
+type PaintedMap = {
+  targetId: string
+  map: PaintTileMap
+  before: GrassPaintField
+  after: GrassPaintField
+}
 
 /** The site's two paint layers as this call finds (or creates) them, and the maps it paints. */
 type GroundLayers = {
@@ -116,12 +121,18 @@ type AreaFacts = {
   shapeCells: number
 }
 
-function resolveShape(area: LayGroundAreaInput, index: number, sitePolygon: PlanPoint[]): ResolvedShape {
+function resolveShape(
+  area: LayGroundAreaInput,
+  index: number,
+  sitePolygon: PlanPoint[],
+): ResolvedShape {
   const shapes = [area.polygon !== undefined, area.path !== undefined, area.site === true].filter(
     Boolean,
   ).length
   if (shapes !== 1) {
-    refuse('invalid_polygon', `Area ${index} needs exactly one of polygon, path or site.`, { index })
+    refuse('invalid_polygon', `Area ${index} needs exactly one of polygon, path or site.`, {
+      index,
+    })
   }
   if (area.site === true) {
     return {
@@ -252,11 +263,19 @@ function resolveGroundLayers(
     grassCreated: existingGrass === null,
     surfaceNode,
     surfaceCreated: existingSurface === null,
-    paint: painted(grassNode.id, 'paintMap', resolveGroundCoverPaint(grassNode, sceneNodes, bounds)),
+    paint: painted(
+      grassNode.id,
+      'paintMap',
+      resolveGroundCoverPaint(grassNode, sceneNodes, bounds),
+    ),
     height: areas.some((area) => area.grassHeight !== null)
       ? painted(grassNode.id, 'heightMap', resolveGroundCoverHeight(grassNode, sceneNodes, bounds))
       : null,
-    surface: painted(surfaceNode.id, 'paintMap', resolveSurfacePaint(surfaceNode, sceneNodes, bounds)),
+    surface: painted(
+      surfaceNode.id,
+      'paintMap',
+      resolveSurfacePaint(surfaceNode, sceneNodes, bounds),
+    ),
     obstacles: buildGrassObstacleField(site, nodes, createGrassObstacleTopology(bounds)),
   }
 }
@@ -349,7 +368,12 @@ function measureArea(
   return facts
 }
 
-function refuseUnpaintable(area: ResolvedArea, facts: AreaFacts, sitePolygon: PlanPoint[], cellM: number): void {
+function refuseUnpaintable(
+  area: ResolvedArea,
+  facts: AreaFacts,
+  sitePolygon: PlanPoint[],
+  cellM: number,
+): void {
   if (facts.paintedCells > 0) return
   if (facts.shapeCells === 0 && !shapeOverlapsSite(area, sitePolygon)) {
     refuse('outside_property', `Area ${area.index} does not touch the lot.`, { index: area.index })
@@ -399,7 +423,11 @@ function lotGrassCoveragePct(paint: GrassPaintField, sitePolygon: PlanPoint[]): 
  * The painted layers as node changes: a missing Ground cover or Surface is created as the panel
  * creates it, and only the tiles of each map that changed are written.
  */
-function groundLayerChanges(nodes: SceneNodes, site: SiteNode, layers: GroundLayers): PaintTileChanges {
+function groundLayerChanges(
+  nodes: SceneNodes,
+  site: SiteNode,
+  layers: GroundLayers,
+): PaintTileChanges {
   const siteId = String(site.id)
   const sceneNodes = Object.values(nodes)
   const tileChanges = [layers.paint, layers.height, layers.surface]

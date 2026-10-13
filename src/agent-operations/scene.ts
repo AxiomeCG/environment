@@ -74,7 +74,12 @@ export function isValidPolygon(points: ReadonlyArray<PlanPoint>): boolean {
   return points.length >= 3 && Math.abs(polygonArea(points)) > 1e-9
 }
 
-export function distanceToSegment(x: number, z: number, first: PlanPoint, second: PlanPoint): number {
+export function distanceToSegment(
+  x: number,
+  z: number,
+  first: PlanPoint,
+  second: PlanPoint,
+): number {
   const dx = second[0] - first[0]
   const dz = second[1] - first[1]
   const lengthSquared = dx * dx + dz * dz
@@ -97,7 +102,7 @@ export function pointInPolygon(x: number, z: number, polygon: ReadonlyArray<Plan
     if (!first || !second) continue
     if (distanceToSegment(x, z, first, second) <= 1e-9) return true
     if (
-      (first[1] > z) !== (second[1] > z) &&
+      first[1] > z !== second[1] > z &&
       x < ((second[0] - first[0]) * (z - first[1])) / (second[1] - first[1]) + first[0]
     ) {
       inside = !inside
@@ -107,7 +112,11 @@ export function pointInPolygon(x: number, z: number, polygon: ReadonlyArray<Plan
 }
 
 /** Signed distance to a polygon: positive inside, negative outside, zero on the edge. */
-export function signedDistanceToPolygon(x: number, z: number, polygon: ReadonlyArray<PlanPoint>): number {
+export function signedDistanceToPolygon(
+  x: number,
+  z: number,
+  polygon: ReadonlyArray<PlanPoint>,
+): number {
   let distance = Number.POSITIVE_INFINITY
   for (let index = 0; index < polygon.length; index += 1) {
     const first = polygon[index]

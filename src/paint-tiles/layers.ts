@@ -48,6 +48,9 @@ export function resolveSurfacePaint(
 }
 
 /** A site's children as a builder resolves them: where its paint tiles live. */
-export function siteChildrenIn(site: SiteNode, context: Pick<GeometryContext, 'resolve'>): unknown[] {
+export function siteChildrenIn(
+  site: SiteNode,
+  context: Pick<GeometryContext, 'resolve'>,
+): unknown[] {
   return site.children.map((id) => context.resolve(id as never))
 }

@@ -44,7 +44,10 @@ export type ReadEnvironmentInput = {
 type Region = (x: number, z: number) => boolean
 
 /** The lattice cells of `field` in the region, each with its position. */
-function* regionCells(field: Pick<GrassPaintField, 'origin' | 'spacing' | 'cols' | 'rows'>, region: Region) {
+function* regionCells(
+  field: Pick<GrassPaintField, 'origin' | 'spacing' | 'cols' | 'rows'>,
+  region: Region,
+) {
   for (let row = 0; row < field.rows; row += 1) {
     const z = field.origin[1] + row * field.spacing
     for (let col = 0; col < field.cols; col += 1) {
@@ -87,7 +90,14 @@ function samplePaint(paint: GrassPaintField, height: GrassPaintField, region: Re
 function groundCoverFacts(nodes: SceneNodes, site: SiteNode, bounds: SiteBounds, region: Region) {
   const node = siteChildOfKind<GrassFieldNode>(nodes, String(site.id), GRASS_FIELD_KIND)
   if (!node) {
-    return { present: false, coveredM2: 0, coverageOfAreaPct: 0, meanHeightScale: 1, flowerDensity: 0, cellM: null }
+    return {
+      present: false,
+      coveredM2: 0,
+      coverageOfAreaPct: 0,
+      meanHeightScale: 1,
+      flowerDensity: 0,
+      cellM: null,
+    }
   }
   const paint = resolveGroundCoverPaint(node, Object.values(nodes), bounds)
   const height = resolveGroundCoverHeight(node, Object.values(nodes), bounds)
@@ -138,7 +148,9 @@ function pondFacts(
       spillLevelM: basin ? roundFact(basin.spillLevel) : null,
       bottomM: basin ? roundFact(basin.bottomLevel) : null,
       maxDepthM:
-        basin && pond.waterLevel !== null ? roundFact(Math.max(0, pond.waterLevel - basin.bottomLevel)) : 0,
+        basin && pond.waterLevel !== null
+          ? roundFact(Math.max(0, pond.waterLevel - basin.bottomLevel))
+          : 0,
       areaM2: surface ? roundFact(surface.area) : 0,
       quality: pond.quality,
       bank: pond.shoreline,
@@ -152,7 +164,8 @@ function pondFacts(
 /** The requested area (the lot by default), refused when it covers no ground of the lot. */
 function requireArea(input: ReadEnvironmentInput, sitePolygon: PlanPoint[]): PlanPoint[] {
   const area = input.area === undefined ? sitePolygon : asPolygon(input.area)
-  if (!area || area.length < 3) refuse('invalid_polygon', '`area` is not a usable polygon (3+ points).')
+  if (!area || area.length < 3)
+    refuse('invalid_polygon', '`area` is not a usable polygon (3+ points).')
   if (Math.abs(polygonArea(area)) <= 1e-9) refuse('footprint_empty', '`area` covers no ground.')
   if (!polygonsOverlap(area, sitePolygon)) {
     refuse('outside_property', '`area` lies wholly outside the lot; only the lot is read.')

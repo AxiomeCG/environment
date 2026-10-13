@@ -46,7 +46,8 @@ function riverCourseFacts(
 ): Record<string, unknown> | null {
   const path = sampleRiverPath(baseline, river, site.polygon.points)
   if (!path) return null
-  const downstream = river.flowDirection === 'reverse' ? [...path.points].reverse() : [...path.points]
+  const downstream =
+    river.flowDirection === 'reverse' ? [...path.points].reverse() : [...path.points]
   const first = downstream[0]
   const last = downstream[downstream.length - 1]
   if (!first || !last) return null

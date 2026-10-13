@@ -6,11 +6,7 @@ import {
   type TerrainField,
 } from '@pascal-app/core'
 import { analyzePondBasin, buildPondSurface, type PondBasin, type PondSurface } from '../pond/basin'
-import {
-  connectedPondsForBasin,
-  mergedProps,
-  preferredPond,
-} from '../pond/connectivity'
+import { connectedPondsForBasin, mergedProps, preferredPond } from '../pond/connectivity'
 import { MAX_POND_PROPS, pondPropFitsSurface, renderablePondProps } from '../pond/prop-fit'
 import {
   PondNode,
@@ -106,7 +102,11 @@ function maxDepthAt(basin: PondBasin, level: number | null): number {
   return level === null ? 0 : Math.max(0, level - basin.bottomLevel)
 }
 
-function refuseImpossibleStocking(basin: PondBasin, level: number | null, input: FillPondInput): void {
+function refuseImpossibleStocking(
+  basin: PondBasin,
+  level: number | null,
+  input: FillPondInput,
+): void {
   const maxDepthM = maxDepthAt(basin, level)
   if ((input.koi ?? 0) > 0 && maxDepthM < MIN_KOI_DEPTH) {
     refuse('too_shallow_for_koi', `Koi need at least ${MIN_KOI_DEPTH} m of water depth.`, {
@@ -123,7 +123,12 @@ function refuseImpossibleStocking(basin: PondBasin, level: number | null, input:
  * The water this call changes, targeted as the panel targets it: the hollow's pond (the one its
  * water already reaches, highest first), then every pond the new level joins to it.
  */
-function targetWater(nodes: SceneNodes, siteId: string, basin: PondBasin, level: number | null): Water {
+function targetWater(
+  nodes: SceneNodes,
+  siteId: string,
+  basin: PondBasin,
+  level: number | null,
+): Water {
   const targeted = preferredPond(connectedPondsForBasin(nodes, siteId, basin, null), null)
   const preferredId = targeted ? String(targeted.id) : null
   const connected = connectedPondsForBasin(nodes, siteId, basin, preferredId, level)
@@ -154,7 +159,10 @@ function placeProps(
       x += (surface.positions[offset + vertex * 3] ?? 0) / 3
       z += (surface.positions[offset + vertex * 3 + 2] ?? 0) / 3
     }
-    candidates.push({ point: [x, z], rank: hash01(kind === 'koi' ? 1 : 2, x + seed[0], z + seed[1]) })
+    candidates.push({
+      point: [x, z],
+      rank: hash01(kind === 'koi' ? 1 : 2, x + seed[0], z + seed[1]),
+    })
   }
   candidates.sort((a, b) => a.rank - b.rank)
   const placed: PondProp[] = []
@@ -197,7 +205,12 @@ function withShownCount(
   return [...props, ...placed].slice(0, MAX_POND_PROPS)
 }
 
-function stockProps(water: Water, input: FillPondInput, surface: PondSurface, seed: PlanPoint): PondProp[] {
+function stockProps(
+  water: Water,
+  input: FillPondInput,
+  surface: PondSurface,
+  seed: PlanPoint,
+): PondProp[] {
   let props = water.primary ? mergedProps(water.primary, water.connected) : []
   props = withShownCount(props, 'koi', input.koi, surface, seed)
   return withShownCount(props, 'water-lily', input.lilies, surface, seed)
