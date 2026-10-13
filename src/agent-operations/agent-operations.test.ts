@@ -1,6 +1,7 @@
 import {
   createTerrainField,
   encodeTerrainField,
+  persistedTerrainFieldOf,
   SiteNode,
   type AnyNode,
 } from '@pascal-app/core'
@@ -10,7 +11,10 @@ import { createGroundCoverNode } from '../ground-cover/create-node'
 import { paintAt, siteBounds, type GrassPaintField } from '../ground-cover/paint-field'
 import { advancePaintStroke, beginPaintStroke, currentPaintField } from '../ground-cover/paint-stroke'
 import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
-import { POND_KIND, PondNode } from '../pond/schema'
+import { inspectPondTarget, targetPondAtSeed } from '../pond/actions'
+import { analyzePondBasin, buildPondSurface } from '../pond/basin'
+import { resolveRenderablePondProps } from '../pond/props'
+import { POND_KIND, PondNode, type PondNode as PondNodeValue } from '../pond/schema'
 import { resolveGroundCoverPaint, resolveSurfacePaint } from '../paint-tiles/layers'
 import {
   surfaceMaterialWeightsAt,
@@ -89,6 +93,42 @@ function groundFieldsOf(nodes: Nodes, siteId: string): { paint: GrassPaintField;
     paint: resolveGroundCoverPaint(grass, Object.values(nodes), bounds),
     surface: resolveSurfacePaint(surface, Object.values(nodes), bounds),
   }
+}
+
+// The pond actions' two-basin terrain (`pond/actions.test.ts`): a left hollow at [2, 2] and a
+// right one around [5, 3], joined once the water passes the ridge between them.
+const TWO_BASIN_ROWS = [
+  [6, 6, 6, 6, 6, 6, 6],
+  [6, 2, 1, 4, 2, 2, 6],
+  [6, 1, 0, 4, 2, 7, 6],
+  [6, 2, 1, 3, 2, 1, 5],
+  [6, 2, 1, 4, 2, 1, 6],
+  [6, 3, 2, 4, 3, 2, 6],
+  [6, 6, 6, 6, 6, 6, 6],
+]
+
+function twoBasinLot(ponds: PondNodeValue[] = []): { nodes: Nodes; site: SiteNode } {
+  const terrain = createTerrainField({ origin: [0, 0], spacing: 1, cols: 7, rows: 7, step: 1 })
+  terrain.heights.set(TWO_BASIN_ROWS.flat())
+  const site = SiteNode.parse({
+    id: 'site_two_basins',
+    polygon: { type: 'polygon', points: [[0, 0], [6, 0], [6, 6], [0, 6]] },
+    terrain: encodeTerrainField(terrain),
+    children: ponds.map((pond) => pond.id),
+  })
+  const nodes: Nodes = { [site.id]: site as AnyNode }
+  for (const pond of ponds) nodes[pond.id] = pond as unknown as AnyNode
+  return { nodes, site }
+}
+
+/** What the pond renderer shows of a pond: its props that pass the renderer's own checks. */
+function renderedProps(site: SiteNode, pond: PondNodeValue) {
+  const terrain = persistedTerrainFieldOf(site)
+  const basin = terrain ? analyzePondBasin(terrain, site.polygon.points, pond.seed) : null
+  if (!basin) return { koi: 0, lilies: 0 }
+  const shown = resolveRenderablePondProps(pond.props, buildPondSurface(basin, pond.waterLevel))
+  const koi = shown.filter(({ prop }) => prop.kind === 'koi').length
+  return { koi, lilies: shown.length - koi }
 }
 
 function codeOf(run: () => unknown): string {
@@ -357,5 +397,51 @@ describe('fill_pond', () => {
     expect(result.mergedPondIds).toContain('pond_neighbour')
     expect(changes?.delete).toContain('pond_neighbour')
     expect(changes?.update).toHaveLength(1)
+  })
+
+  test('stocks only props the renderer shows, and reports what it shows', () => {
+    for (const level of [2, 5]) {
+      const { nodes, site } = twoBasinLot()
+      const { result, changes } = run(nodes, { at: [2, 2], level, koi: 12, lilies: 40 })
+      const pond = changes?.create?.[0]?.node as unknown as PondNodeValue
+      const shown = renderedProps(site, pond)
+      expect([level, result.koi, result.lilies]).toEqual([level, shown.koi, shown.lilies])
+      expect(pond.props).toHaveLength(shown.koi + shown.lilies)
+    }
+  })
+
+  test('joins ponds as the panel does, at each pond\'s own water level', () => {
+    const left = PondNode.parse({ id: 'pond_left', parentId: 'site_two_basins', seed: [2, 2], waterLevel: 1 })
+    const right = PondNode.parse({ id: 'pond_right', parentId: 'site_two_basins', seed: [5, 3], waterLevel: 4 })
+    const { nodes, site } = twoBasinLot([left, right])
+    const { result, changes } = run(nodes, { at: [2, 2], level: 1 })
+
+    // The panel's own targeting of the same hollow names the same records.
+    const panelTarget = targetPondAtSeed(nodes as never, site, [2, 2])
+    const panelWater = inspectPondTarget(nodes as never, panelTarget?.target ?? null)
+    expect(result.pondId).toBe(panelTarget?.pond?.id)
+    expect([result.pondId, ...(result.mergedPondIds as string[])].sort()).toEqual(
+      (panelWater?.connectedPonds ?? []).map((pond) => pond.id).sort(),
+    )
+    expect(changes?.delete).toEqual(result.mergedPondIds as string[])
+  })
+
+  test('lowering and emptying keep the props, and say how many the water now hides', () => {
+    const { nodes } = twoBasinLot()
+    const stocked = applyChanges(nodes, run(nodes, { at: [2, 2], level: 5, koi: 6, lilies: 6 }).changes)
+    const pondOf = (scene: Nodes) =>
+      Object.values(scene).find((node) => String(node.type) === POND_KIND) as unknown as PondNodeValue
+    const storedProps = pondOf(stocked).props.length
+
+    const lowered = run(stocked, { at: [2, 2], level: 1 })
+    const loweredPond = pondOf(applyChanges(stocked, lowered.changes))
+    expect(loweredPond.props).toHaveLength(storedProps)
+    expect((lowered.result.koi as number) + (lowered.result.lilies as number) + (lowered.result.hiddenProps as number)).toBe(storedProps)
+
+    const emptied = run(stocked, { at: [2, 2], level: 'empty' })
+    const emptiedPond = pondOf(applyChanges(stocked, emptied.changes))
+    expect(emptiedPond.waterLevel).toBeNull()
+    expect(emptiedPond.props).toHaveLength(storedProps)
+    expect([emptied.result.koi, emptied.result.lilies, emptied.result.hiddenProps]).toEqual([0, 0, storedProps])
   })
 })

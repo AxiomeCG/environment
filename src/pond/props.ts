@@ -20,14 +20,10 @@ import {
   attachPondKoiMotion,
   bindPondKoiInstances,
   createPondKoiMotion,
-  koiFootprintFitsSurface,
 } from './koi-motion'
+import { renderablePondProps, renderedPropScale } from './prop-fit'
 import type { PondProp } from './schema'
 
-const MAX_POND_PROPS = 128
-const MAX_KOI = 32
-const MIN_LILY_DEPTH = 0.015
-const MAX_PROP_SCALE = 2.5
 const KOI_COLORS = ['#e98532', '#efe4cf', '#d5a238'] as const
 
 type PropPlacement = {
@@ -42,83 +38,31 @@ type PropPlacement = {
   flowered: boolean
 }
 
-/**
- * Water-only placement predicate shared by the renderer and authoring actions.
- * It checks the actual yawed footprint, not only the prop's center, and scales
- * the koi depth requirement with its body height.
- */
-export function pondPropFitsSurface(surface: PondSurface, prop: PondProp): boolean {
-  if (
-    surface.level === null
-    || surface.positions.length === 0
-    || !Number.isFinite(prop.position[0])
-    || !Number.isFinite(prop.position[1])
-    || !Number.isFinite(prop.scale)
-    || prop.scale <= 0
-  ) {
-    return false
-  }
-  const scale = Math.min(MAX_PROP_SCALE, Math.max(0.2, prop.scale))
-  const yaw = Number.isFinite(prop.yaw) ? prop.yaw : 0
-  if (prop.kind === 'koi') {
-    return koiFootprintFitsSurface(
-      surface,
-      prop.position[0],
-      prop.position[1],
-      yaw,
-      scale,
-    )
-  }
-  if (pondSurfaceDepthAt(surface, prop.position[0], prop.position[1]) < MIN_LILY_DEPTH) {
-    return false
-  }
-  const cosine = Math.cos(yaw)
-  const sine = Math.sin(yaw)
-
-  const radius = 0.3 * scale
-  for (let index = 0; index < 12; index += 1) {
-    const angle = (index / 12) * Math.PI * 2 + yaw
-    const x = prop.position[0] + Math.cos(angle) * radius
-    const z = prop.position[1] - Math.sin(angle) * radius
-    if (pondSurfaceDepthAt(surface, x, z) < MIN_LILY_DEPTH) return false
-  }
-  return true
-}
-
 /** Applies schema-independent water checks so corrupt or legacy props cannot escape the pond. */
 export function resolveRenderablePondProps(
   props: readonly PondProp[],
   surface: PondSurface,
 ): PropPlacement[] {
-  if (surface.level === null || surface.positions.length === 0) return []
-
-  const accepted: PropPlacement[] = []
-  let koiCount = 0
+  const level = surface.level
+  if (level === null) return []
   const position = new Vector3()
   const rotation = new Quaternion()
   const scale = new Vector3()
   const up = new Vector3(0, 1, 0)
 
-  for (const prop of props.slice(0, MAX_POND_PROPS)) {
-    const x = prop.position[0]
-    const z = prop.position[1]
-    if (!pondPropFitsSurface(surface, prop)) continue
-    const depth = pondSurfaceDepthAt(surface, prop.position[0], prop.position[1])
-    if (prop.kind === 'koi') {
-      if (koiCount >= MAX_KOI) continue
-      koiCount += 1
-    }
-
-    const propScale = Math.min(MAX_PROP_SCALE, Math.max(0.2, prop.scale))
+  return renderablePondProps(props, surface).map((prop) => {
+    const [x, z] = prop.position
+    const depth = pondSurfaceDepthAt(surface, x, z)
+    const propScale = renderedPropScale(prop)
     const y = prop.kind === 'water-lily'
-      ? surface.level + 0.018
-      : surface.level - Math.min(depth * 0.45, Math.max(0.065, propScale * 0.1))
+      ? level + 0.018
+      : level - Math.min(depth * 0.45, Math.max(0.065, propScale * 0.1))
     position.set(x, y, z)
     const yaw = Number.isFinite(prop.yaw) ? prop.yaw : 0
     rotation.setFromAxisAngle(up, yaw)
     scale.setScalar(propScale)
     const hash = hashString(prop.id)
-    accepted.push({
+    return {
       prop,
       matrix: new Matrix4().compose(position, rotation, scale),
       x,
@@ -128,9 +72,8 @@ export function resolveRenderablePondProps(
       scale: propScale,
       colorIndex: hash % KOI_COLORS.length,
       flowered: hash % 3 === 0,
-    })
-  }
-  return accepted
+    }
+  })
 }
 
 export function buildPondPropGeometry(

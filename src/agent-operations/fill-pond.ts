@@ -5,15 +5,14 @@ import {
   type SiteNode,
   type TerrainField,
 } from '@pascal-app/core'
+import { analyzePondBasin, buildPondSurface, type PondBasin, type PondSurface } from '../pond/basin'
 import {
-  analyzePondBasin,
-  buildPondSurface,
-  pondSurfaceDepthAt,
-  type PondBasin,
-  type PondSurface,
-} from '../pond/basin'
+  connectedPondsForBasin,
+  mergedProps,
+  preferredPond,
+} from '../pond/connectivity'
+import { MAX_POND_PROPS, pondPropFitsSurface, renderablePondProps } from '../pond/prop-fit'
 import {
-  POND_KIND,
   PondNode,
   type PondNode as PondNodeValue,
   type PondProp,
@@ -28,9 +27,8 @@ import {
   requireSite,
   requireSitePolygon,
   roundFact,
-  siteChildrenOfKind,
 } from './scene'
-import type { AgentOperation, PlanPoint, SceneChanges } from './types'
+import type { AgentOperation, PlanPoint, SceneChanges, SceneNodes } from './types'
 
 export type FillPondInput = {
   at: readonly number[]
@@ -41,11 +39,21 @@ export type FillPondInput = {
   lilies?: number
 }
 
-const MAX_POND_PROPS = 128
-const MAX_KOI = 32
 const MIN_KOI_DEPTH = 0.2
-const MIN_LILY_DEPTH = 0.015
-const WET_EPSILON = 1e-4
+
+/** The pond records one body of water spans, and the one that speaks for it. */
+type Water = { primary: PondNodeValue | null; connected: PondNodeValue[]; merged: PondNodeValue[] }
+
+function requirePointOnLot(value: FillPondInput['at'], sitePolygon: PlanPoint[]): PlanPoint {
+  const at = asPoint(value)
+  if (!at) refuse('invalid_point', '`at` must be an [x, z] point in metres.')
+  if (!pointInPolygon(at[0], at[1], sitePolygon)) {
+    refuse('outside_property', `The point [${at[0]}, ${at[1]}] is outside the lot.`, {
+      atM: [at[0], at[1]],
+    })
+  }
+  return at
+}
 
 function requireTerrain(site: SiteNode): TerrainField {
   const terrain = persistedTerrainFieldOf(site)
@@ -60,6 +68,16 @@ function requireTerrain(site: SiteNode): TerrainField {
   }
   if (max <= min) refuse('no_terrain', 'The ground is flat, so nothing can hold water.')
   return terrain
+}
+
+function requireBasin(terrain: TerrainField, sitePolygon: PlanPoint[], at: PlanPoint): PondBasin {
+  const basin = analyzePondBasin(terrain, sitePolygon, at)
+  if (!basin) {
+    refuse('no_hollow', 'That point drains off the lot; no hollow there can hold water.', {
+      atM: [at[0], at[1]],
+    })
+  }
+  return basin
 }
 
 function resolveLevel(basin: PondBasin, level: FillPondInput['level']): number | null {
@@ -84,74 +102,144 @@ function resolveLevel(basin: PondBasin, level: FillPondInput['level']): number |
   return nearest
 }
 
-/** Ponds whose seed is wet once this basin holds water, widening as higher ponds join (as the panel merges). */
-function connectedPonds(
-  candidates: PondNodeValue[],
+function maxDepthAt(basin: PondBasin, level: number | null): number {
+  return level === null ? 0 : Math.max(0, level - basin.bottomLevel)
+}
+
+function refuseImpossibleStocking(basin: PondBasin, level: number | null, input: FillPondInput): void {
+  const maxDepthM = maxDepthAt(basin, level)
+  if ((input.koi ?? 0) > 0 && maxDepthM < MIN_KOI_DEPTH) {
+    refuse('too_shallow_for_koi', `Koi need at least ${MIN_KOI_DEPTH} m of water depth.`, {
+      maxDepthM: roundFact(maxDepthM),
+      minKoiDepthM: MIN_KOI_DEPTH,
+    })
+  }
+  if (level === null && (input.lilies ?? 0) > 0) {
+    refuse('pond_empty', 'Lilies need water; this call empties the pond.')
+  }
+}
+
+/**
+ * The water this call changes, targeted as the panel targets it: the hollow's pond (the one its
+ * water already reaches, highest first), then every pond the new level joins to it.
+ */
+function targetWater(nodes: SceneNodes, siteId: string, basin: PondBasin, level: number | null): Water {
+  const targeted = preferredPond(connectedPondsForBasin(nodes, siteId, basin, null), null)
+  const preferredId = targeted ? String(targeted.id) : null
+  const connected = connectedPondsForBasin(nodes, siteId, basin, preferredId, level)
+  const primary = preferredPond(connected, preferredId)
+  return {
+    primary,
+    connected,
+    merged: primary ? connected.filter((pond) => pond.id !== primary.id) : [],
+  }
+}
+
+/** New props of one kind, seeded, each accepted only where the renderer would show it. */
+function placeProps(
+  surface: PondSurface,
+  kind: PondProp['kind'],
+  wanted: number,
+  existing: readonly PondProp[],
+  seed: PlanPoint,
+): PondProp[] {
+  if (wanted <= 0) return []
+  const separation = kind === 'koi' ? 0.8 : 0.5
+  const taken: PlanPoint[] = existing.map((prop) => prop.position)
+  const candidates: { point: PlanPoint; rank: number }[] = []
+  for (let offset = 0; offset + 8 < surface.positions.length; offset += 9) {
+    let x = 0
+    let z = 0
+    for (let vertex = 0; vertex < 3; vertex += 1) {
+      x += (surface.positions[offset + vertex * 3] ?? 0) / 3
+      z += (surface.positions[offset + vertex * 3 + 2] ?? 0) / 3
+    }
+    candidates.push({ point: [x, z], rank: hash01(kind === 'koi' ? 1 : 2, x + seed[0], z + seed[1]) })
+  }
+  candidates.sort((a, b) => a.rank - b.rank)
+  const placed: PondProp[] = []
+  for (const { point } of candidates) {
+    if (placed.length >= wanted) break
+    const [x, z] = point
+    if (taken.some((other) => Math.hypot(other[0] - x, other[1] - z) < separation)) continue
+    const prop: PondProp = {
+      id: generateId('pond-prop'),
+      kind,
+      position: [x, z],
+      yaw: hash01(3, x, z) * Math.PI * 2,
+      scale: 1,
+    }
+    if (!pondPropFitsSurface(surface, prop)) continue
+    taken.push(point)
+    placed.push(prop)
+  }
+  return placed
+}
+
+/**
+ * Props of one kind until the renderer shows `wanted` of them: extra shown ones go, missing ones
+ * are placed. Props the water no longer reaches are kept, as the panel keeps them.
+ */
+function withShownCount(
+  props: PondProp[],
+  kind: PondProp['kind'],
+  wanted: number | undefined,
+  surface: PondSurface,
+  seed: PlanPoint,
+): PondProp[] {
+  if (wanted === undefined) return props
+  const shown = renderablePondProps(props, surface).filter((prop) => prop.kind === kind)
+  if (shown.length > wanted) {
+    const dropped = new Set(shown.slice(wanted).map((prop) => prop.id))
+    return props.filter((prop) => !dropped.has(prop.id))
+  }
+  const placed = placeProps(surface, kind, wanted - shown.length, props, seed)
+  return [...props, ...placed].slice(0, MAX_POND_PROPS)
+}
+
+function stockProps(water: Water, input: FillPondInput, surface: PondSurface, seed: PlanPoint): PondProp[] {
+  let props = water.primary ? mergedProps(water.primary, water.connected) : []
+  props = withShownCount(props, 'koi', input.koi, surface, seed)
+  return withShownCount(props, 'water-lily', input.lilies, surface, seed)
+}
+
+/** The pond write: the primary record updated (connected ones merged into it), or a new pond. */
+function pondChanges(
+  site: SiteNode,
   basin: PondBasin,
-  targetLevel: number | null,
-): PondNodeValue[] {
-  const connected: PondNodeValue[] = []
-  const connectedIds = new Set<string>()
-  let connectionLevel =
-    targetLevel ??
-    candidates.reduce<number | null>(
-      (best, pond) =>
-        pond.waterLevel !== null && (best === null || pond.waterLevel > best)
-          ? pond.waterLevel
-          : best,
-      null,
-    ) ??
-    basin.levels[0] ??
-    null
-  let added = true
-  while (added && connectionLevel !== null) {
-    added = false
-    const surface = buildPondSurface(basin, connectionLevel)
-    for (const pond of candidates) {
-      if (connectedIds.has(String(pond.id))) continue
-      if (pondSurfaceDepthAt(surface, pond.seed[0], pond.seed[1]) <= WET_EPSILON) continue
-      connected.push(pond)
-      connectedIds.add(String(pond.id))
-      if (pond.waterLevel !== null && pond.waterLevel > connectionLevel) {
-        connectionLevel = pond.waterLevel
-      }
-      added = true
+  water: Water,
+  level: number | null,
+  props: PondProp[],
+  input: FillPondInput,
+): { pondId: string; changes: SceneChanges } {
+  if (water.primary) {
+    const pondId = String(water.primary.id)
+    const data = {
+      waterLevel: level,
+      props,
+      ...(input.quality ? { quality: input.quality } : {}),
+      ...(input.bank ? { shoreline: input.bank } : {}),
+    }
+    return {
+      pondId,
+      changes: {
+        update: [{ id: pondId, data: data as Partial<AnyNode> }],
+        ...(water.merged.length > 0 ? { delete: water.merged.map((pond) => String(pond.id)) } : {}),
+      },
     }
   }
-  return connected
-}
-
-function preferredPond(ponds: PondNodeValue[]): PondNodeValue | null {
-  let best: PondNodeValue | null = null
-  for (const pond of ponds) {
-    if (!best) {
-      best = pond
-      continue
-    }
-    const level = pond.waterLevel ?? Number.NEGATIVE_INFINITY
-    const bestLevel = best.waterLevel ?? Number.NEGATIVE_INFINITY
-    if (level > bestLevel || (level === bestLevel && String(pond.id) < String(best.id))) {
-      best = pond
-    }
+  const pond = PondNode.parse({
+    parentId: site.id,
+    seed: [basin.seed[0], basin.seed[1]],
+    waterLevel: level,
+    quality: input.quality ?? 'clear',
+    shoreline: input.bank ?? 'soft',
+    props,
+  })
+  return {
+    pondId: String(pond.id),
+    changes: { create: [{ node: pond as unknown as AnyNode, parentId: String(site.id) }] },
   }
-  return best
-}
-
-function mergedProps(primary: PondNodeValue, ponds: PondNodeValue[]): PondProp[] {
-  const result: PondProp[] = []
-  const seen = new Set<string>()
-  let koi = 0
-  const ordered = [primary, ...ponds.filter((pond) => pond.id !== primary.id)]
-  for (const pond of ordered) {
-    for (const prop of pond.props) {
-      if (result.length >= MAX_POND_PROPS || seen.has(prop.id)) continue
-      if (prop.kind === 'koi' && koi >= MAX_KOI) continue
-      seen.add(prop.id)
-      result.push(prop)
-      if (prop.kind === 'koi') koi += 1
-    }
-  }
-  return result
 }
 
 /** Boundary length of the wet triangles: edges bordering exactly one triangle. */
@@ -184,172 +272,42 @@ function surfacePerimeterM(surface: PondSurface): number {
   return perimeter
 }
 
-function propFits(surface: PondSurface, kind: PondProp['kind'], x: number, z: number): boolean {
-  const depth = pondSurfaceDepthAt(surface, x, z)
-  if (depth < (kind === 'koi' ? MIN_KOI_DEPTH : MIN_LILY_DEPTH)) return false
-  const radius = kind === 'koi' ? 0.3 : 0.25
-  for (let step = 0; step < 8; step += 1) {
-    const angle = (step / 8) * Math.PI * 2
-    if (pondSurfaceDepthAt(surface, x + Math.cos(angle) * radius, z + Math.sin(angle) * radius) <= 0) {
-      return false
-    }
-  }
-  return true
-}
-
-/** Seeded placements inside the wet surface: shuffled triangle centroids, kept apart. */
-function placeProps(
-  surface: PondSurface,
-  kind: PondProp['kind'],
-  wanted: number,
-  existing: PondProp[],
-  seed: PlanPoint,
-): PondProp[] {
-  if (wanted <= 0) return []
-  const separation = kind === 'koi' ? 0.8 : 0.5
-  const taken: PlanPoint[] = existing.map((prop) => prop.position)
-  const candidates: { point: PlanPoint; rank: number }[] = []
-  for (let offset = 0; offset + 8 < surface.positions.length; offset += 9) {
-    let x = 0
-    let z = 0
-    for (let vertex = 0; vertex < 3; vertex += 1) {
-      x += (surface.positions[offset + vertex * 3] ?? 0) / 3
-      z += (surface.positions[offset + vertex * 3 + 2] ?? 0) / 3
-    }
-    candidates.push({
-      point: [x, z],
-      rank: hash01(kind === 'koi' ? 1 : 2, x + seed[0], z + seed[1]),
-    })
-  }
-  candidates.sort((a, b) => a.rank - b.rank)
-  const placed: PondProp[] = []
-  for (const candidate of candidates) {
-    if (placed.length >= wanted) break
-    const [x, z] = candidate.point
-    if (taken.some((point) => Math.hypot(point[0] - x, point[1] - z) < separation)) continue
-    if (!propFits(surface, kind, x, z)) continue
-    taken.push(candidate.point)
-    placed.push({
-      id: generateId('pond-prop'),
-      kind,
-      position: [x, z],
-      yaw: hash01(3, x, z) * Math.PI * 2,
-      scale: 1,
-    })
-  }
-  return placed
-}
-
-function withPropCounts(
-  props: PondProp[],
-  kind: PondProp['kind'],
-  wanted: number | undefined,
-  surface: PondSurface,
-  seed: PlanPoint,
-): PondProp[] {
-  if (wanted === undefined) return props
-  const ofKind = props.filter((prop) => prop.kind === kind)
-  const others = props.filter((prop) => prop.kind !== kind)
-  if (ofKind.length > wanted) return [...others, ...ofKind.slice(0, wanted)]
-  if (ofKind.length === wanted) return props
-  const placed = placeProps(surface, kind, wanted - ofKind.length, props, seed)
-  return [...props, ...placed].slice(0, MAX_POND_PROPS)
-}
-
 export const fillPond: AgentOperation<FillPondInput> = (nodes, input) => {
   const site = requireSite(nodes)
   const sitePolygon = requireSitePolygon(site)
-  const at = asPoint(input.at)
-  if (!at) refuse('invalid_point', '`at` must be an [x, z] point in metres.')
-  if (!pointInPolygon(at[0], at[1], sitePolygon)) {
-    refuse('outside_property', `The point [${at[0]}, ${at[1]}] is outside the lot.`, {
-      atM: [at[0], at[1]],
-    })
-  }
-  const terrain = requireTerrain(site)
-  const basin = analyzePondBasin(terrain, sitePolygon, at)
-  if (!basin) {
-    refuse('no_hollow', 'That point drains off the lot; no hollow there can hold water.', {
-      atM: [at[0], at[1]],
-    })
-  }
+  const at = requirePointOnLot(input.at, sitePolygon)
+  const basin = requireBasin(requireTerrain(site), sitePolygon, at)
   const level = resolveLevel(basin, input.level)
-  const maxDepthM = level === null ? 0 : Math.max(0, level - basin.bottomLevel)
-  if ((input.koi ?? 0) > 0 && maxDepthM < MIN_KOI_DEPTH) {
-    refuse('too_shallow_for_koi', `Koi need at least ${MIN_KOI_DEPTH} m of water depth.`, {
-      maxDepthM: roundFact(maxDepthM),
-      minKoiDepthM: MIN_KOI_DEPTH,
-    })
-  }
-  if (level === null && (input.lilies ?? 0) > 0) {
-    refuse('pond_empty', 'Lilies need water; this call empties the pond.')
-  }
-
-  const candidates = siteChildrenOfKind<PondNodeValue>(nodes, String(site.id), POND_KIND)
-  const connected = connectedPonds(candidates, basin, level)
-  const primary = preferredPond(connected)
-  if (!primary && level === null) {
+  refuseImpossibleStocking(basin, level, input)
+  const water = targetWater(nodes, String(site.id), basin, level)
+  if (!water.primary && level === null) {
     refuse('no_pond', 'There is no pond in this hollow to empty.', { atM: [at[0], at[1]] })
   }
-
   const surface = buildPondSurface(basin, level)
-  let props: PondProp[] = primary ? mergedProps(primary, connected) : []
-  props = withPropCounts(props, 'koi', input.koi, surface, basin.seed)
-  props = withPropCounts(props, 'water-lily', input.lilies, surface, basin.seed)
-  if (
-    input.koi !== undefined &&
-    input.koi > 0 &&
-    props.filter((prop) => prop.kind === 'koi').length === 0
-  ) {
+  const props = stockProps(water, input, surface, basin.seed)
+  const shown = renderablePondProps(props, surface)
+  const shownKoi = shown.filter((prop) => prop.kind === 'koi').length
+  if ((input.koi ?? 0) > 0 && shownKoi === 0) {
     refuse('too_shallow_for_koi', 'No spot in this pond is deep and wide enough for a koi.', {
-      maxDepthM: roundFact(maxDepthM),
+      maxDepthM: roundFact(maxDepthAt(basin, level)),
       minKoiDepthM: MIN_KOI_DEPTH,
     })
   }
-
-  const merged = primary ? connected.filter((pond) => pond.id !== primary.id) : []
-  const changes: SceneChanges = {}
-  let pondId: string
-  if (primary) {
-    pondId = String(primary.id)
-    changes.update = [
-      {
-        id: pondId,
-        data: {
-          waterLevel: level,
-          props,
-          ...(input.quality ? { quality: input.quality } : {}),
-          ...(input.bank ? { shoreline: input.bank } : {}),
-        } as Partial<AnyNode>,
-      },
-    ]
-    if (merged.length > 0) changes.delete = merged.map((pond) => String(pond.id))
-  } else {
-    const pond = PondNode.parse({
-      parentId: site.id,
-      seed: [basin.seed[0], basin.seed[1]],
-      waterLevel: level,
-      quality: input.quality ?? 'clear',
-      shoreline: input.bank ?? 'soft',
-      props,
-    })
-    pondId = String(pond.id)
-    changes.create = [{ node: pond as unknown as AnyNode, parentId: String(site.id) }]
-  }
-
+  const { pondId, changes } = pondChanges(site, basin, water, level, props, input)
   return {
     result: {
       pondId,
-      created: primary === null,
+      created: water.primary === null,
       levelM: level === null ? null : roundFact(level),
       spillLevelM: roundFact(basin.spillLevel),
       bottomM: roundFact(basin.bottomLevel),
-      maxDepthM: roundFact(maxDepthM),
+      maxDepthM: roundFact(maxDepthAt(basin, level)),
       areaM2: roundFact(surface.area),
       perimeterM: roundFact(surfacePerimeterM(surface)),
-      koi: props.filter((prop) => prop.kind === 'koi').length,
-      lilies: props.filter((prop) => prop.kind === 'water-lily').length,
-      mergedPondIds: merged.map((pond) => String(pond.id)),
+      koi: shownKoi,
+      lilies: shown.length - shownKoi,
+      hiddenProps: props.length - shown.length,
+      mergedPondIds: water.merged.map((pond) => String(pond.id)),
     },
     changes,
   }
