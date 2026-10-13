@@ -109,12 +109,18 @@ export function draftPreviewNode(): RiverNode | null {
     points,
     width: state.width,
     depth: state.depth,
+    pointWidths: [],
+    pointDepths: [],
     source: state.source,
     outlet: state.outlet,
     flowDirection: state.flowDirection,
     flowSpeed: state.flowSpeed,
     quality: state.quality,
     shoreline: state.shoreline,
+    flow: state.flow,
+    maxSlopePct: state.maxSlopePct,
+    section: state.section,
+    ends: state.ends,
   })
   return parsed.success ? parsed.data : null
 }
@@ -174,12 +180,18 @@ export function finishRiverDraft(sceneApi: SceneApi): RiverActionResult {
     points: draft.points,
     width: state.width,
     depth: state.depth,
+    pointWidths: [],
+    pointDepths: [],
     source: state.source,
     outlet: state.outlet,
     flowDirection: state.flowDirection,
     flowSpeed: state.flowSpeed,
     quality: state.quality,
     shoreline: state.shoreline,
+    flow: state.flow,
+    maxSlopePct: state.maxSlopePct,
+    section: state.section,
+    ends: state.ends,
   })
   if (!result.ok) {
     state.setFeedback(result.message)
@@ -225,6 +237,10 @@ export function RiverTool() {
   const flowSpeed = useRiverStore((state) => state.flowSpeed)
   const quality = useRiverStore((state) => state.quality)
   const shoreline = useRiverStore((state) => state.shoreline)
+  const flow = useRiverStore((state) => state.flow)
+  const maxSlopePct = useRiverStore((state) => state.maxSlopePct)
+  const section = useRiverStore((state) => state.section)
+  const ends = useRiverStore((state) => state.ends)
   const activeSite = useMemo(
     () =>
       resolveActiveRiverSite(nodes, [], {
@@ -697,22 +713,32 @@ export function RiverTool() {
       points,
       width,
       depth,
+      pointWidths: [],
+      pointDepths: [],
       source,
       outlet,
       flowDirection,
       flowSpeed,
       quality,
       shoreline,
+      flow,
+      maxSlopePct,
+      section,
+      ends,
     })
     return parsed.success ? parsed.data : null
   }, [
     depth,
     draft,
+    ends,
+    flow,
     flowDirection,
     flowSpeed,
+    maxSlopePct,
     outlet,
     previewRiver,
     quality,
+    section,
     shoreline,
     source,
     width,

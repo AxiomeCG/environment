@@ -10,10 +10,13 @@ import { rebuildRiverTerrain } from './terrain'
 import {
   RIVER_KIND,
   RiverNode as RiverNodeSchema,
+  type RiverEnds,
   type RiverFlowDirection,
+  type RiverFlowMode,
   type RiverNode,
   type RiverOutlet,
   type RiverPoint,
+  type RiverSection,
   type RiverSource,
 } from './schema'
 
@@ -36,12 +39,18 @@ export type RiverParameters = {
   points: readonly RiverPoint[]
   width: number
   depth: number
+  pointWidths: readonly (number | null)[]
+  pointDepths: readonly (number | null)[]
   source: RiverSource
   outlet: RiverOutlet
   flowDirection: RiverFlowDirection
   flowSpeed: number
   quality: WaterQuality
   shoreline: PondShoreline
+  flow: RiverFlowMode
+  maxSlopePct: number
+  section: RiverSection
+  ends: RiverEnds
 }
 
 export type RiverActionResult = {
@@ -213,8 +222,14 @@ export function updateRiver(
     patch.points !== undefined ||
     patch.width !== undefined ||
     patch.depth !== undefined ||
+    patch.pointWidths !== undefined ||
+    patch.pointDepths !== undefined ||
     patch.source !== undefined ||
-    patch.outlet !== undefined
+    patch.outlet !== undefined ||
+    patch.flow !== undefined ||
+    patch.maxSlopePct !== undefined ||
+    patch.section !== undefined ||
+    patch.ends !== undefined
   if (!excavationChanged) {
     applyRiverChanges(scene, { update: [riverUpdate] })
     return { ok: true, message: 'River updated.', river }
@@ -255,6 +270,12 @@ function sameRiver(left: RiverNode, right: RiverNode): boolean {
     left.flowSpeed === right.flowSpeed &&
     left.quality === right.quality &&
     left.shoreline === right.shoreline &&
+    left.flow === right.flow &&
+    left.maxSlopePct === right.maxSlopePct &&
+    JSON.stringify(left.pointWidths) === JSON.stringify(right.pointWidths) &&
+    JSON.stringify(left.pointDepths) === JSON.stringify(right.pointDepths) &&
+    JSON.stringify(left.section) === JSON.stringify(right.section) &&
+    JSON.stringify(left.ends) === JSON.stringify(right.ends) &&
     left.points.length === right.points.length &&
     left.points.every(
       (point, index) =>

@@ -7,12 +7,7 @@ import {
 import { POND_WATER_APPEARANCE } from '../pond/appearance'
 import type { WaterQuality } from '../pond/schema'
 import type { RiverNode } from './schema'
-import {
-  riverPathWidthScale,
-  riverTerrainBaseline,
-  sampleRiverPath,
-  type SampledRiverPath,
-} from './terrain'
+import { planRiver, riverTerrainBaseline, type RiverPlan } from './terrain'
 
 export function buildRiverFloorplan(
   node: RiverNode,
@@ -22,10 +17,11 @@ export function buildRiverFloorplan(
   if (!parent || parent.type !== 'site') return null
   const terrain = riverTerrainBaseline(parent) ?? terrainFieldOf(parent)
   if (!terrain) return null
-  const path = sampleRiverPath(terrain, node, parent.polygon.points)
-  if (!path) return null
+  const plan = planRiver(terrain, node, parent.polygon.points)
+  if (!plan) return null
+  const path = plan.path
   const points = path.points.map((point): FloorplanPoint => [point[0], point[2]])
-  const outline = riverFloorplanOutline(node, path)
+  const outline = riverFloorplanOutline(plan)
   const appearance = POND_WATER_APPEARANCE[waterQuality(node.quality)]
   const active = context.viewState?.selected === true || context.viewState?.highlighted === true
   const stroke =
@@ -58,7 +54,7 @@ export function buildRiverFloorplan(
   ]
   const arrow = flowArrow(
     path.points.map((point) => [point[0], point[2]]),
-    node.flowDirection === 'reverse',
+    node.flow === 'downhill' ? !plan.upstreamAtStart : node.flowDirection === 'reverse',
   )
   if (arrow) {
     children.push({
@@ -76,7 +72,8 @@ export function buildRiverFloorplan(
   return { kind: 'group', children }
 }
 
-function riverFloorplanOutline(node: RiverNode, path: SampledRiverPath): readonly FloorplanPoint[] {
+function riverFloorplanOutline(plan: RiverPlan): readonly FloorplanPoint[] {
+  const path = plan.path
   const left: FloorplanPoint[] = []
   const right: FloorplanPoint[] = []
   for (let index = 0; index < path.points.length; index += 1) {
@@ -91,7 +88,7 @@ function riverFloorplanOutline(node: RiverNode, path: SampledRiverPath): readonl
     tangentZ /= tangentLength
     const normalX = -tangentZ
     const normalZ = tangentX
-    const halfWidth = node.width * 0.5 * riverPathWidthScale(path, node, path.distances[index]!)
+    const halfWidth = plan.samples[index]!.widthM * 0.5
     left.push([point[0] + normalX * halfWidth, point[2] + normalZ * halfWidth])
     right.push([point[0] - normalX * halfWidth, point[2] - normalZ * halfWidth])
   }

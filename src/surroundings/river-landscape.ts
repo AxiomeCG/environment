@@ -5,6 +5,7 @@ import type { WaterQuality } from '../pond/schema'
 import type { RiverNode } from '../river/schema'
 import {
   riverCrossSection,
+  riverEndpointSize,
   riverSurfaceInset,
   riverTerrainBaseline,
   sampleRiverPath,
@@ -361,8 +362,9 @@ function buildMountainChannel(
     riverRouteSeed(river, region, 'mountain'),
   )
   if (route.length < 2) return null
-  const seamWater = seam[1] - riverSurfaceInset(river.depth) + WATER_CLEARANCE
-  const inset = riverSurfaceInset(river.depth)
+  const seamSize = riverEndpointSize(river, true)
+  const seamWater = seam[1] - riverSurfaceInset(seamSize.depthM) + WATER_CLEARANCE
+  const inset = riverSurfaceInset(seamSize.depthM)
   const routeDistances = cumulativeRouteDistances(route)
   const points: ChannelPoint[] = route.map((point, index) => {
     const amount = index / (route.length - 1)
@@ -370,7 +372,7 @@ function buildMountainChannel(
     const base = terrain.heightAt(point[0], point[1])
     const waterY = index === 0 ? seamWater : base - inset * sourceFade + WATER_CLEARANCE
     const tangent = index === 0 ? outward : routeTangent(route, index)
-    const halfWidth = river.width * 0.5 * mix(1, 0.18, smoothstep(0.72, 1, amount))
+    const halfWidth = seamSize.widthM * 0.5 * mix(1, 0.18, smoothstep(0.72, 1, amount))
     const seamResolution = smoothstep(0, RENDERED_TERRAIN_CELL_SIZE * 2, routeDistances[index]!)
     const profileSupport = mix(nativeTerrainSupport, RENDERED_TERRAIN_CELL_DIAGONAL, seamResolution)
     return {
@@ -391,7 +393,7 @@ function buildMountainChannel(
         ),
       ),
       samplingSafety: seamResolution,
-      depth: river.depth * mix(1, 0.08, smoothstep(0.72, 1, amount)),
+      depth: seamSize.depthM * mix(1, 0.08, smoothstep(0.72, 1, amount)),
       // Native first-to-last flow points from the mountain into the Site.
       flowX: -tangent[0],
       flowZ: -tangent[1],
@@ -433,21 +435,22 @@ function buildSeaChannel(
     riverRouteSeed(river, region, 'sea'),
   )
   if (completeRoute.length < 2) return null
-  const mouthIndex = firstOffshorePoint(completeRoute, terrain, river.depth)
+  const seamSize = riverEndpointSize(river, false)
+  const mouthIndex = firstOffshorePoint(completeRoute, terrain, seamSize.depthM)
   if (mouthIndex === null) return null
   const route = completeRoute.slice(0, mouthIndex + 1)
   if (route.length < 2) return null
-  const seamWater = seam[1] - riverSurfaceInset(river.depth) + WATER_CLEARANCE
-  const inset = riverSurfaceInset(river.depth)
+  const seamWater = seam[1] - riverSurfaceInset(seamSize.depthM) + WATER_CLEARANCE
+  const inset = riverSurfaceInset(seamSize.depthM)
   const routeDistances = cumulativeRouteDistances(route)
-  const estuaryHalfWidth = Math.min(28, Math.max(river.width * 1.35, river.width * 0.5 + 5))
+  const estuaryHalfWidth = Math.min(28, Math.max(seamSize.widthM * 1.35, seamSize.widthM * 0.5 + 5))
   const points: ChannelPoint[] = route.map((point, index) => {
     const amount = index / (route.length - 1)
     const descent = smoothstep(0, 1, amount)
     const waterY = index === route.length - 1 ? SEA_LEVEL : mix(seamWater, SEA_LEVEL, descent)
     const tangent = index === 0 ? outward : routeTangent(route, index)
     const widthMix = smoothstep(0.18, 1, amount)
-    const halfWidth = mix(river.width * 0.5, estuaryHalfWidth, widthMix)
+    const halfWidth = mix(seamSize.widthM * 0.5, estuaryHalfWidth, widthMix)
     const seamResolution = smoothstep(0, RENDERED_TERRAIN_CELL_SIZE * 2, routeDistances[index]!)
     const profileSupport = mix(nativeTerrainSupport, RENDERED_TERRAIN_CELL_DIAGONAL, seamResolution)
     return {
@@ -468,7 +471,7 @@ function buildSeaChannel(
         ),
       ),
       samplingSafety: seamResolution,
-      depth: Math.max(river.depth, mix(river.depth, 1.6, descent)),
+      depth: Math.max(seamSize.depthM, mix(seamSize.depthM, 1.6, descent)),
       flowX: tangent[0],
       flowZ: tangent[1],
       course: path.length + routeDistances[index]!,

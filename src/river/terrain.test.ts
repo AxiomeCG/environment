@@ -13,8 +13,11 @@ import {
 import { riverDeleteTerrainUpdates } from './definition'
 import { RiverNode, type RiverNode as RiverNodeType } from './schema'
 import {
+  planRiver,
   rebuildRiverTerrain,
   riverTerrainBaseline,
+  riverTerrainIsApplied,
+  riverTerrainPayloadBytes,
   sampleRiverPath,
   type RiverTerrainResult,
 } from './terrain'
@@ -58,7 +61,22 @@ function siteWith(terrain = flatTerrain()): SiteNodeType {
 
 function river(
   id: string,
-  overrides: Partial<Pick<RiverNodeType, 'points' | 'width' | 'depth' | 'source' | 'outlet'>> = {},
+  overrides: Partial<
+    Pick<
+      RiverNodeType,
+      | 'points'
+      | 'width'
+      | 'depth'
+      | 'pointWidths'
+      | 'pointDepths'
+      | 'source'
+      | 'outlet'
+      | 'flow'
+      | 'maxSlopePct'
+      | 'section'
+      | 'ends'
+    >
+  > = {},
 ): RiverNodeType {
   return RiverNode.parse({
     id,
@@ -74,12 +92,18 @@ function river(
     ],
     width: overrides.width ?? 4,
     depth: overrides.depth ?? 1,
+    ...(overrides.pointWidths ? { pointWidths: overrides.pointWidths } : {}),
+    ...(overrides.pointDepths ? { pointDepths: overrides.pointDepths } : {}),
     source: overrides.source ?? 'rounded',
     outlet: overrides.outlet ?? 'rounded',
     flowDirection: 'forward',
     flowSpeed: 0.6,
     quality: 'clear',
     shoreline: 'soft',
+    ...(overrides.flow ? { flow: overrides.flow } : {}),
+    ...(overrides.maxSlopePct !== undefined ? { maxSlopePct: overrides.maxSlopePct } : {}),
+    ...(overrides.section ? { section: overrides.section } : {}),
+    ...(overrides.ends ? { ends: overrides.ends } : {}),
   })
 }
 
@@ -327,3 +351,138 @@ describe('river terrain reconciliation', () => {
     expect(restored.metadata).toEqual({ retained: 'site-metadata' })
   })
 })
+
+describe('river v3 model', () => {
+  test('a pre-v3 river parses with as-drawn defaults and carves as before', () => {
+    const legacy = RiverNode.parse({
+      id: 'river_legacy',
+      type: 'environment:river',
+      object: 'node',
+      parentId: 'site_river_terrain',
+      visible: true,
+      metadata: {},
+      name: 'River',
+      points: [
+        [-8, 0],
+        [8, 0],
+      ],
+      width: 4,
+      depth: 1,
+      source: 'rounded',
+      outlet: 'rounded',
+      flowDirection: 'forward',
+      flowSpeed: 0.6,
+      quality: 'clear',
+      shoreline: 'soft',
+    })
+    expect(legacy.flow).toBe('as_drawn')
+    expect(legacy.pointWidths).toEqual([])
+    expect(legacy.section.shape).toBe('curved')
+    expect(legacy.ends).toEqual({ start: 'rounded', end: 'rounded' })
+
+    const site = siteWith()
+    const explicit = river('river_legacy', { flow: 'as_drawn' })
+    const fromLegacy = rebuildRiverTerrain(site, [legacy])
+    const fromExplicit = rebuildRiverTerrain(site, [explicit])
+    expect(Array.from(fromLegacy.terrain.heights)).toEqual(
+      Array.from(fromExplicit.terrain.heights),
+    )
+    expect(surfaceHeightAt(fromLegacy.terrain, 0, 0)).toBeCloseTo(-1, 2)
+  })
+
+  test('per-point width and depth shape the channel along the path', () => {
+    const site = siteWith()
+    const node = river('river_per_point', {
+      points: [
+        [-8, 0],
+        [0, 0],
+        [8, 0],
+      ],
+      width: 2,
+      depth: 0.5,
+      pointWidths: [2, 10, 2],
+      pointDepths: [0.5, 3, 0.5],
+    })
+    const rebuilt = rebuildRiverTerrain(site, [node])
+    // Deep and wide in the middle, shallow and narrow near the ends.
+    expect(surfaceHeightAt(rebuilt.terrain, 0, 0)).toBeLessThan(-2.5)
+    expect(surfaceHeightAt(rebuilt.terrain, 0, 4)).toBeLessThan(-0.1)
+    expect(surfaceHeightAt(rebuilt.terrain, -7.5, 0)).toBeGreaterThan(-1.5)
+    expect(surfaceHeightAt(rebuilt.terrain, -7.5, 0)).toBeGreaterThan(
+      surfaceHeightAt(rebuilt.terrain, 0, 0) + 1,
+    )
+    expect(surfaceHeightAt(rebuilt.terrain, -7.5, 2.5)).toBeCloseTo(0, 6)
+  })
+
+  test('downhill water cuts through a ridge and fills across a dip', () => {
+    const groundAt = (x: number) =>
+      2 - 0.1 * (x + 8) + (Math.abs(x) < 2 ? 2 : 0) + (x >= 4 && x <= 6 ? -2 : 0)
+    const terrain = terrainFromFunction(groundAt)
+    const site = siteWith(terrain)
+    const node = river('river_downhill', { flow: 'downhill', maxSlopePct: 2, depth: 1 })
+    const plan = planRiver(terrain, node, site.polygon.points)!
+    expect(plan.upstreamAtStart).toBe(true)
+    for (let index = 1; index < plan.samples.length; index += 1) {
+      expect(plan.samples[index]!.waterY).toBeLessThanOrEqual(plan.samples[index - 1]!.waterY + 1e-9)
+    }
+    expect(plan.facts.cutVolumeM3).toBeGreaterThan(0)
+    expect(plan.facts.fillVolumeM3).toBeGreaterThan(0)
+    expect(plan.facts.embankedLengthM).toBeGreaterThan(0)
+    expect(plan.facts.maxEmbankmentM).toBeGreaterThan(0.5)
+    expect(plan.facts.lengthM).toBeCloseTo(16, 0)
+
+    const rebuilt = rebuildRiverTerrain(site, [node])
+    // The ridge is cut well below its crest; the dip is filled above its floor.
+    expect(surfaceHeightAt(rebuilt.terrain, 0, 0)).toBeLessThan(groundAt(0) - 1.5)
+    expect(surfaceHeightAt(rebuilt.terrain, 5, 0)).toBeGreaterThan(groundAt(5) + 0.3)
+  })
+
+  test('spring shallows the start and fan widens and shallows the end', () => {
+    const terrain = flatTerrain()
+    const site = siteWith(terrain)
+    const node = river('river_ends', {
+      points: [
+        [-4, 0],
+        [4, 0],
+      ],
+      ends: { start: 'spring', end: 'fan' },
+    })
+    const plan = planRiver(terrain, node, site.polygon.points)!
+    const authoredStart = plan.samples.find(
+      (sample) => sample.distanceM >= plan.path.authoredStartDistance,
+    )!
+    expect(plan.samples[0]!.depthM).toBeLessThan(authoredStart.depthM)
+    expect(plan.samples.at(-1)!.widthM).toBeGreaterThan(node.width)
+    expect(plan.samples.at(-1)!.depthM).toBeLessThan(node.depth)
+  })
+
+  test('an applied carve is recognised, so reconciliation writes nothing again', () => {
+    const site = siteWith()
+    const node = river('river_applied', { flow: 'downhill' })
+    const applied = rebuildRiverTerrain(site, [node])
+    const appliedSite = siteAfter(site, applied)
+    expect(riverTerrainIsApplied(appliedSite, [node])).toBe(true)
+    expect(riverTerrainIsApplied(site, [node])).toBe(false)
+    const revised = river('river_applied', { flow: 'downhill', depth: 2 })
+    expect(riverTerrainIsApplied(appliedSite, [revised])).toBe(false)
+    expect(riverTerrainPayloadBytes(applied)).toBeGreaterThan(1_000)
+  })
+})
+
+function terrainFromFunction(heightAtX: (x: number) => number): TerrainField {
+  const terrain = createTerrainField({
+    origin: [-10, -10],
+    spacing: 0.5,
+    cols: 41,
+    rows: 41,
+    step: 0.01,
+  })
+  const heights = new Int16Array(terrain.heights.length)
+  for (let row = 0; row < terrain.rows; row += 1) {
+    for (let col = 0; col < terrain.cols; col += 1) {
+      const x = terrain.origin[0] + col * terrain.spacing
+      heights[row * terrain.cols + col] = Math.round(heightAtX(x) / terrain.step)
+    }
+  }
+  return { ...terrain, heights }
+}

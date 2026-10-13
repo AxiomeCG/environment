@@ -14,6 +14,16 @@ import {
   sampleRoadAlignmentPoints,
   type RoadGeometryPoint,
 } from '../surroundings/streetscape/road-network-geometry'
+import {
+  asDrawnProfile,
+  resolvePointValues,
+  riverSectionShape,
+  riverSectionTargetHeight,
+  riverSurfaceInset,
+  solveDownhillProfile,
+  type RiverFacts,
+  type RiverProfileStation,
+} from './planner'
 import type { RiverNode } from './schema'
 
 const RIVER_TERRAIN_METADATA_KEY = 'environmentRiverTerrain'
@@ -29,8 +39,13 @@ type RiverTerrainMetadata = Readonly<{
   baseline: NonNullable<SiteNode['terrain']>
   applied: NonNullable<SiteNode['terrain']>
   riverIds: readonly string[] | null
+  /** Hash of every grading-relevant river field, so reconciliation can tell an already-applied carve from a stale one without rebuilding. */
+  fingerprint?: string
   originalMetadata?: SiteNode['metadata']
 }>
+
+export { riverSurfaceInset } from './planner'
+export type { RiverFacts } from './planner'
 
 export type SampledRiverPoint = readonly [x: number, y: number, z: number]
 export type SampledRiverPath = Readonly<{
@@ -70,6 +85,83 @@ export function riverTerrainBaseline(site: SiteNode): TerrainField | null {
 /** River ids represented by the Site's last applied excavation, when known. */
 export function riverTerrainRiverIds(site: SiteNode): readonly string[] | null {
   return readRiverTerrainMetadata(site.metadata)?.riverIds ?? null
+}
+
+export type RiverTerrainGrid = Readonly<{
+  cols: number
+  rows: number
+  spacing: number
+  step: number
+  origin: readonly [number, number]
+}>
+
+/**
+ * Stable hash of everything that changes a river's excavation: the rivers'
+ * grading fields, the Site boundary, and the terrain grid. The terrain stamp
+ * records it at apply time; RiverSystem compares it against the live scene
+ * and skips its write entirely when the Site already carries exactly this
+ * carve (an apply and a reconcile must be one history entry, not two).
+ */
+export function riverTerrainFingerprint(
+  rivers: readonly RiverNode[],
+  boundary?: readonly (readonly [number, number])[],
+  grid?: RiverTerrainGrid | null,
+): string {
+  const grading = [...rivers]
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+    .map((river) => ({
+      id: String(river.id),
+      points: river.points,
+      width: river.width,
+      depth: river.depth,
+      pointWidths: river.pointWidths,
+      pointDepths: river.pointDepths,
+      source: river.source,
+      outlet: river.outlet,
+      flow: river.flow,
+      maxSlopePct: river.maxSlopePct,
+      section: river.section,
+      ends: river.ends,
+    }))
+  const gridKey = grid
+    ? { cols: grid.cols, rows: grid.rows, spacing: grid.spacing, step: grid.step, origin: grid.origin }
+    : null
+  return hashString(JSON.stringify({ grading, boundary: boundary ?? null, grid: gridKey }))
+}
+
+/** The fingerprint recorded by the Site's last applied river carve, if any. */
+export function riverTerrainAppliedFingerprint(site: SiteNode): string | null {
+  return readRiverTerrainMetadata(site.metadata)?.fingerprint ?? null
+}
+
+/**
+ * True when the Site's terrain already carries the carve for exactly these
+ * rivers, boundary, and grid — i.e. an apply already wrote it and a
+ * reconciliation pass must not write (or record history) again.
+ */
+export function riverTerrainIsApplied(site: SiteNode, rivers: readonly RiverNode[]): boolean {
+  const applied = riverTerrainAppliedFingerprint(site)
+  if (!applied || rivers.length === 0) return false
+  const terrain = site.terrain
+  const grid = terrain
+    ? {
+        cols: terrain.cols,
+        rows: terrain.rows,
+        spacing: terrain.spacing,
+        step: terrain.step,
+        origin: terrain.origin,
+      }
+    : null
+  return applied === riverTerrainFingerprint(rivers, site.polygon.points, grid)
+}
+
+function hashString(value: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 /**
@@ -112,6 +204,7 @@ export function rebuildRiverTerrain(
       baseline: encodeTerrainField(baseline),
       applied: terrainData,
       riverIds: validRivers.map((river) => String(river.id)),
+      fingerprint: riverTerrainFingerprint(validRivers, site.polygon.points, current),
       ...(originalMetadata === undefined ? {} : { originalMetadata }),
     } satisfies RiverTerrainMetadata
   }
@@ -129,6 +222,17 @@ export function rebuildRiverTerrain(
   }
 }
 
+/**
+ * Size of the Site update one river apply writes, in UTF-8 bytes: the carved
+ * terrain field plus the metadata stamp (which itself carries the baseline
+ * and applied fields, so the terrain payload is stored roughly three times).
+ * Kept as a measurable function until the terrain write moves to a delta codec.
+ */
+export function riverTerrainPayloadBytes(result: RiverTerrainResult): number {
+  const payload = JSON.stringify({ terrain: result.terrainData, metadata: result.metadata })
+  return new TextEncoder().encode(payload).length
+}
+
 /** The exact spline samples shared by terrain excavation and every river representation. */
 export function sampleRiverPath(
   terrain: TerrainField,
@@ -140,19 +244,20 @@ export function sampleRiverPath(
   const authoredLength = polylineLength(authored)
   if (authoredLength <= EPSILON) return null
 
-  const halfWidth = river.width * 0.5
+  const widths = sanitizedPointValues(river, river.pointWidths, river.width)
   const sourceExtension = endpointExtension(
     authored,
     true,
     river.source === 'mountain',
-    halfWidth,
+    (widths[0] ?? river.width) * 0.5,
     boundary,
   )
   const outletExtension = endpointExtension(
     authored,
     false,
     river.outlet === 'sea',
-    halfWidth,
+    // A fan gets a longer run-out so the widening, shallowing mouth can form.
+    (widths.at(-1) ?? river.width) * 0.5 * (river.ends.end === 'fan' ? 2 : 1),
     boundary,
   )
   const desiredSpacing = Math.max(0.35, terrain.spacing * 0.75)
@@ -257,17 +362,27 @@ export function sampleRiverPath(
     : null
 }
 
-/** Shared longitudinal width profile: compact semicircle caps, full-width connected ends. */
+/**
+ * Shared longitudinal width profile at the caps: each end kind scales the
+ * width through its extension (`rounded` is the original semicircle, `taper`
+ * a narrower cone, `spring` emerges narrow, `fan` widens); connected ends
+ * stay full-width to the boundary.
+ */
 export function riverPathWidthScale(
   path: SampledRiverPath,
   river: RiverNode,
   distance: number,
 ): number {
   if (distance < path.authoredStartDistance && river.source === 'rounded') {
-    return roundedCapScale(path.authoredStartDistance - distance, path.authoredStartDistance)
+    return capWidthScale(
+      river.ends.start,
+      path.authoredStartDistance - distance,
+      path.authoredStartDistance,
+    )
   }
   if (distance > path.authoredEndDistance && river.outlet === 'rounded') {
-    return roundedCapScale(
+    return capWidthScale(
+      river.ends.end,
       distance - path.authoredEndDistance,
       path.length - path.authoredEndDistance,
     )
@@ -275,15 +390,453 @@ export function riverPathWidthScale(
   return 1
 }
 
-/** Keeps river water consistently below its uncarved centerline. */
-export function riverSurfaceInset(depth: number): number {
-  return Math.min(0.14, Math.max(0.025, depth * 0.12))
+/** Longitudinal depth profile at the caps: springs and fans shallow toward their tip. */
+export function riverPathDepthScale(
+  path: SampledRiverPath,
+  river: RiverNode,
+  distance: number,
+): number {
+  if (distance < path.authoredStartDistance && river.source === 'rounded') {
+    const normalized = capAmount(path.authoredStartDistance - distance, path.authoredStartDistance)
+    return river.ends.start === 'spring' ? 1 - 0.75 * normalized : 1
+  }
+  if (distance > path.authoredEndDistance && river.outlet === 'rounded') {
+    const normalized = capAmount(
+      distance - path.authoredEndDistance,
+      path.length - path.authoredEndDistance,
+    )
+    return river.ends.end === 'fan' ? 1 - 0.75 * normalized : 1
+  }
+  return 1
 }
 
-function roundedCapScale(distanceFromAuthoredEnd: number, capLength: number): number {
-  if (capLength <= EPSILON) return 1
-  const normalized = clamp01(distanceFromAuthoredEnd / capLength)
-  return Math.sqrt(Math.max(0, 1 - normalized * normalized))
+function capAmount(distanceFromAuthoredEnd: number, capLength: number): number {
+  return capLength <= EPSILON ? 0 : clamp01(distanceFromAuthoredEnd / capLength)
+}
+
+function capWidthScale(
+  end: RiverNode['ends']['start'] | RiverNode['ends']['end'],
+  distanceFromAuthoredEnd: number,
+  capLength: number,
+): number {
+  const normalized = capAmount(distanceFromAuthoredEnd, capLength)
+  switch (end) {
+    case 'taper':
+      return Math.cos(normalized * Math.PI * 0.5)
+    case 'spring':
+      return (1 - normalized) * 0.6
+    case 'fan':
+      return 1 + normalized * 1.2
+    default:
+      return Math.sqrt(Math.max(0, 1 - normalized * normalized))
+  }
+}
+
+/** Per-point values resolved against the authored points, thinned exactly like `sanitizePoints`. */
+function sanitizedPointValues(
+  river: RiverNode,
+  overrides: readonly (number | null)[],
+  fallback: number,
+): number[] {
+  const resolved = resolvePointValues(river.points.length, overrides, fallback)
+  const values: number[] = []
+  let previous: readonly [number, number] | undefined
+  for (let index = 0; index < river.points.length; index += 1) {
+    const point = river.points[index]!
+    if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) continue
+    if (!previous || Math.hypot(point[0] - previous[0], point[1] - previous[1]) > 1e-6) {
+      values.push(resolved[index] ?? fallback)
+      previous = point
+    }
+  }
+  return values
+}
+
+/** Resolved width/depth at an authored end, where off-Site continuations attach. */
+export function riverEndpointSize(
+  river: RiverNode,
+  atStart: boolean,
+): Readonly<{ widthM: number; depthM: number }> {
+  const widths = sanitizedPointValues(river, river.pointWidths, river.width)
+  const depths = sanitizedPointValues(river, river.pointDepths, river.depth)
+  return {
+    widthM: (atStart ? widths[0] : widths.at(-1)) ?? river.width,
+    depthM: (atStart ? depths[0] : depths.at(-1)) ?? river.depth,
+  }
+}
+
+/**
+ * Width at a distance along the sampled path: per-point values interpolated
+ * along the authored polyline, scaled by the cap profile. Sample points in
+ * the cap extensions clamp to the nearest authored end value.
+ */
+export function riverWidthAtDistance(
+  river: RiverNode,
+  path: SampledRiverPath,
+  distance: number,
+): number {
+  const authoredDistance = authoredDistanceAt(river, path, distance)
+  const base = valueAlongAuthored(
+    river,
+    sanitizedPointValues(river, river.pointWidths, river.width),
+    authoredDistance,
+  )
+  return base * riverPathWidthScale(path, river, distance)
+}
+
+/** Depth at a distance along the sampled path; see `riverWidthAtDistance`. */
+export function riverDepthAtDistance(
+  river: RiverNode,
+  path: SampledRiverPath,
+  distance: number,
+): number {
+  const authoredDistance = authoredDistanceAt(river, path, distance)
+  const base = valueAlongAuthored(
+    river,
+    sanitizedPointValues(river, river.pointDepths, river.depth),
+    authoredDistance,
+  )
+  return base * riverPathDepthScale(path, river, distance)
+}
+
+function authoredDistances(river: RiverNode): number[] {
+  const authored = sanitizePoints(river.points)
+  const distances = [0]
+  for (let index = 1; index < authored.length; index += 1) {
+    distances.push(
+      distances[index - 1]! +
+        Math.hypot(
+          authored[index]![0] - authored[index - 1]![0],
+          authored[index]![1] - authored[index - 1]![1],
+        ),
+    )
+  }
+  return distances
+}
+
+function valueAlongAuthored(river: RiverNode, values: readonly number[], distance: number): number {
+  const distances = authoredDistances(river)
+  if (values.length === 0) return 0
+  if (distance <= 0) return values[0]!
+  for (let index = 1; index < distances.length; index += 1) {
+    if (distance > distances[index]!) continue
+    const span = distances[index]! - distances[index - 1]!
+    const amount = span <= EPSILON ? 0 : (distance - distances[index - 1]!) / span
+    const start = values[index - 1] ?? values.at(-1)!
+    const end = values[index] ?? start
+    return start + (end - start) * amount
+  }
+  return values.at(-1)!
+}
+
+/**
+ * Map a sampled-path distance onto authored-polyline distance by projecting
+ * the sample onto the authored segments. The spline stays close to its
+ * control polyline, so the nearest projection is a stable station mapping.
+ */
+function authoredDistanceAt(river: RiverNode, path: SampledRiverPath, distance: number): number {
+  const authored = sanitizePoints(river.points)
+  const distances = authoredDistances(river)
+  const sample = pointAtDistance(path, distance)
+  let best = 0
+  let bestDistanceSquared = Number.POSITIVE_INFINITY
+  for (let index = 1; index < authored.length; index += 1) {
+    const start = authored[index - 1]!
+    const end = authored[index]!
+    const dx = end[0] - start[0]
+    const dz = end[1] - start[1]
+    const lengthSquared = dx * dx + dz * dz
+    const amount =
+      lengthSquared <= EPSILON
+        ? 0
+        : clamp01(((sample[0] - start[0]) * dx + (sample[2] - start[1]) * dz) / lengthSquared)
+    const offsetX = sample[0] - (start[0] + dx * amount)
+    const offsetZ = sample[2] - (start[1] + dz * amount)
+    const distanceSquared = offsetX * offsetX + offsetZ * offsetZ
+    if (distanceSquared < bestDistanceSquared) {
+      bestDistanceSquared = distanceSquared
+      best = distances[index - 1]! + Math.sqrt(lengthSquared) * amount
+    }
+  }
+  return best
+}
+
+function pointAtDistance(path: SampledRiverPath, distance: number): SampledRiverPoint {
+  if (distance <= 0) return path.points[0]!
+  for (let index = 1; index < path.points.length; index += 1) {
+    if (distance > path.distances[index]!) continue
+    const start = path.points[index - 1]!
+    const end = path.points[index]!
+    const span = path.distances[index]! - path.distances[index - 1]!
+    const amount = span <= EPSILON ? 0 : (distance - path.distances[index - 1]!) / span
+    return [
+      start[0] + (end[0] - start[0]) * amount,
+      start[1] + (end[1] - start[1]) * amount,
+      start[2] + (end[2] - start[2]) * amount,
+    ]
+  }
+  return path.points.at(-1)!
+}
+
+export type RiverPlanSample = Readonly<{
+  distanceM: number
+  groundY: number
+  waterY: number
+  /** Bank-top height (water level plus surface inset) the section is built from. */
+  channelTopY: number
+  widthM: number
+  depthM: number
+  slopePct: number
+  embankmentM: number
+  rapid: boolean
+  /** Lateral shift of the deepest line toward the outside of a bend, metres. */
+  bendShiftM: number
+}>
+
+export type RiverPlan = Readonly<{
+  path: SampledRiverPath
+  samples: readonly RiverPlanSample[]
+  facts: RiverFacts
+  /** True when the higher (upstream) end is the first authored point. */
+  upstreamAtStart: boolean
+  /** Greatest lateral distance from the centerline the earthworks can reach. */
+  maxReachM: number
+  /** Full (uncapped) widths at the authored ends, used to bound the cap discs. */
+  authoredStartWidthM: number
+  authoredEndWidthM: number
+}>
+
+/**
+ * The one river planner: sample the spline on the uncarved terrain, resolve
+ * width/depth along it, solve the water profile, and measure the result.
+ * The panel (facts), the terrain carve, and the water surface all consume
+ * this plan, so what is reported is what gets built.
+ */
+export function planRiver(
+  terrain: TerrainField,
+  river: RiverNode,
+  boundary?: readonly (readonly [number, number])[],
+): RiverPlan | null {
+  const path = sampleRiverPath(terrain, river, boundary)
+  if (!path) return null
+  const widths = path.distances.map((distance) => riverWidthAtDistance(river, path, distance))
+  const depths = path.distances.map((distance) => riverDepthAtDistance(river, path, distance))
+  const stations: RiverProfileStation[] = path.points.map((point, index) => ({
+    distanceM: path.distances[index]!,
+    groundY: point[1],
+    depthM: depths[index]!,
+  }))
+  // Connected ends pin the flow: a mountain source feeds the start and a sea
+  // outlet drains the end, so both put upstream at the start. Otherwise the
+  // higher authored end is upstream.
+  const upstreamAtStart =
+    river.flow !== 'downhill' ||
+    river.source === 'mountain' ||
+    river.outlet === 'sea' ||
+    (stations[0]?.groundY ?? 0) >= (stations.at(-1)?.groundY ?? 0)
+  const profile =
+    river.flow === 'downhill'
+      ? solveOrderedProfile(stations, river.maxSlopePct, upstreamAtStart)
+      : asDrawnProfile(stations)
+  const samples: RiverPlanSample[] = profile.map((entry, index) => ({
+    distanceM: entry.distanceM,
+    groundY: entry.groundY,
+    waterY: entry.waterY,
+    channelTopY: entry.waterY + riverSurfaceInset(depths[index]!),
+    widthM: widths[index]!,
+    depthM: depths[index]!,
+    slopePct: entry.slopePct,
+    embankmentM: entry.embankmentM,
+    rapid: entry.rapid,
+    bendShiftM: bendShiftAt(path, index, widths[index]! * 0.5, river.section.bendAsymmetry),
+  }))
+  const startSample = samples.find((sample) => sample.distanceM >= path.authoredStartDistance)
+  const endSample = [...samples]
+    .reverse()
+    .find((sample) => sample.distanceM <= path.authoredEndDistance)
+  return {
+    path,
+    samples,
+    facts: measureRiverFacts(terrain, river, path, samples),
+    upstreamAtStart,
+    maxReachM: Math.max(...samples.map((sample) => sectionReachM(river, sample))),
+    authoredStartWidthM: startSample?.widthM ?? river.width,
+    authoredEndWidthM: endSample?.widthM ?? river.width,
+  }
+}
+
+function solveOrderedProfile(
+  stations: readonly RiverProfileStation[],
+  maxSlopePct: number,
+  upstreamAtStart: boolean,
+) {
+  if (upstreamAtStart) return solveDownhillProfile(stations, maxSlopePct)
+  const total = stations.at(-1)?.distanceM ?? 0
+  const reversed = [...stations].reverse().map((station) => ({
+    ...station,
+    distanceM: total - station.distanceM,
+  }))
+  return solveDownhillProfile(reversed, maxSlopePct)
+    .reverse()
+    .map((sample, index) => ({
+      ...sample,
+      distanceM: stations[index]!.distanceM,
+      // Slope sign follows the authored direction, so report descent as negative here.
+      slopePct: -sample.slopePct,
+    }))
+}
+
+function bendShiftAt(
+  path: SampledRiverPath,
+  index: number,
+  halfWidthM: number,
+  asymmetry: number,
+): number {
+  if (asymmetry <= 0 || index === 0 || index === path.points.length - 1) return 0
+  const before = path.points[index - 1]!
+  const point = path.points[index]!
+  const after = path.points[index + 1]!
+  const inX = point[0] - before[0]
+  const inZ = point[2] - before[2]
+  const outX = after[0] - point[0]
+  const outZ = after[2] - point[2]
+  const inLength = Math.hypot(inX, inZ)
+  const outLength = Math.hypot(outX, outZ)
+  if (inLength <= EPSILON || outLength <= EPSILON) return 0
+  // Signed curvature about +Y; positive bends the outside bank toward -normal.
+  const sinTurn = (inZ * outX - inX * outZ) / (inLength * outLength)
+  const curvature = sinTurn / Math.max(0.5, (inLength + outLength) * 0.5)
+  const bendAmount = Math.max(-1, Math.min(1, curvature * halfWidthM))
+  return bendAmount * asymmetry * 0.5 * halfWidthM
+}
+
+function sectionReachM(river: RiverNode, sample: RiverPlanSample): number {
+  const channelReachM = sample.widthM * 0.5 + Math.abs(sample.bendShiftM)
+  if (river.flow !== 'downhill') return channelReachM
+  const { section } = river
+  const bankRunM =
+    section.bankSlope * Math.max(0, sample.groundY - sample.channelTopY + sample.depthM)
+  return channelReachM + section.bermM + bankRunM + section.blendM
+}
+
+function measureRiverFacts(
+  terrain: TerrainField,
+  river: RiverNode,
+  path: SampledRiverPath,
+  samples: readonly RiverPlanSample[],
+): RiverFacts {
+  let cutVolumeM3 = 0
+  let fillVolumeM3 = 0
+  let embankedLengthM = 0
+  let rapidLengthM = 0
+  let maxEmbankmentM = 0
+  const areas = samples.map((sample, index) =>
+    authoredSample(path, sample) ? crossSectionAreas(terrain, river, path, index, sample) : null,
+  )
+  for (let index = 1; index < samples.length; index += 1) {
+    const start = samples[index - 1]!
+    const end = samples[index]!
+    const segmentLengthM = end.distanceM - start.distanceM
+    if (segmentLengthM <= 0 || !authoredSample(path, start)) continue
+    const startArea = areas[index - 1]
+    const endArea = areas[index] ?? startArea
+    if (startArea && endArea) {
+      cutVolumeM3 += ((startArea.cutM2 + endArea.cutM2) / 2) * segmentLengthM
+      fillVolumeM3 += ((startArea.fillM2 + endArea.fillM2) / 2) * segmentLengthM
+    }
+    if (start.embankmentM > 0.05 || end.embankmentM > 0.05) embankedLengthM += segmentLengthM
+    if (start.rapid || end.rapid) rapidLengthM += segmentLengthM
+    maxEmbankmentM = Math.max(maxEmbankmentM, start.embankmentM, end.embankmentM)
+  }
+  const lengthM = Math.max(0, path.authoredEndDistance - path.authoredStartDistance)
+  const dropM = authoredDropM(path, samples)
+  return {
+    lengthM,
+    dropM,
+    meanSlopePct: lengthM > EPSILON ? (dropM / lengthM) * 100 : 0,
+    cutVolumeM3,
+    fillVolumeM3,
+    embankedLengthM,
+    maxEmbankmentM,
+    rapidLengthM,
+  }
+}
+
+function authoredSample(path: SampledRiverPath, sample: RiverPlanSample): boolean {
+  return sample.distanceM >= path.authoredStartDistance && sample.distanceM <= path.authoredEndDistance
+}
+
+function authoredDropM(path: SampledRiverPath, samples: readonly RiverPlanSample[]): number {
+  const first = samples.find((sample) => sample.distanceM >= path.authoredStartDistance)
+  const last = [...samples].reverse().find((sample) => sample.distanceM <= path.authoredEndDistance)
+  if (!first || !last) return 0
+  return Math.abs(first.waterY - last.waterY)
+}
+
+/** Cut/fill areas of one cross-section, sampled laterally across the uncarved ground. */
+function crossSectionAreas(
+  terrain: TerrainField,
+  river: RiverNode,
+  path: SampledRiverPath,
+  index: number,
+  sample: RiverPlanSample,
+): { cutM2: number; fillM2: number } {
+  const point = path.points[index]!
+  const before = path.points[Math.max(0, index - 1)]!
+  const after = path.points[Math.min(path.points.length - 1, index + 1)]!
+  let tangentX = after[0] - before[0]
+  let tangentZ = after[2] - before[2]
+  const tangentLength = Math.hypot(tangentX, tangentZ)
+  if (tangentLength <= EPSILON) return { cutM2: 0, fillM2: 0 }
+  tangentX /= tangentLength
+  tangentZ /= tangentLength
+  const reachM = sectionReachM(river, sample)
+  const stepM = 0.5
+  let cutM2 = 0
+  let fillM2 = 0
+  for (let lateralM = -reachM; lateralM <= reachM; lateralM += stepM) {
+    const groundY = surfaceHeightAt(
+      terrain,
+      point[0] - tangentZ * lateralM,
+      point[2] + tangentX * lateralM,
+    )
+    const target = plannedTargetAt(river, sample, lateralM, groundY)
+    if (target === null) continue
+    if (target < groundY) cutM2 += (groundY - target) * stepM
+    else fillM2 += (target - groundY) * stepM
+  }
+  return { cutM2, fillM2 }
+}
+
+/** Target height the carve will impose at one lateral offset of a planned station. */
+function plannedTargetAt(
+  river: RiverNode,
+  sample: RiverPlanSample,
+  lateralM: number,
+  groundY: number,
+): number | null {
+  const halfWidthM = sample.widthM * 0.5
+  if (river.flow === 'downhill') {
+    return riverSectionTargetHeight({
+      lateralM,
+      groundY,
+      centerGroundY: sample.groundY,
+      channelTopY: sample.channelTopY,
+      depthM: sample.depthM,
+      halfWidthM,
+      bendShiftM: sample.bendShiftM,
+      section: river.section,
+    })
+  }
+  const shape = riverSectionShape(
+    river.section.shape,
+    lateralM - sample.bendShiftM,
+    halfWidthM,
+    sample.depthM,
+    river.section.bankSlope,
+  )
+  if (shape <= 0) return null
+  return Math.min(groundY, sample.groundY - sample.depthM * shape)
 }
 
 function allocateSectionSegments(
@@ -386,22 +939,22 @@ function carveRiverTerrain(
   boundary: readonly (readonly [number, number])[],
   rivers: readonly RiverNode[],
 ): TerrainField {
-  const paths = rivers
-    .map((river) => ({ river, path: sampleRiverPath(baseline, river, boundary) }))
-    .filter((entry): entry is { river: RiverNode; path: SampledRiverPath } => entry.path !== null)
-  if (paths.length === 0 || boundary.length < 3) return baseline
+  const plans = rivers
+    .map((river) => ({ river, plan: planRiver(baseline, river, boundary) }))
+    .filter((entry): entry is { river: RiverNode; plan: RiverPlan } => entry.plan !== null)
+  if (plans.length === 0 || boundary.length < 3) return baseline
 
   let minX = Number.POSITIVE_INFINITY
   let minZ = Number.POSITIVE_INFINITY
   let maxX = Number.NEGATIVE_INFINITY
   let maxZ = Number.NEGATIVE_INFINITY
-  for (const { river, path } of paths) {
+  for (const { plan } of plans) {
     // A rendered terrain triangle can cross the water even when none of its
     // vertices lies inside the analytic ribbon. Include every grid vertex that
     // can support a triangle beneath the river; the water itself keeps the
     // authored bank and cap outline.
-    const margin = river.width * 0.5 + baseline.spacing * TERRAIN_TRIANGLE_REACH_FACTOR
-    for (const point of path.points) {
+    const margin = plan.maxReachM + baseline.spacing * TERRAIN_TRIANGLE_REACH_FACTOR
+    for (const point of plan.path.points) {
       minX = Math.min(minX, point[0] - margin)
       minZ = Math.min(minZ, point[2] - margin)
       maxX = Math.max(maxX, point[0] + margin)
@@ -420,9 +973,23 @@ function carveRiverTerrain(
       const sampleIndex = row * baseline.cols + col
       const original = baseline.heights[sampleIndex] ?? 0
       let target = original
-      for (const { river, path } of paths) {
-        target = Math.min(target, riverTargetHeight(baseline, path, river, x, z))
+      let downhillTarget: number | null = null
+      let downhillLateral = Number.POSITIVE_INFINITY
+      for (const { river, plan } of plans) {
+        const candidate = plannedTargetHeight(baseline, plan, river, x, z, original * baseline.step)
+        if (!candidate) continue
+        if (river.flow === 'downhill') {
+          // A downhill river sets its bed and banks outright (cut or fill), so
+          // the nearest channel wins over any ground-following cut nearby.
+          if (candidate.lateralM < downhillLateral) {
+            downhillLateral = candidate.lateralM
+            downhillTarget = candidate.height
+          }
+        } else {
+          target = Math.min(target, candidate.height)
+        }
       }
+      if (downhillTarget !== null) target = downhillTarget
       if (target !== original) {
         heights ??= new Int16Array(baseline.heights)
         heights[sampleIndex] = target
@@ -432,16 +999,20 @@ function carveRiverTerrain(
   return heights ? { ...baseline, heights } : baseline
 }
 
-function riverTargetHeight(
+type PlannedTarget = Readonly<{ height: number; lateralM: number }>
+
+function plannedTargetHeight(
   terrain: TerrainField,
-  path: SampledRiverPath,
+  plan: RiverPlan,
   river: RiverNode,
   x: number,
   z: number,
-): number {
-  const halfWidth = river.width * 0.5
+  groundM: number,
+): PlannedTarget | null {
+  const path = plan.path
   const vertexReach = terrain.spacing * TERRAIN_TRIANGLE_REACH_FACTOR
-  let best = Number.POSITIVE_INFINITY
+  let bestCut = Number.POSITIVE_INFINITY
+  let nearest: PlannedTarget | null = null
 
   for (let index = 1; index < path.points.length; index += 1) {
     const start = path.points[index - 1]!
@@ -458,11 +1029,14 @@ function riverTargetHeight(
     const along = path.distances[index - 1]! + segmentLength * amount
     const capCenter =
       river.source === 'rounded' && along < path.authoredStartDistance
-        ? river.points[0]
+        ? { point: river.points[0], halfWidthM: plan.authoredStartWidthM * 0.5 }
         : river.outlet === 'rounded' && along > path.authoredEndDistance
-          ? river.points.at(-1)
+          ? { point: river.points.at(-1), halfWidthM: plan.authoredEndWidthM * 0.5 }
           : undefined
-    if (capCenter && Math.hypot(x - capCenter[0], z - capCenter[1]) > halfWidth + vertexReach) {
+    if (
+      capCenter?.point &&
+      Math.hypot(x - capCenter.point[0], z - capCenter.point[1]) > capCenter.halfWidthM + vertexReach
+    ) {
       continue
     }
     // At a rounded tip the analytic width reaches zero. Move no farther than
@@ -474,34 +1048,74 @@ function riverTargetHeight(
         : along > path.authoredEndDistance
           ? Math.max(path.authoredEndDistance, along - vertexReach)
           : along
-    const localHalfWidth = halfWidth * riverPathWidthScale(path, river, supportedAlong)
+    const supportedAmount = clamp01(
+      (supportedAlong - path.distances[index - 1]!) / segmentLength,
+    )
+    const startSample = plan.samples[index - 1]!
+    const endSample = plan.samples[index]!
+    const widthM = lerp(startSample.widthM, endSample.widthM, supportedAmount)
+    const depthM = lerp(startSample.depthM, endSample.depthM, supportedAmount)
+    const bendShiftM = lerp(startSample.bendShiftM, endSample.bendShiftM, supportedAmount)
+    const channelTopY = lerp(startSample.channelTopY, endSample.channelTopY, supportedAmount)
+    const centerGroundY = lerp(startSample.groundY, endSample.groundY, amount)
+    const localHalfWidth = widthM * 0.5
     if (localHalfWidth <= EPSILON) continue
     const lateralDistance = Math.hypot(x - nearestX, z - nearestZ)
+    const lateralSign =
+      ((x - nearestX) * -dz + (z - nearestZ) * dx) / segmentLength >= 0 ? 1 : -1
     // A point on a native terrain triangle can be up to √2 grid spacings from
     // any of its vertices. Eroding that distance here guarantees every vertex
     // influencing the visible ribbon receives at least the point's intended
     // cross-section cut, instead of leaving a raised corner to form a spike.
-    const representedLateralDistance = Math.max(0, lateralDistance - vertexReach)
-    if (representedLateralDistance >= localHalfWidth) continue
-    const normalizedLateral = representedLateralDistance / localHalfWidth
-    const crossSection = riverCrossSection(normalizedLateral)
+    const representedLateral = lateralSign * Math.max(0, lateralDistance - vertexReach)
+    if (river.flow === 'downhill') {
+      const targetMetres = riverSectionTargetHeight({
+        lateralM: representedLateral,
+        groundY: groundM,
+        centerGroundY,
+        channelTopY,
+        depthM,
+        halfWidthM: localHalfWidth,
+        bendShiftM,
+        section: river.section,
+      })
+      if (targetMetres === null) continue
+      const candidate: PlannedTarget = {
+        height: quantize(terrain, targetMetres),
+        lateralM: Math.abs(representedLateral),
+      }
+      if (
+        !nearest ||
+        candidate.lateralM < nearest.lateralM ||
+        (candidate.lateralM === nearest.lateralM && candidate.height < nearest.height)
+      ) {
+        nearest = candidate
+      }
+      continue
+    }
+    const fromDeepLine = Math.abs(representedLateral - bendShiftM)
+    if (fromDeepLine >= localHalfWidth) continue
+    const crossSection = riverSectionShape(
+      river.section.shape,
+      fromDeepLine,
+      localHalfWidth,
+      depthM,
+      river.section.bankSlope,
+    )
     if (crossSection <= 0) continue
-    const centerHeight = start[1] + (end[1] - start[1]) * amount
-    const targetMetres = centerHeight - river.depth * crossSection
-    best = Math.min(best, quantize(terrain, targetMetres))
+    bestCut = Math.min(bestCut, quantize(terrain, centerGroundY - depthM * crossSection))
   }
-  return best
+  if (river.flow === 'downhill') return nearest
+  return Number.isFinite(bestCut) ? { height: bestCut, lateralM: 0 } : null
+}
+
+function lerp(start: number, end: number, amount: number): number {
+  return start + (end - start) * amount
 }
 
 /** Rounded flat bed through 42% of the half-width, then smooth graded banks. */
 export function riverCrossSection(normalizedLateralDistance: number): number {
-  const distance = Math.abs(normalizedLateralDistance)
-  if (distance >= 1) return 0
-  if (distance <= 0.42) {
-    const normalizedBed = distance / 0.42
-    return 1 - 0.06 * normalizedBed * normalizedBed
-  }
-  return 0.94 * (1 - smoothstep(0.42, 1, distance))
+  return riverSectionShape('curved', normalizedLateralDistance, 1, 1, 2)
 }
 
 function recoverBaseline(
@@ -550,6 +1164,7 @@ function readRiverTerrainMetadata(metadata: SiteNode['metadata']): RiverTerrainM
     baseline: encodeTerrainField(baseline),
     applied: encodeTerrainField(applied),
     riverIds,
+    ...(typeof record.fingerprint === 'string' ? { fingerprint: record.fingerprint } : {}),
     ...(record.originalMetadata === undefined ? {} : { originalMetadata: record.originalMetadata }),
   }
 }

@@ -10,7 +10,7 @@ import {
 } from '@pascal-app/core'
 import { useEffect } from 'react'
 import { RIVER_KIND, RiverNode } from './schema'
-import { rebuildRiverTerrain } from './terrain'
+import { rebuildRiverTerrain, riverTerrainFingerprint, riverTerrainIsApplied } from './terrain'
 
 export type RiverSiteChange = Readonly<{
   siteId: string
@@ -81,20 +81,12 @@ function riverGradingChanged(current: AnyNode | undefined, previous: AnyNode | u
   const currentRiver = RiverNode.safeParse(current)
   const previousRiver = RiverNode.safeParse(previous)
   if (!currentRiver.success || !previousRiver.success) return true
-  if (
-    currentRiver.data.parentId !== previousRiver.data.parentId ||
-    currentRiver.data.width !== previousRiver.data.width ||
-    currentRiver.data.depth !== previousRiver.data.depth ||
-    currentRiver.data.source !== previousRiver.data.source ||
-    currentRiver.data.outlet !== previousRiver.data.outlet ||
-    currentRiver.data.points.length !== previousRiver.data.points.length
-  ) {
-    return true
-  }
-  return currentRiver.data.points.some((point, index) => {
-    const prior = previousRiver.data.points[index]
-    return !prior || point[0] !== prior[0] || point[1] !== prior[1]
-  })
+  if (currentRiver.data.parentId !== previousRiver.data.parentId) return true
+  // The fingerprint covers every grading-relevant field (path, widths, depths,
+  // profile, section, ends), so new fields cannot silently miss reconciliation.
+  return (
+    riverTerrainFingerprint([currentRiver.data]) !== riverTerrainFingerprint([previousRiver.data])
+  )
 }
 
 export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
@@ -121,6 +113,10 @@ export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
           site.metadata !== null &&
           Object.prototype.hasOwnProperty.call(site.metadata, 'environmentRiverTerrain')
         if (rivers.length === 0 && !hasTracking) continue
+        // An apply stamps the Site with the carve fingerprint; when it still
+        // matches, this reconciliation is the same change and must not become
+        // a second history entry.
+        if (riverTerrainIsApplied(site, rivers)) continue
         const rebuilt = rebuildRiverTerrain(site, rivers)
         if (
           terrainDataEqual(site.terrain, rebuilt.terrainData) &&

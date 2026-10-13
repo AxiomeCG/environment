@@ -100,12 +100,18 @@ function mutableScene(site: SiteNodeValue) {
 const DEFAULTS = {
   width: 4,
   depth: 1,
+  pointWidths: [],
+  pointDepths: [],
   source: 'rounded' as const,
   outlet: 'rounded' as const,
   flowDirection: 'forward' as const,
   flowSpeed: 0.6,
   quality: 'clear' as const,
   shoreline: 'soft' as const,
+  flow: 'as_drawn' as const,
+  maxSlopePct: 2,
+  section: { shape: 'curved' as const, bankSlope: 2, bendAsymmetry: 0, bermM: 0, blendM: 2 },
+  ends: { start: 'rounded' as const, end: 'rounded' as const },
 }
 
 describe('river authoring scene actions', () => {

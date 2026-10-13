@@ -23,10 +23,9 @@ import { buildPondShoreGeometry, createPondShoreDistances } from '../pond/shorel
 import { createWaterMaterial, type WaterMaterialOptions } from '../surroundings/water-material'
 import type { RiverNode } from './schema'
 import {
-  riverPathWidthScale,
-  riverSurfaceInset,
+  planRiver,
   riverTerrainBaseline,
-  sampleRiverPath,
+  type RiverPlan,
   type SampledRiverPath,
 } from './terrain'
 
@@ -93,12 +92,13 @@ export function buildRiverSurface(
   const terrain = carvedTerrain ?? terrainFieldOf(site)
   if (!terrain) return null
   const baseline = baselineTerrain ?? riverTerrainBaseline(site) ?? terrain
-  const sampledPath = sampleRiverPath(baseline, node, site.polygon.points)
-  if (!sampledPath) return null
+  const plan = planRiver(baseline, node, site.polygon.points)
+  if (!plan) return null
+  const sampledPath = plan.path
   const boundaryTriangles = triangulateSiteBoundary(site.polygon.points)
   if (boundaryTriangles.length === 0) return null
 
-  const rows = buildRibbonRows(node, sampledPath, baseline, terrain)
+  const rows = buildRibbonRows(node, plan, baseline, terrain)
   if (rows.length < 2) return null
   const positions: number[] = []
   const depths: number[] = []
@@ -363,14 +363,18 @@ export function createRiverSurfaceGeometry(
 
 function buildRibbonRows(
   node: RiverNode,
-  path: SampledRiverPath,
+  plan: RiverPlan,
   baseline: TerrainField,
   terrain: TerrainField,
 ): SurfaceVertex[][] {
+  const path = plan.path
   const rows: SurfaceVertex[][] = []
-  const surfaceInset = riverSurfaceInset(node.depth)
+  // In downhill mode the current runs from the solved upstream end, whichever
+  // way the path was authored; as-drawn rivers keep the authored direction.
+  const flowSign = node.flow === 'downhill' && !plan.upstreamAtStart ? -1 : 1
   for (let index = 0; index < path.points.length; index += 1) {
     const point = path.points[index]!
+    const sample = plan.samples[index]!
     const before = path.points[Math.max(0, index - 1)]!
     const after = path.points[Math.min(path.points.length - 1, index + 1)]!
     let tangentX = after[0] - before[0]
@@ -381,16 +385,18 @@ function buildRibbonRows(
     tangentZ /= tangentLength
     const normalX = -tangentZ
     const normalZ = tangentX
-    const halfWidth = node.width * 0.5 * riverPathWidthScale(path, node, path.distances[index]!)
-    const centerWaterHeight = point[1] - surfaceInset
+    const halfWidth = sample.widthM * 0.5
+    const centerWaterHeight = sample.waterY
     rows.push(
       LATERAL_FRACTIONS.map((fraction): SurfaceVertex => {
         const x = point[0] + normalX * halfWidth * fraction
         const z = point[2] + normalZ * halfWidth * fraction
-        const sourceHeight = Math.min(
-          centerWaterHeight,
-          surfaceHeightAt(baseline, x, z) - BANK_INSET,
-        )
+        // Downhill water is level across its channel; as-drawn water hugs the
+        // bank ground so it never floats above an uncarved shoulder.
+        const sourceHeight =
+          node.flow === 'downhill'
+            ? centerWaterHeight
+            : Math.min(centerWaterHeight, surfaceHeightAt(baseline, x, z) - BANK_INSET)
         const bedHeight = surfaceHeightAt(terrain, x, z)
         return {
           x,
@@ -399,8 +405,8 @@ function buildRibbonRows(
           depth: sourceHeight - bedHeight,
           course: path.distances[index]!,
           lateral: halfWidth * fraction,
-          flowX: tangentX,
-          flowZ: tangentZ,
+          flowX: tangentX * flowSign,
+          flowZ: tangentZ * flowSign,
         }
       }),
     )

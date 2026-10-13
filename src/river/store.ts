@@ -2,7 +2,16 @@
 
 import { create } from 'zustand'
 import type { PondShoreline, WaterQuality } from '../pond/schema'
-import type { RiverFlowDirection, RiverNode, RiverOutlet, RiverPoint, RiverSource } from './schema'
+import type {
+  RiverEnds,
+  RiverFlowDirection,
+  RiverFlowMode,
+  RiverNode,
+  RiverOutlet,
+  RiverPoint,
+  RiverSection,
+  RiverSource,
+} from './schema'
 
 export type RiverSettings = {
   width: number
@@ -13,6 +22,10 @@ export type RiverSettings = {
   flowSpeed: number
   quality: WaterQuality
   shoreline: PondShoreline
+  flow: RiverFlowMode
+  maxSlopePct: number
+  section: RiverSection
+  ends: RiverEnds
 }
 
 export type RiverDraft = {
@@ -48,6 +61,11 @@ export const DEFAULT_RIVER_SETTINGS: Readonly<RiverSettings> = {
   flowSpeed: 0.6,
   quality: 'clear',
   shoreline: 'soft',
+  // New rivers get the solved downhill profile; pre-v3 rivers keep as-drawn.
+  flow: 'downhill',
+  maxSlopePct: 2,
+  section: { shape: 'curved', bankSlope: 2, bendAsymmetry: 0, bermM: 0, blendM: 2 },
+  ends: { start: 'rounded', end: 'rounded' },
 }
 
 export const useRiverStore = create<RiverStore>((set, get) => ({
@@ -108,6 +126,10 @@ export const useRiverStore = create<RiverStore>((set, get) => ({
       flowSpeed: river.flowSpeed,
       quality: river.quality,
       shoreline: river.shoreline,
+      flow: river.flow,
+      maxSlopePct: river.maxSlopePct,
+      section: river.section,
+      ends: river.ends,
     }),
   cancelRiverInteraction: () =>
     set({

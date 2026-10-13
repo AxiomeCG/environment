@@ -46,6 +46,13 @@ const riverParametrics: ParametricDescriptor<RiverNodeType> = {
       label: 'Flow',
       fields: [
         {
+          key: 'flow',
+          kind: 'enum',
+          options: ['downhill', 'as_drawn'],
+          display: 'segmented',
+        },
+        { key: 'maxSlopePct', kind: 'number', unit: '%', min: 0, max: 50, step: 0.1 },
+        {
           key: 'flowDirection',
           kind: 'enum',
           options: ['forward', 'reverse'],
@@ -109,7 +116,7 @@ export function riverDeleteTerrainUpdates(
 
 export const riverDefinition: RiverDefinition = {
   kind: RIVER_KIND,
-  schemaVersion: 2,
+  schemaVersion: 3,
   schema: RiverNode,
   category: 'furnish',
 
@@ -125,12 +132,18 @@ export const riverDefinition: RiverDefinition = {
     ],
     width: 4,
     depth: 1,
+    pointWidths: [],
+    pointDepths: [],
     source: 'rounded',
     outlet: 'rounded',
     flowDirection: 'forward',
     flowSpeed: 0.6,
     quality: 'clear',
     shoreline: 'soft',
+    flow: 'downhill',
+    maxSlopePct: 2,
+    section: { shape: 'curved', bankSlope: 2, bendAsymmetry: 0, bermM: 0, blendM: 2 },
+    ends: { start: 'rounded', end: 'rounded' },
   }),
 
   capabilities: {
