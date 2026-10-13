@@ -490,19 +490,6 @@ function sanitizedPointValues(
   return values
 }
 
-/** Resolved width/depth at an authored end, where off-Site continuations attach. */
-export function riverEndpointSize(
-  river: RiverNode,
-  atStart: boolean,
-): Readonly<{ widthM: number; depthM: number }> {
-  const widths = sanitizedPointValues(river, river.pointWidths, river.width)
-  const depths = sanitizedPointValues(river, river.pointDepths, river.depth)
-  return {
-    widthM: (atStart ? widths[0] : widths.at(-1)) ?? river.width,
-    depthM: (atStart ? depths[0] : depths.at(-1)) ?? river.depth,
-  }
-}
-
 /** Per-point sizes resolved at their stations along the authored polyline. */
 export type RiverAuthoredSizes = Readonly<{
   stationsM: readonly number[]
