@@ -8,10 +8,10 @@ import {
   useLiveTerrain,
 } from '@pascal-app/core'
 import { useEffect } from 'react'
-import { changedPaintTileTargets } from '../paint-tiles/compose'
 import type { Object3D } from 'three'
 import { updateSurfaceMaterialTerrain } from './geometry'
 import { SURFACE_MATERIAL_KIND } from './schema'
+import { groundCoversOf, surfaceTileChangesRedraw } from './tile-refresh'
 
 export type SurfaceSiteChange = {
   id: string
@@ -52,11 +52,14 @@ export function surfaceSiteChanges(
 export default function SurfaceMaterialSystem({ sceneApi }: { sceneApi: SceneApi }) {
   useEffect(() => {
     const unsubscribeScene = sceneApi.subscribeNodes?.((currentNodes, previousNodes, changedIds) => {
-      // A stroke commits only paint tiles; the Surface they paint redraws from them.
-      for (const targetId of changedPaintTileTargets(currentNodes, previousNodes, changedIds)) {
-        if ((currentNodes[targetId as AnyNodeId]?.type as string) === SURFACE_MATERIAL_KIND) {
-          sceneApi.markDirty(targetId as AnyNodeId)
-        }
+      // A stroke commits only paint tiles; the Surface they paint redraws from them, and so does
+      // the surface each Ground cover draws beneath its grass.
+      const redraw = surfaceTileChangesRedraw(currentNodes, previousNodes, changedIds)
+      for (const id of [
+        ...redraw.surfaces,
+        ...groundCoversOf(currentNodes, redraw.rebuildGroundCoverOf),
+      ]) {
+        sceneApi.markDirty(id as AnyNodeId)
       }
       for (const change of surfaceSiteChanges(currentNodes, previousNodes)) {
         const node = currentNodes[change.id as AnyNodeId]
