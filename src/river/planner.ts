@@ -66,15 +66,14 @@ function solveFromSource(
   maxSlopePct: number,
 ): RiverProfileSample[] {
   const samples: RiverProfileSample[] = []
-  for (let index = 0; index < stations.length; index += 1) {
-    const station = stations[index]!
+  for (const station of stations) {
     const groundWaterY = station.groundY - riverSurfaceInset(station.depthM)
-    const previous = samples[index - 1]
+    const previous = samples.at(-1)
     if (!previous) {
       samples.push(profileSample(station, groundWaterY, 0, false))
       continue
     }
-    const runM = Math.max(0, station.distanceM - stations[index - 1]!.distanceM)
+    const runM = Math.max(0, station.distanceM - previous.distanceM)
     const maxDropM = (maxSlopePct / 100) * runM
     const waterY = Math.max(previous.waterY - maxDropM, Math.min(groundWaterY, previous.waterY))
     const slopePct = runM > 1e-9 ? ((previous.waterY - waterY) / runM) * 100 : 0
@@ -125,24 +124,22 @@ export function resolvePointValues(
   overrides: readonly (number | null)[],
   fallback: number,
 ): number[] {
-  const setIndexes: number[] = []
+  const anchors: Array<Readonly<{ index: number; value: number }>> = []
   for (let index = 0; index < pointCount; index += 1) {
-    if (overrides[index] !== null && overrides[index] !== undefined) setIndexes.push(index)
+    const value = overrides[index]
+    if (value !== null && value !== undefined) anchors.push({ index, value })
   }
-  if (setIndexes.length === 0) return new Array(pointCount).fill(fallback)
   return Array.from({ length: pointCount }, (_, index) => {
-    const own = overrides[index]
-    if (own !== null && own !== undefined) return own
-    let before: number | undefined
-    let after: number | undefined
-    for (const setIndex of setIndexes) {
-      if (setIndex < index) before = setIndex
-      if (setIndex > index && after === undefined) after = setIndex
+    let before: Readonly<{ index: number; value: number }> | undefined
+    let after: Readonly<{ index: number; value: number }> | undefined
+    for (const anchor of anchors) {
+      if (anchor.index === index) return anchor.value
+      if (anchor.index < index) before = anchor
+      if (anchor.index > index && after === undefined) after = anchor
     }
-    if (before === undefined) return overrides[after!]!
-    if (after === undefined) return overrides[before]!
-    const amount = (index - before) / (after - before)
-    return overrides[before]! + (overrides[after]! - overrides[before]!) * amount
+    if (!before || !after) return (before ?? after)?.value ?? fallback
+    const amount = (index - before.index) / (after.index - before.index)
+    return lerp(before.value, after.value, amount)
   })
 }
 

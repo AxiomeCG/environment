@@ -1,6 +1,13 @@
 'use client'
 
-import { createSceneApi, terrainFieldOf, type AnyNodeId, useScene } from '@pascal-app/core'
+import {
+  createSceneApi,
+  terrainFieldOf,
+  type AnyNodeId,
+  type SceneApi,
+  type SiteNode,
+  useScene,
+} from '@pascal-app/core'
 import { useEditor } from '@pascal-app/editor'
 import { useViewer } from '@pascal-app/viewer'
 import { ArrowLeftRight, Check, MousePointer2, Plus, RotateCcw, Trash2, X } from 'lucide-react'
@@ -10,13 +17,21 @@ import { activateRiverTool } from '../pascal-tool-actions'
 import type { PondShoreline, WaterQuality } from '../pond/schema'
 import { deriveLandscapeRegion } from '../surroundings/landscape-region'
 import { useEnvironmentStore } from '../store'
-import { deleteRiver, riverNodeOf, resolveActiveRiverSite, updateRiver } from './actions'
+import {
+  deleteRiver,
+  riverNodeOf,
+  resolveActiveRiverSite,
+  updateRiver,
+  type RiverParameters,
+} from './actions'
 import { resolvePointValues } from './planner'
 import type {
   RiverEndEnd,
   RiverFlowDirection,
   RiverFlowMode,
+  RiverNode,
   RiverOutlet,
+  RiverSection,
   RiverSectionShape,
   RiverSource,
   RiverStartEnd,
@@ -153,42 +168,12 @@ export function RiverControls() {
       : editingRiverId
         ? 'Editing points'
         : '2-point minimum'
-  let pathInstruction: string
-  let pathStatus: string
-  if (draft) {
-    if (pointCount === 0) {
-      pathInstruction = 'Click terrain to place the first point. This sets where the river begins.'
-      pathStatus = 'Waiting for the first point.'
-    } else if (pointCount === 1) {
-      pathInstruction =
-        'First point set. Click farther along the terrain to create the first channel segment.'
-      pathStatus = '1 point registered. Place one more to finish.'
-    } else if (pointCount === 2) {
-      pathInstruction =
-        'Two points set—the minimum. Finish a simple channel now, or keep clicking to shape bends.'
-      pathStatus = '2 points registered. The river is ready to finish.'
-    } else {
-      pathInstruction =
-        'Keep clicking to extend the channel, or finish when its course has the shape you want.'
-      pathStatus = `${pointCount} points registered. The river is ready to finish.`
-    }
-  } else if (editingRiverId) {
-    pathInstruction =
-      'Drag any visible control point to reshape the selected river. Release to apply each change.'
-    pathStatus = 'Path editing is active.'
-  } else if (!canStart) {
-    pathInstruction =
-      'River drawing needs an editable Site. Add or select a Site before starting a path.'
-    pathStatus = 'River drawing is unavailable because no Site is active.'
-  } else if (selectedRiver) {
-    pathInstruction =
-      'Choose Edit path, then drag its visible control points to reshape the channel.'
-    pathStatus = 'River selected and ready to edit.'
-  } else {
-    pathInstruction =
-      'Choose Draw new river, then click along the terrain. Each point bends the channel through it.'
-    pathStatus = 'Ready to draw a river.'
-  }
+  const { instruction: pathInstruction, status: pathStatus } = riverPathGuidance({
+    draftPointCount: draft ? pointCount : null,
+    editing: Boolean(editingRiverId),
+    canStart,
+    riverSelected: Boolean(selectedRiver),
+  })
 
   const startNewRiver = () => {
     cancelRiverInteraction()
@@ -305,60 +290,7 @@ export function RiverControls() {
     }
   }
 
-  const [pointIndex, setPointIndex] = useState(0)
   const factsRiver = selectedRiver ?? (draft ? draftPreviewNode() : null)
-  const facts = useMemo(() => {
-    if (!factsRiver || !activeSite || factsRiver.parentId !== activeSite.id) return null
-    const terrain = riverTerrainBaseline(activeSite) ?? terrainFieldOf(activeSite)
-    if (!terrain) return null
-    return planRiver(terrain, factsRiver, activeSite.polygon.points)?.facts ?? null
-  }, [activeSite, factsRiver])
-  const safePointIndex = selectedRiver
-    ? Math.min(pointIndex, selectedRiver.points.length - 1)
-    : 0
-  const pointWidths = selectedRiver
-    ? resolvePointValues(selectedRiver.points.length, selectedRiver.pointWidths, selectedRiver.width)
-    : []
-  const pointDepths = selectedRiver
-    ? resolvePointValues(selectedRiver.points.length, selectedRiver.pointDepths, selectedRiver.depth)
-    : []
-  const changePointSize = (kind: 'width' | 'depth', value: number | null) => {
-    if (!selectedRiver) return
-    const withValue = (current: readonly (number | null)[]) =>
-      Array.from({ length: selectedRiver.points.length }, (_, index) =>
-        index === safePointIndex ? value : (current[index] ?? null),
-      )
-    const patch =
-      kind === 'width'
-        ? { pointWidths: withValue(selectedRiver.pointWidths) }
-        : { pointDepths: withValue(selectedRiver.pointDepths) }
-    const result = updateRiver(sceneApi, selectedRiver.id, patch)
-    if (result.river) useRiverStore.getState().adoptRiverSettings(result.river)
-    useRiverStore
-      .getState()
-      .setFeedback(
-        result.ok
-          ? `Point ${safePointIndex + 1} ${kind} ${value === null ? 'now follows its neighbours' : 'updated'}.`
-          : result.message,
-      )
-  }
-  const resetPointSize = () => {
-    if (!selectedRiver) return
-    const cleared = (current: readonly (number | null)[]) =>
-      Array.from({ length: selectedRiver.points.length }, (_, index) =>
-        index === safePointIndex ? null : (current[index] ?? null),
-      )
-    const result = updateRiver(sceneApi, selectedRiver.id, {
-      pointWidths: cleared(selectedRiver.pointWidths),
-      pointDepths: cleared(selectedRiver.pointDepths),
-    })
-    if (result.river) useRiverStore.getState().adoptRiverSettings(result.river)
-    useRiverStore
-      .getState()
-      .setFeedback(
-        result.ok ? `Point ${safePointIndex + 1} now follows its neighbours.` : result.message,
-      )
-  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -552,52 +484,7 @@ export function RiverControls() {
         </label>
       </section>
 
-      {selectedRiver ? (
-        <section className="flex flex-col gap-3">
-          <h3 className="text-xs font-semibold">Selected point</h3>
-          <label className="flex min-h-10 items-center justify-between gap-3 text-xs">
-            <span>Point</span>
-            <select
-              className="h-9 rounded-md border border-sidebar-border bg-transparent px-3 text-sidebar-foreground text-xs focus-visible:outline-2 focus-visible:outline-ring"
-              onChange={(event) => setPointIndex(Number(event.target.value))}
-              value={safePointIndex}
-            >
-              {selectedRiver.points.map((_, index) => (
-                <option key={index} value={index}>
-                  {`Point ${index + 1}`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <ParameterRange
-            commitOnRelease
-            label="Width at point"
-            max={24}
-            min={1}
-            onChange={(width) => changePointSize('width', width)}
-            precision={1}
-            step={0.25}
-            unit="m"
-            value={pointWidths[safePointIndex] ?? values.width}
-          />
-          <ParameterRange
-            commitOnRelease
-            label="Depth at point"
-            max={8}
-            min={0.1}
-            onChange={(depth) => changePointSize('depth', depth)}
-            precision={1}
-            step={0.1}
-            unit="m"
-            value={pointDepths[safePointIndex] ?? values.depth}
-          />
-          <RiverButton icon={RotateCcw} label="Point follows neighbours" onClick={resetPointSize} />
-          <p className="text-[11px] leading-relaxed text-sidebar-foreground/60">
-            Width and depth interpolate between the points you set; unset points follow their
-            neighbours.
-          </p>
-        </section>
-      ) : null}
+      {selectedRiver ? <RiverPointSizeControls river={selectedRiver} sceneApi={sceneApi} /> : null}
 
       <section className="flex flex-col gap-3">
         <h3 className="text-xs font-semibold">Water profile</h3>
@@ -627,106 +514,13 @@ export function RiverControls() {
           Downhill water never rises: it cuts through high ground and crosses dips on an
           embankment. As drawn follows the terrain exactly as placed.
         </p>
-        {facts ? (
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md bg-sidebar-accent/40 px-3 py-2 text-[11px] leading-relaxed text-sidebar-foreground/80 tabular-nums">
-            <div>Length</div>
-            <div className="text-right">{`${facts.lengthM.toFixed(1)} m`}</div>
-            <div>Drop</div>
-            <div className="text-right">{`${facts.dropM.toFixed(2)} m`}</div>
-            <div>Mean slope</div>
-            <div className="text-right">{`${facts.meanSlopePct.toFixed(1)} %`}</div>
-            <div>Cut ≈</div>
-            <div className="text-right">{`${facts.cutVolumeM3.toFixed(0)} m³`}</div>
-            <div>Fill ≈</div>
-            <div className="text-right">{`${facts.fillVolumeM3.toFixed(0)} m³`}</div>
-            <div>Embanked</div>
-            <div className="text-right">
-              {facts.embankedLengthM > 0
-                ? `${facts.embankedLengthM.toFixed(1)} m (≤ ${facts.maxEmbankmentM.toFixed(2)} m)`
-                : '—'}
-            </div>
-            <div>Rapids</div>
-            <div className="text-right">
-              {facts.rapidLengthM > 0 ? `${facts.rapidLengthM.toFixed(1)} m` : '—'}
-            </div>
-            {facts.depthShortfallM > 0.005 ? (
-              <>
-                <div>Depth limited</div>
-                <div className="text-right">
-                  {`${facts.depthShortfallM.toFixed(2)} m short (bank slope)`}
-                </div>
-              </>
-            ) : null}
-          </dl>
-        ) : null}
+        <RiverFactsReadout river={factsRiver} site={activeSite} />
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h3 className="text-xs font-semibold">Cross-section</h3>
-        <label className="flex min-h-10 items-center justify-between gap-3 text-xs">
-          <span>Shape</span>
-          <select
-            className="h-9 rounded-md border border-sidebar-border bg-transparent px-3 text-sidebar-foreground text-xs focus-visible:outline-2 focus-visible:outline-ring"
-            onChange={(event) =>
-              changeSettings({
-                section: { ...values.section, shape: event.target.value as RiverSectionShape },
-              })
-            }
-            value={values.section.shape}
-          >
-            <option value="curved">Curved bed</option>
-            <option value="trapezoid">Trapezoid</option>
-          </select>
-        </label>
-        <ParameterRange
-          commitOnRelease
-          label="Bank slope (run : 1)"
-          max={6}
-          min={0.5}
-          onChange={(bankSlope) =>
-            changeSettings({ section: { ...values.section, bankSlope } })
-          }
-          precision={1}
-          step={0.1}
-          unit=":1"
-          value={values.section.bankSlope}
-        />
-        <ParameterRange
-          commitOnRelease
-          label="Bend asymmetry"
-          max={1}
-          min={0}
-          onChange={(bendAsymmetry) =>
-            changeSettings({ section: { ...values.section, bendAsymmetry } })
-          }
-          precision={2}
-          step={0.05}
-          unit=""
-          value={values.section.bendAsymmetry}
-        />
-        <ParameterRange
-          commitOnRelease
-          label="Berm"
-          max={5}
-          min={0}
-          onChange={(bermM) => changeSettings({ section: { ...values.section, bermM } })}
-          precision={1}
-          step={0.1}
-          unit="m"
-          value={values.section.bermM}
-        />
-        <ParameterRange
-          commitOnRelease
-          label="Bank blend"
-          max={10}
-          min={0}
-          onChange={(blendM) => changeSettings({ section: { ...values.section, blendM } })}
-          precision={1}
-          step={0.1}
-          unit="m"
-          value={values.section.blendM}
-        />
-      </section>
+      <RiverCrossSectionControls
+        section={values.section}
+        onChange={(section) => changeSettings({ section })}
+      />
 
       <section className="flex flex-col gap-3">
         <h3 className="text-xs font-semibold">Flow</h3>
@@ -803,6 +597,278 @@ export function RiverControls() {
         </section>
       ) : null}
     </div>
+  )
+}
+
+type RiverPathGuidance = Readonly<{ instruction: string; status: string }>
+
+/** What the Path section asks for next, and what has been registered so far. */
+function riverPathGuidance({
+  draftPointCount,
+  editing,
+  canStart,
+  riverSelected,
+}: Readonly<{
+  draftPointCount: number | null
+  editing: boolean
+  canStart: boolean
+  riverSelected: boolean
+}>): RiverPathGuidance {
+  if (draftPointCount === 0) {
+    return {
+      instruction: 'Click terrain to place the first point. This sets where the river begins.',
+      status: 'Waiting for the first point.',
+    }
+  }
+  if (draftPointCount === 1) {
+    return {
+      instruction:
+        'First point set. Click farther along the terrain to create the first channel segment.',
+      status: '1 point registered. Place one more to finish.',
+    }
+  }
+  if (draftPointCount === 2) {
+    return {
+      instruction:
+        'Two points set—the minimum. Finish a simple channel now, or keep clicking to shape bends.',
+      status: '2 points registered. The river is ready to finish.',
+    }
+  }
+  if (draftPointCount !== null) {
+    return {
+      instruction:
+        'Keep clicking to extend the channel, or finish when its course has the shape you want.',
+      status: `${draftPointCount} points registered. The river is ready to finish.`,
+    }
+  }
+  if (editing) {
+    return {
+      instruction:
+        'Drag any visible control point to reshape the selected river. Release to apply each change.',
+      status: 'Path editing is active.',
+    }
+  }
+  if (!canStart) {
+    return {
+      instruction:
+        'River drawing needs an editable Site. Add or select a Site before starting a path.',
+      status: 'River drawing is unavailable because no Site is active.',
+    }
+  }
+  if (riverSelected) {
+    return {
+      instruction: 'Choose Edit path, then drag its visible control points to reshape the channel.',
+      status: 'River selected and ready to edit.',
+    }
+  }
+  return {
+    instruction:
+      'Choose Draw new river, then click along the terrain. Each point bends the channel through it.',
+    status: 'Ready to draw a river.',
+  }
+}
+
+/** Width and depth at one authored point; points left unset follow their neighbours. */
+function RiverPointSizeControls({ river, sceneApi }: { river: RiverNode; sceneApi: SceneApi }) {
+  const [pointIndex, setPointIndex] = useState(0)
+  const point = Math.min(pointIndex, river.points.length - 1)
+  const widths = resolvePointValues(river.points.length, river.pointWidths, river.width)
+  const depths = resolvePointValues(river.points.length, river.pointDepths, river.depth)
+  const atPoint = (current: readonly (number | null)[], value: number | null) =>
+    Array.from({ length: river.points.length }, (_, index) =>
+      index === point ? value : (current[index] ?? null),
+    )
+  const applyPointSizes = (
+    patch: Pick<Partial<RiverParameters>, 'pointWidths' | 'pointDepths'>,
+    success: string,
+  ) => {
+    const result = updateRiver(sceneApi, river.id, patch)
+    if (result.river) useRiverStore.getState().adoptRiverSettings(result.river)
+    useRiverStore.getState().setFeedback(result.ok ? success : result.message)
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-xs font-semibold">Selected point</h3>
+      <label className="flex min-h-10 items-center justify-between gap-3 text-xs">
+        <span>Point</span>
+        <select
+          className="h-9 rounded-md border border-sidebar-border bg-transparent px-3 text-sidebar-foreground text-xs focus-visible:outline-2 focus-visible:outline-ring"
+          onChange={(event) => setPointIndex(Number(event.target.value))}
+          value={point}
+        >
+          {river.points.map((_, index) => (
+            <option key={index} value={index}>
+              {`Point ${index + 1}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <ParameterRange
+        commitOnRelease
+        label="Width at point"
+        max={24}
+        min={1}
+        onChange={(width) =>
+          applyPointSizes(
+            { pointWidths: atPoint(river.pointWidths, width) },
+            `Point ${point + 1} width updated.`,
+          )
+        }
+        precision={1}
+        step={0.25}
+        unit="m"
+        value={widths[point] ?? river.width}
+      />
+      <ParameterRange
+        commitOnRelease
+        label="Depth at point"
+        max={8}
+        min={0.1}
+        onChange={(depth) =>
+          applyPointSizes(
+            { pointDepths: atPoint(river.pointDepths, depth) },
+            `Point ${point + 1} depth updated.`,
+          )
+        }
+        precision={1}
+        step={0.1}
+        unit="m"
+        value={depths[point] ?? river.depth}
+      />
+      <RiverButton
+        icon={RotateCcw}
+        label="Point follows neighbours"
+        onClick={() =>
+          applyPointSizes(
+            {
+              pointWidths: atPoint(river.pointWidths, null),
+              pointDepths: atPoint(river.pointDepths, null),
+            },
+            `Point ${point + 1} now follows its neighbours.`,
+          )
+        }
+      />
+      <p className="text-[11px] leading-relaxed text-sidebar-foreground/60">
+        Width and depth interpolate between the points you set; unset points follow their
+        neighbours.
+      </p>
+    </section>
+  )
+}
+
+/** The planned facts of the selected or drafted river: what it is, and what it costs. */
+function RiverFactsReadout({ river, site }: { river: RiverNode | null; site: SiteNode | null }) {
+  const facts = useMemo(() => {
+    if (!river || !site || river.parentId !== site.id) return null
+    const terrain = riverTerrainBaseline(site) ?? terrainFieldOf(site)
+    if (!terrain) return null
+    return planRiver(terrain, river, site.polygon.points)?.facts ?? null
+  }, [river, site])
+  if (!facts) return null
+  return (
+    <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md bg-sidebar-accent/40 px-3 py-2 text-[11px] leading-relaxed text-sidebar-foreground/80 tabular-nums">
+      <div>Length</div>
+      <div className="text-right">{`${facts.lengthM.toFixed(1)} m`}</div>
+      <div>Drop</div>
+      <div className="text-right">{`${facts.dropM.toFixed(2)} m`}</div>
+      <div>Mean slope</div>
+      <div className="text-right">{`${facts.meanSlopePct.toFixed(1)} %`}</div>
+      <div>Cut ≈</div>
+      <div className="text-right">{`${facts.cutVolumeM3.toFixed(0)} m³`}</div>
+      <div>Fill ≈</div>
+      <div className="text-right">{`${facts.fillVolumeM3.toFixed(0)} m³`}</div>
+      <div>Embanked</div>
+      <div className="text-right">
+        {facts.embankedLengthM > 0
+          ? `${facts.embankedLengthM.toFixed(1)} m (≤ ${facts.maxEmbankmentM.toFixed(2)} m)`
+          : '—'}
+      </div>
+      <div>Rapids</div>
+      <div className="text-right">
+        {facts.rapidLengthM > 0 ? `${facts.rapidLengthM.toFixed(1)} m` : '—'}
+      </div>
+      {facts.depthShortfallM > 0.005 ? (
+        <>
+          <div>Depth limited</div>
+          <div className="text-right">
+            {`${facts.depthShortfallM.toFixed(2)} m short (bank slope)`}
+          </div>
+        </>
+      ) : null}
+    </dl>
+  )
+}
+
+/** Shape of the carved channel, shared by every station along the river. */
+function RiverCrossSectionControls({
+  section,
+  onChange,
+}: {
+  section: RiverSection
+  onChange: (section: RiverSection) => void
+}) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-xs font-semibold">Cross-section</h3>
+      <label className="flex min-h-10 items-center justify-between gap-3 text-xs">
+        <span>Shape</span>
+        <select
+          className="h-9 rounded-md border border-sidebar-border bg-transparent px-3 text-sidebar-foreground text-xs focus-visible:outline-2 focus-visible:outline-ring"
+          onChange={(event) =>
+            onChange({ ...section, shape: event.target.value as RiverSectionShape })
+          }
+          value={section.shape}
+        >
+          <option value="curved">Curved bed</option>
+          <option value="trapezoid">Trapezoid</option>
+        </select>
+      </label>
+      <ParameterRange
+        commitOnRelease
+        label="Bank slope (run : 1)"
+        max={6}
+        min={0.5}
+        onChange={(bankSlope) => onChange({ ...section, bankSlope })}
+        precision={1}
+        step={0.1}
+        unit=":1"
+        value={section.bankSlope}
+      />
+      <ParameterRange
+        commitOnRelease
+        label="Bend asymmetry"
+        max={1}
+        min={0}
+        onChange={(bendAsymmetry) => onChange({ ...section, bendAsymmetry })}
+        precision={2}
+        step={0.05}
+        unit=""
+        value={section.bendAsymmetry}
+      />
+      <ParameterRange
+        commitOnRelease
+        label="Berm"
+        max={5}
+        min={0}
+        onChange={(bermM) => onChange({ ...section, bermM })}
+        precision={1}
+        step={0.1}
+        unit="m"
+        value={section.bermM}
+      />
+      <ParameterRange
+        commitOnRelease
+        label="Bank blend"
+        max={10}
+        min={0}
+        onChange={(blendM) => onChange({ ...section, blendM })}
+        precision={1}
+        step={0.1}
+        unit="m"
+        value={section.blendM}
+      />
+    </section>
   )
 }
 
