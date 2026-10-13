@@ -6,12 +6,7 @@ import {
   type SiteNode,
 } from '@pascal-app/core'
 import type { PondShoreline, WaterQuality } from '../pond/schema'
-import {
-  planRiver,
-  rebuildRiverTerrain,
-  riverPlanSelfOverlapGapM,
-  riverSourceTerrain,
-} from './terrain'
+import { planRiver, rebuildRiverTerrain, riverSourceTerrain } from './terrain'
 import {
   RIVER_KIND,
   RiverNode as RiverNodeSchema,
@@ -144,17 +139,9 @@ function validatePoints(points: readonly RiverPoint[]): string | null {
   return null
 }
 
-/**
- * Where a downhill river meets itself, both reaches must share one water
- * level; a larger difference than this would show as a step in the water.
- */
-const SELF_OVERLAP_LEVEL_TOLERANCE_M = 0.05
-
-function selfOverlapError(site: SiteNode, river: RiverNode): string | null {
-  if (river.flow !== 'downhill') return null
-  const plan = planRiver(riverSourceTerrain(site), river, site.polygon.points)
-  if (!plan || riverPlanSelfOverlapGapM(plan) <= SELF_OVERLAP_LEVEL_TOLERANCE_M) return null
-  return 'A downhill river cannot cross or touch itself at two water levels. Move its reaches apart, or use the As drawn profile.'
+/** The reason this river cannot be built on its Site, as planned for the carve. */
+function planRefusal(site: SiteNode, river: RiverNode): string | null {
+  return planRiver(riverSourceTerrain(site), river, site.polygon.points)?.refusal?.message ?? null
 }
 
 function siteForMutation(nodes: Readonly<Record<AnyNodeId, AnyNode>>, siteId: string): SiteNode | null {
@@ -195,8 +182,8 @@ export function createRiver(
   if (!parsed.success)
     return { ok: false, message: 'River settings are outside their allowed range.' }
   const river = parsed.data
-  const overlapError = selfOverlapError(site, river)
-  if (overlapError) return { ok: false, message: overlapError }
+  const refusal = planRefusal(site, river)
+  if (refusal) return { ok: false, message: refusal }
   const rivers = [...riversForSite(nodes, site.id), river]
   applyRiverChanges(scene, {
     create: [
@@ -254,8 +241,8 @@ export function updateRiver(
     applyRiverChanges(scene, { update: [riverUpdate] })
     return { ok: true, message: 'River updated.', river }
   }
-  const overlapError = selfOverlapError(site, river)
-  if (overlapError) return { ok: false, message: overlapError, river: current }
+  const refusal = planRefusal(site, river)
+  if (refusal) return { ok: false, message: refusal, river: current }
   const rivers = riversForSite(nodes, site.id).map((candidate) =>
     candidate.id === river.id ? river : candidate,
   )

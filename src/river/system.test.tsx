@@ -22,7 +22,15 @@ const { act, create } = await import('@react-three/test-renderer')
 
 const SITE_ID = 'site_river_system'
 
-function flatSite() {
+/** The 20 m test lot; `heightAt` sets its ground (flat by default). */
+function siteWith(heightAt: (x: number) => number = () => 0) {
+  const terrain = createTerrainField({ origin: [-10, -10], spacing: 0.5, cols: 41, rows: 41, step: 0.01 })
+  for (let row = 0; row < terrain.rows; row += 1) {
+    for (let col = 0; col < terrain.cols; col += 1) {
+      const x = terrain.origin[0] + col * terrain.spacing
+      terrain.heights[row * terrain.cols + col] = Math.round(heightAt(x) / terrain.step)
+    }
+  }
   return SiteNode.parse({
     id: SITE_ID,
     children: [],
@@ -35,9 +43,7 @@ function flatSite() {
         [-10, 10],
       ],
     },
-    terrain: encodeTerrainField(
-      createTerrainField({ origin: [-10, -10], spacing: 0.5, cols: 41, rows: 41, step: 0.01 }),
-    ),
+    terrain: encodeTerrainField(terrain),
   })
 }
 
@@ -109,7 +115,7 @@ describe('RiverSystem reconciliation', () => {
   beforeEach(() => {
     previousScene = useScene.getState()
     previousHistory = useScene.temporal.getState()
-    const site = flatSite()
+    const site = siteWith()
     useScene.getState().setScene({ [site.id]: site } as Record<AnyNodeId, AnyNode>, [
       site.id as AnyNodeId,
     ])
@@ -152,6 +158,71 @@ describe('RiverSystem reconciliation', () => {
       expect(sculptedThenReconciled.terrain).toEqual(
         rebuildRiverTerrain(sculptedThenReconciled, [river]).terrainData,
       )
+    } finally {
+      await renderer.unmount()
+    }
+  })
+
+  // Review round 2 input: a path crossing itself at the origin, on ground
+  // falling 10 % toward +x, so its two reaches meet at different levels.
+  const fallingGround = (x: number) => 2 - 0.1 * x
+  const crossingRiver = {
+    ...DOWNHILL_RIVER,
+    points: [
+      [-8, -8],
+      [8, 8],
+      [-8, 8],
+      [8, -8],
+    ] as const,
+  }
+
+  function setSceneNodes(nodes: readonly AnyNode[]): void {
+    useScene.getState().setScene(
+      Object.fromEntries(nodes.map((node) => [node.id, node])) as Record<AnyNodeId, AnyNode>,
+      [SITE_ID as AnyNodeId],
+    )
+  }
+
+  test('a generic edit making a river meet itself at two levels removes its carve', async () => {
+    const ground = siteWith(fallingGround)
+    setSceneNodes([ground])
+    const { sceneApi, writes } = recordingSceneApi()
+    const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+    try {
+      await act(async () => {
+        createRiver(sceneApi, SITE_ID, { ...crossingRiver, flow: 'as_drawn' })
+      })
+      const river = RiverNode.parse(
+        Object.values(useScene.getState().nodes).find((node) => node.parentId === SITE_ID),
+      )
+      expect(currentSite().terrain).not.toEqual(ground.terrain)
+
+      await act(async () => {
+        // A parametric edit goes straight to the scene, past the river actions.
+        createSceneApi(useScene).applyChanges?.({
+          update: [{ id: river.id as AnyNodeId, data: { flow: 'downhill' } as Partial<AnyNode> }],
+        })
+      })
+
+      expect(writes).toHaveLength(2)
+      expect(currentSite().terrain).toEqual(ground.terrain)
+    } finally {
+      await renderer.unmount()
+    }
+  })
+
+  test('loading a saved river that meets itself at two levels removes its carve', async () => {
+    const ground = siteWith(fallingGround)
+    const asDrawn = RiverNode.parse({ id: 'river_saved_crossing', parentId: SITE_ID, ...crossingRiver, flow: 'as_drawn' })
+    const carved = rebuildRiverTerrain(ground, [asDrawn])
+    const savedSite = SiteNode.parse({ ...ground, terrain: carved.terrainData, metadata: carved.metadata })
+    setSceneNodes([savedSite, { ...asDrawn, flow: 'downhill' } as unknown as AnyNode])
+    const { sceneApi, writes } = recordingSceneApi()
+
+    const renderer = await create(<RiverSystem sceneApi={sceneApi} />)
+    try {
+      expect(writes).toHaveLength(1)
+      expect(currentSite().terrain).toEqual(ground.terrain)
     } finally {
       await renderer.unmount()
     }

@@ -635,3 +635,61 @@ describe('applied-carve recognition', () => {
     expect(riverTerrainIsApplied(sculptWestEdge(appliedSite), [node])).toBe(false)
   })
 })
+
+describe('downhill rivers that meet themselves', () => {
+  // Review round 2 input: a 512 m lot sampled every 8 m, ground falling 2 %
+  // toward +x, and a 1 m wide river crossing itself at the origin. Its samples
+  // are about 6 m apart, so no two sample centres come within its width.
+  const coarseBoundary: Array<[number, number]> = [
+    [-256, -256],
+    [256, -256],
+    [256, 256],
+    [-256, 256],
+  ]
+  function coarseLot(): TerrainField {
+    const field = createTerrainField({ origin: [-256, -256], spacing: 8, cols: 65, rows: 65, step: 0.01 })
+    for (let row = 0; row < field.rows; row += 1) {
+      for (let col = 0; col < field.cols; col += 1) {
+        const x = field.origin[0] + col * field.spacing
+        field.heights[row * field.cols + col] = Math.round((10 - 0.02 * x) / field.step)
+      }
+    }
+    return field
+  }
+  const narrowCrossing = river('river_coarse_crossing', {
+    flow: 'downhill',
+    width: 1,
+    points: [
+      [-200, -200],
+      [200, 200],
+      [-200, 200],
+      [200, -200],
+    ],
+  })
+
+  test('a crossing between coarse samples is found from the channel segments', () => {
+    const plan = planRiver(coarseLot(), narrowCrossing, coarseBoundary)
+    expect(plan?.refusal?.code).toBe('self_crossing')
+    expect(plan?.refusal?.levelGapM ?? 0).toBeGreaterThan(3)
+  })
+
+  test('a river refused for meeting itself is not carved', () => {
+    const terrain = flatTerrain()
+    const crossing = river('river_refused', {
+      flow: 'downhill',
+      points: [
+        [-8, -8],
+        [8, 8],
+        [-8, 8],
+        [8, -8],
+      ],
+    })
+    const sloping = terrainFromFunction((x) => 2 - 0.1 * x)
+    const plan = planRiver(sloping, crossing, siteWith(sloping).polygon.points)
+    expect(plan?.refusal?.code).toBe('self_crossing')
+    const rebuilt = rebuildRiverTerrain(siteWith(sloping), [crossing])
+    expect(Array.from(rebuilt.terrain.heights)).toEqual(Array.from(sloping.heights))
+    // On level ground both reaches share one level, so the same path is built.
+    expect(planRiver(terrain, crossing, siteWith(terrain).polygon.points)?.refusal).toBeNull()
+  })
+})

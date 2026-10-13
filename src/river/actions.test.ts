@@ -281,3 +281,45 @@ describe('downhill rivers that meet themselves', () => {
     expect(commits).toHaveLength(1)
   })
 })
+
+test('refuses a narrow downhill crossing that falls between coarse samples', () => {
+  // Review round 2 input: a 512 m lot sampled every 8 m, ground falling 2 %
+  // toward +x, and a 1 m wide river crossing itself at the origin between
+  // samples about 6 m apart.
+  const terrain = createTerrainField({ origin: [-256, -256], spacing: 8, cols: 65, rows: 65, step: 0.01 })
+  for (let row = 0; row < terrain.rows; row += 1) {
+    for (let col = 0; col < terrain.cols; col += 1) {
+      const x = terrain.origin[0] + col * terrain.spacing
+      terrain.heights[row * terrain.cols + col] = Math.round((10 - 0.02 * x) / terrain.step)
+    }
+  }
+  const coarseLot = SiteNode.parse({
+    ...flatSite(),
+    polygon: {
+      type: 'polygon',
+      points: [
+        [-256, -256],
+        [256, -256],
+        [256, 256],
+        [-256, 256],
+      ],
+    },
+    terrain: encodeTerrainField(terrain),
+  })
+  const { commits, scene } = mutableScene(coarseLot)
+
+  const result = createRiver(scene, SITE_ID, {
+    ...DEFAULTS,
+    flow: 'downhill',
+    width: 1,
+    points: [
+      [-200, -200],
+      [200, 200],
+      [-200, 200],
+      [200, -200],
+    ],
+  })
+
+  expect(result.ok).toBe(false)
+  expect(commits).toEqual([])
+})

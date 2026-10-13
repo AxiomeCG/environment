@@ -36,7 +36,7 @@ import type {
   RiverSource,
   RiverStartEnd,
 } from './schema'
-import { planRiver, riverTerrainBaseline } from './terrain'
+import { planRiver, riverTerrainBaseline, type RiverFacts } from './terrain'
 import {
   cancelRiverInteraction,
   draftPreviewNode,
@@ -514,7 +514,7 @@ export function RiverControls() {
           Downhill water never rises: it cuts through high ground and crosses dips on an
           embankment. As drawn follows the terrain exactly as placed.
         </p>
-        <RiverFactsReadout river={factsRiver} site={activeSite} />
+        <RiverPlanReadout river={factsRiver} site={activeSite} />
       </section>
 
       <RiverCrossSectionControls
@@ -757,15 +757,29 @@ function RiverPointSizeControls({ river, sceneApi }: { river: RiverNode; sceneAp
   )
 }
 
-/** The planned facts of the selected or drafted river: what it is, and what it costs. */
-function RiverFactsReadout({ river, site }: { river: RiverNode | null; site: SiteNode | null }) {
-  const facts = useMemo(() => {
+/** What the selected or drafted river's plan says: why it is not built, or its facts. */
+export function RiverPlanReadout({ river, site }: { river: RiverNode | null; site: SiteNode | null }) {
+  const plan = useMemo(() => {
     if (!river || !site || river.parentId !== site.id) return null
     const terrain = riverTerrainBaseline(site) ?? terrainFieldOf(site)
-    if (!terrain) return null
-    return planRiver(terrain, river, site.polygon.points)?.facts ?? null
+    return terrain ? planRiver(terrain, river, site.polygon.points) : null
   }, [river, site])
-  if (!facts) return null
+  if (!plan) return null
+  if (plan.refusal) {
+    return (
+      <p
+        className="rounded-md bg-destructive/10 px-3 py-2 text-[11px] leading-relaxed text-destructive"
+        role="alert"
+      >
+        {`Not built: ${plan.refusal.message}`}
+      </p>
+    )
+  }
+  return <RiverFactsList facts={plan.facts} />
+}
+
+/** What a buildable river is, and what it costs in earthworks. */
+function RiverFactsList({ facts }: { facts: RiverFacts }) {
   return (
     <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md bg-sidebar-accent/40 px-3 py-2 text-[11px] leading-relaxed text-sidebar-foreground/80 tabular-nums">
       <div>Length</div>

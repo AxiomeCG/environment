@@ -28,11 +28,15 @@ export function buildRiverFloorplan(
     active && context.viewState?.palette
       ? context.viewState.palette.selectedStroke
       : appearance.deepColor
+  // A refused river is not built: its outline stays selectable, drawn empty and dashed.
   const children: FloorplanGeometry[] = [
     {
       kind: 'polygon',
       points: outline,
-      fill: appearance.floorplanColor,
+      fill: plan.refusal ? 'none' : appearance.floorplanColor,
+      ...(plan.refusal
+        ? { stroke, strokeDasharray: '4 3', vectorEffect: 'non-scaling-stroke' as const }
+        : {}),
       opacity: active ? 0.66 : 0.5,
       metadata: {
         riverWidth: node.width,

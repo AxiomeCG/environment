@@ -93,7 +93,7 @@ export function buildRiverSurface(
   if (!terrain) return null
   const baseline = baselineTerrain ?? riverTerrainBaseline(site) ?? terrain
   const plan = planRiver(baseline, node, site.polygon.points)
-  if (!plan) return null
+  if (!plan || plan.refusal) return null
   const sampledPath = plan.path
   const boundaryTriangles = triangulateSiteBoundary(site.polygon.points)
   if (boundaryTriangles.length === 0) return null

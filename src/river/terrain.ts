@@ -25,6 +25,7 @@ import {
   type RiverProfileStation,
 } from './planner'
 import type { RiverNode } from './schema'
+import { channelSelfOverlapGapM } from './self-overlap'
 
 const RIVER_TERRAIN_METADATA_KEY = 'environmentRiverTerrain'
 const RIVER_TERRAIN_METADATA_VERSION = 1
@@ -539,6 +540,14 @@ export type RiverPlanSample = Readonly<{
   bendShiftM: number
 }>
 
+/** Why a planned river is not built. */
+export type RiverPlanRefusal = Readonly<{
+  code: 'self_crossing'
+  /** Water-level difference where the channel meets itself, metres. */
+  levelGapM: number
+  message: string
+}>
+
 export type RiverPlan = Readonly<{
   path: SampledRiverPath
   samples: readonly RiverPlanSample[]
@@ -552,6 +561,8 @@ export type RiverPlan = Readonly<{
   authoredEndWidthM: number
   /** Per-point sizes, so the carve can evaluate width and depth between samples exactly. */
   sizes: RiverAuthoredSizes
+  /** Set when the river cannot be built as planned: it is then neither carved nor watered. */
+  refusal: RiverPlanRefusal | null
 }>
 
 /**
@@ -619,6 +630,7 @@ export function planRiver(
     authoredStartWidthM: startSample?.widthM ?? river.width,
     authoredEndWidthM: endSample?.widthM ?? river.width,
     sizes,
+    refusal: river.flow === 'downhill' ? selfOverlapRefusal(path, samples) : null,
   }
 }
 
@@ -653,33 +665,34 @@ function solveOrderedProfile(
 }
 
 /**
- * Largest water-level difference where a river's channel meets itself: two
- * stations whose channels overlap in plan although the course between them
- * is longer than their separation plus both half-widths (a crossing, a loop
- * closing on itself, or hairpin legs whose banks touch). Bends within one
- * reach never qualify. Zero when the river never meets itself.
+ * Where a downhill river meets itself, both reaches must share one water
+ * level; a larger difference than this would show as a step in the water.
  */
-export function riverPlanSelfOverlapGapM(plan: RiverPlan): number {
-  const { points } = plan.path
-  let gapM = 0
-  for (let first = 0; first < plan.samples.length; first += 1) {
-    for (let second = first + 1; second < plan.samples.length; second += 1) {
-      const earlier = plan.samples[first]
-      const later = plan.samples[second]
-      const earlierPoint = points[first]
-      const laterPoint = points[second]
-      if (!earlier || !later || !earlierPoint || !laterPoint) continue
-      const contactM = (earlier.widthM + later.widthM) * 0.5
-      const apartM = Math.hypot(
-        laterPoint[0] - earlierPoint[0],
-        laterPoint[2] - earlierPoint[2],
-      )
-      const courseM = later.distanceM - earlier.distanceM
-      if (apartM >= contactM || courseM <= apartM + contactM) continue
-      gapM = Math.max(gapM, Math.abs(earlier.waterY - later.waterY))
-    }
+const SELF_OVERLAP_LEVEL_TOLERANCE_M = 0.05
+
+/**
+ * A downhill river whose channel meets itself at two water levels cannot be
+ * one coherent surface. It is still planned, so its facts and refusal can be
+ * shown, but it is not carved and has no water.
+ */
+function selfOverlapRefusal(
+  path: SampledRiverPath,
+  samples: readonly RiverPlanSample[],
+): RiverPlanRefusal | null {
+  const stations = samples.map((sample, index) => ({
+    x: path.points[index]?.[0] ?? 0,
+    z: path.points[index]?.[2] ?? 0,
+    courseM: sample.distanceM,
+    halfWidthM: sample.widthM * 0.5,
+    waterY: sample.waterY,
+  }))
+  const levelGapM = channelSelfOverlapGapM(stations)
+  if (levelGapM <= SELF_OVERLAP_LEVEL_TOLERANCE_M) return null
+  return {
+    code: 'self_crossing',
+    levelGapM,
+    message: `A downhill river cannot cross or touch itself at two water levels (${levelGapM.toFixed(2)} m apart). Move its reaches apart, or use the As drawn profile.`,
   }
-  return gapM
 }
 
 function bendShiftAt(
@@ -942,7 +955,10 @@ function carveRiverTerrain(
 ): TerrainField {
   const plans = rivers
     .map((river) => ({ river, plan: planRiver(baseline, river, boundary) }))
-    .filter((entry): entry is { river: RiverNode; plan: RiverPlan } => entry.plan !== null)
+    .filter(
+      (entry): entry is { river: RiverNode; plan: RiverPlan } =>
+        entry.plan !== null && entry.plan.refusal === null,
+    )
   if (plans.length === 0 || boundary.length < 3) return baseline
 
   let minX = Number.POSITIVE_INFINITY

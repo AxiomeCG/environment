@@ -146,7 +146,7 @@ export function createRiverLandscape(
 
   for (const river of orderedRivers) {
     const plan = planRiver(baseline, river, boundary)
-    if (!plan) continue
+    if (!plan || plan.refusal) continue
     if (river.source === 'mountain') {
       const channel = buildMountainChannel(
         river,
