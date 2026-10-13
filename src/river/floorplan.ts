@@ -1,13 +1,8 @@
-import {
-  terrainFieldOf,
-  type FloorplanGeometry,
-  type FloorplanPoint,
-  type GeometryContext,
-} from '@pascal-app/core'
+import type { FloorplanGeometry, FloorplanPoint, GeometryContext } from '@pascal-app/core'
 import { POND_WATER_APPEARANCE } from '../pond/appearance'
 import type { WaterQuality } from '../pond/schema'
 import type { RiverNode } from './schema'
-import { planRiver, riverTerrainBaseline, type RiverPlan } from './terrain'
+import { planRiver, riverSourceTerrain, type RiverPlan } from './terrain'
 
 export function buildRiverFloorplan(
   node: RiverNode,
@@ -15,9 +10,7 @@ export function buildRiverFloorplan(
 ): FloorplanGeometry | null {
   const parent = context.parent
   if (!parent || parent.type !== 'site') return null
-  const terrain = riverTerrainBaseline(parent) ?? terrainFieldOf(parent)
-  if (!terrain) return null
-  const plan = planRiver(terrain, node, parent.polygon.points)
+  const plan = planRiver(riverSourceTerrain(parent), node, parent.polygon.points)
   if (!plan) return null
   const path = plan.path
   const points = path.points.map((point): FloorplanPoint => [point[0], point[2]])

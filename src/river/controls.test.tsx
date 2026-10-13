@@ -7,6 +7,7 @@ import { RiverNode } from './schema'
 // The panel reaches CommonJS builds that require three; load it only once
 // three's ES module has been evaluated above (see system.test.tsx).
 const { RiverPlanReadout } = await import('./controls-sections')
+const { endRiverLiveTerrain, previewTerrainForRiver } = await import('./tool')
 
 /** The 20 m test lot on ground falling 10 % toward +x. */
 function fallingSite() {
@@ -62,5 +63,38 @@ describe('river plan readout', () => {
 
     expect(markup).toContain('Mean slope')
     expect(markup).not.toContain('Not built')
+  })
+})
+
+describe('river plan readout during a live preview', () => {
+  test('a draft on a Site never carved before reports the plan on its flat ground, before and after the preview carves it', () => {
+    // Review round 3 input: no persisted terrain, a 4 m wide, 1 m deep
+    // downhill draft; the review measured 44 m³ planned against flat ground.
+    const site = SiteNode.parse({
+      id: 'site_river_panel',
+      polygon: {
+        type: 'polygon',
+        points: [
+          [-10, -10],
+          [10, -10],
+          [10, 10],
+          [-10, 10],
+        ],
+      },
+    })
+    const draft = downhillRiver([
+      [-8, 0],
+      [8, 0],
+    ])
+    try {
+      const beforePreview = renderToStaticMarkup(<RiverPlanReadout river={draft} site={site} />)
+      previewTerrainForRiver(site, draft, { [site.id]: site })
+      const duringPreview = renderToStaticMarkup(<RiverPlanReadout river={draft} site={site} />)
+
+      expect(beforePreview).toContain('44 m³')
+      expect(duringPreview).toEqual(beforePreview)
+    } finally {
+      endRiverLiveTerrain(site.id)
+    }
   })
 })

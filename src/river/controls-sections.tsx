@@ -1,6 +1,6 @@
 'use client'
 
-import { terrainFieldOf, type SceneApi, type SiteNode } from '@pascal-app/core'
+import type { SceneApi, SiteNode } from '@pascal-app/core'
 import { ArrowLeftRight, Check, MousePointer2, Plus, RotateCcw, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { ParameterRange } from '../parameter-range'
@@ -26,7 +26,7 @@ import type {
   RiverStartEnd,
 } from './schema'
 import { useRiverStore, type RiverSettings } from './store'
-import { planRiver, riverTerrainBaseline, type RiverFacts } from './terrain'
+import { planRiver, riverSourceTerrain, type RiverFacts } from './terrain'
 
 type SettingsProps = Readonly<{
   values: RiverSettings
@@ -488,8 +488,9 @@ export function RiverProfileSection({
 export function RiverPlanReadout({ river, site }: { river: RiverNode | null; site: SiteNode | null }) {
   const plan = useMemo(() => {
     if (!river || !site || river.parentId !== site.id) return null
-    const terrain = riverTerrainBaseline(site) ?? terrainFieldOf(site)
-    return terrain ? planRiver(terrain, river, site.polygon.points) : null
+    // The river-free ground the carve starts from, never a live preview's
+    // excavation: what is reported is what an apply would build.
+    return planRiver(riverSourceTerrain(site), river, site.polygon.points)
   }, [river, site])
   if (!plan) return null
   if (plan.refusal) {
