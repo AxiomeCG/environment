@@ -47,7 +47,8 @@ import {
   siteBounds,
 } from './ground-cover/paint-field'
 import { updateGrassPaintTexture } from './ground-cover/paint-texture'
-import { getMissingGrassFieldDefaults, GrassFieldNode } from './ground-cover/schema'
+import { createGroundCoverNode } from './ground-cover/create-node'
+import { getMissingGrassFieldDefaults } from './ground-cover/schema'
 import {
   activatePondTool,
   activateGroundCoverTool,
@@ -63,9 +64,14 @@ import {
 import PondControls from './pond/controls'
 import RiverControls from './river/controls'
 import { type GroundCoverBrushTool, useEnvironmentStore } from './store'
-import { createSurfaceMaterialField, encodeSurfaceMaterialField } from './surface-material/field'
+import { createSurfaceMaterialNode } from './surface-material/create-node'
+import {
+  createSurfaceMaterialField,
+  encodeSurfaceMaterialField,
+  resolveSurfaceMaterialField,
+} from './surface-material/field'
 import { SURFACE_MATERIAL_PRESENTATION } from './surface-material/materials'
-import { SurfaceMaterialNode } from './surface-material/schema'
+import type { SurfaceMaterialNode } from './surface-material/schema'
 import { updateSurfacePaintTextures } from './surface-material/texture'
 import {
   SURFACE_MATERIAL_PAINT_COLOR,
@@ -1310,18 +1316,7 @@ function getOrCreateGroundCover(): AnyNode | null {
       (id) => (scene.nodes[id]?.type as string | undefined) === 'site',
     )
     if (!siteId) return null
-    const site = scene.nodes[siteId] as SiteNode
-    const paint = createGrassPaintField(
-      siteBounds(site.polygon.points),
-      CLEARED_GRASS_PAINT_COLOR,
-      0,
-    )
-    const height = createGrassHeightField(siteBounds(site.polygon.points))
-    field = GrassFieldNode.parse({
-      parentId: siteId,
-      paintMap: encodeGrassPaintField(paint),
-      heightMap: encodeGrassPaintField(height),
-    }) as unknown as AnyNode
+    field = createGroundCoverNode(scene.nodes[siteId] as SiteNode) as unknown as AnyNode
     scene.createNode(field, siteId as AnyNodeId)
   }
 
@@ -1345,12 +1340,11 @@ function getOrCreateSurfaceMaterial(): AnyNode | null {
   )
   if (!siteId) return null
   const site = scene.nodes[siteId] as SiteNode
-  const field = createSurfaceMaterialField(siteBounds(site.polygon.points))
-  surface = SurfaceMaterialNode.parse({
-    parentId: siteId,
-    paintMap: encodeSurfaceMaterialField(field),
-  }) as unknown as AnyNode
-  scene.createNode(surface, siteId as AnyNodeId)
-  updateSurfacePaintTextures(surface.id as string, field)
-  return surface
+  const created = createSurfaceMaterialNode(site)
+  scene.createNode(created as unknown as AnyNode, siteId as AnyNodeId)
+  updateSurfacePaintTextures(
+    created.id,
+    resolveSurfaceMaterialField(created.paintMap, siteBounds(site.polygon.points)),
+  )
+  return created as unknown as AnyNode
 }

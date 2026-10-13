@@ -101,7 +101,8 @@ export const layGroundTool = {
   input: {
     areas: z.array(layGroundArea).min(1).max(64).describe('The areas to lay, in order (at most 20 apply).'),
   },
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  // Not idempotent: a feathered edge blends toward its target again on every call.
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   runsIn: 'operation',
 } as const satisfies EnvironmentAgentTool
 

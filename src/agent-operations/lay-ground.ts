@@ -1,21 +1,24 @@
-import { segmentsIntersect, type AnyNode } from '@pascal-app/core'
-import {
-  encodeLocalHeightScale,
-  localGrassHeightScaleAt,
-  resolveGrassHeightField,
-} from '../ground-cover/height-field'
+import { segmentsIntersect, type AnyNode, type SiteNode } from '@pascal-app/core'
+import { createGroundCoverNode } from '../ground-cover/create-node'
+import { encodeLocalHeightScale, resolveGrassHeightField } from '../ground-cover/height-field'
 import { buildGrassObstacleField } from '../ground-cover/obstacle-adapter'
-import { isGrassAllowedAt, type GrassObstacleField } from '../ground-cover/obstacle-field'
+import {
+  createGrassObstacleTopology,
+  isGrassAllowedAt,
+  type GrassObstacleField,
+} from '../ground-cover/obstacle-field'
 import {
   DEFAULT_GRASS_PAINT_COLOR,
   encodeGrassPaintField,
   hexToRgb,
   resolveGrassPaintField,
-  paintAt,
   siteBounds,
   type GrassPaintField,
+  type RgbBytes,
 } from '../ground-cover/paint-field'
-import { GrassFieldNode, GRASS_FIELD_KIND } from '../ground-cover/schema'
+import { blendPaintCell, type PaintCellBlend } from '../ground-cover/paint-stroke'
+import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
+import { createSurfaceMaterialNode } from '../surface-material/create-node'
 import {
   encodeSurfaceMaterialField,
   resolveSurfaceMaterialField,
@@ -25,7 +28,7 @@ import {
   SURFACE_MATERIAL_PAINT_COLOR,
   type SurfaceMaterialId,
 } from '../surface-material/material-types'
-import { SurfaceMaterialNode, SURFACE_MATERIAL_KIND } from '../surface-material/schema'
+import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
 import { refuse } from './refuse'
 import {
   asPolygon,
@@ -39,7 +42,7 @@ import {
   signedDistanceToPolygon,
   siteChildOfKind,
 } from './scene'
-import type { AgentOperation, PlanPoint, SceneChanges } from './types'
+import type { AgentOperation, PlanPoint, SceneChanges, SceneNodes } from './types'
 
 export type LayGroundKind = 'grass' | 'earth' | 'path' | 'paving' | 'none'
 
@@ -77,15 +80,32 @@ type ResolvedShape = {
   closed: boolean
 }
 
-type ResolvedArea = {
+type ResolvedArea = ResolvedShape & {
   index: number
   ground: LayGroundKind
   featherM: number
   grassHeight: number | null
-  tint: { r: number; g: number; b: number } | null
-  signedDistance: SignedDistance
-  outline: PlanPoint[]
-  closed: boolean
+  tint: RgbBytes | null
+}
+
+/** The site's two paint layers as this call finds (or creates) them, and the fields it paints. */
+type GroundLayers = {
+  grassNode: GrassFieldNode
+  grassCreated: boolean
+  surfaceNode: SurfaceMaterialNode
+  surfaceCreated: boolean
+  paint: GrassPaintField
+  height: GrassPaintField | null
+  surface: SurfaceMaterialField
+  obstacles: GrassObstacleField
+}
+
+type AreaFacts = {
+  areaM2: number
+  grassM2: number
+  blockedM2: number
+  paintedCells: number
+  shapeCells: number
 }
 
 function resolveShape(area: LayGroundAreaInput, index: number, sitePolygon: PlanPoint[]): ResolvedShape {
@@ -102,21 +122,7 @@ function resolveShape(area: LayGroundAreaInput, index: number, sitePolygon: Plan
       closed: true,
     }
   }
-  if (area.path !== undefined) {
-    const points = asPolygon(area.path.points)
-    if (!points || points.length < 2 || !(area.path.widthM > 0)) {
-      refuse('invalid_polygon', `Area ${index} has a malformed path.`, { index })
-    }
-    if (polylineLength(points) <= 1e-9) {
-      refuse('path_too_short', `Area ${index}'s path has no length.`, { index })
-    }
-    const halfWidth = area.path.widthM / 2
-    return {
-      signedDistance: (x, z) => halfWidth - distanceToPolyline(x, z, points),
-      outline: points,
-      closed: false,
-    }
-  }
+  if (area.path !== undefined) return resolvePathShape(area.path, index)
   const polygon = asPolygon(area.polygon)
   if (!polygon || !isValidPolygon(polygon)) {
     refuse('invalid_polygon', `Area ${index} is not a usable polygon (3+ points, some area).`, {
@@ -127,6 +133,25 @@ function resolveShape(area: LayGroundAreaInput, index: number, sitePolygon: Plan
     signedDistance: (x, z) => signedDistanceToPolygon(x, z, polygon),
     outline: polygon,
     closed: true,
+  }
+}
+
+function resolvePathShape(
+  path: NonNullable<LayGroundAreaInput['path']>,
+  index: number,
+): ResolvedShape {
+  const points = asPolygon(path.points)
+  if (!points || points.length < 2 || !(path.widthM > 0)) {
+    refuse('invalid_polygon', `Area ${index} has a malformed path.`, { index })
+  }
+  if (polylineLength(points) <= 1e-9) {
+    refuse('path_too_short', `Area ${index}'s path has no length.`, { index })
+  }
+  const halfWidth = path.widthM / 2
+  return {
+    signedDistance: (x, z) => halfWidth - distanceToPolyline(x, z, points),
+    outline: points,
+    closed: false,
   }
 }
 
@@ -158,6 +183,15 @@ function shapeOverlapsSite(area: ResolvedArea, sitePolygon: PlanPoint[]): boolea
   return false
 }
 
+function resolveTint(area: LayGroundAreaInput, index: number): RgbBytes | null {
+  if (area.tint === undefined) return null
+  try {
+    return hexToRgb(area.tint)
+  } catch {
+    refuse('invalid_tint', `Area ${index}'s tint is not a hex colour.`, { index })
+  }
+}
+
 function resolveAreas(input: LayGroundInput, sitePolygon: PlanPoint[]): ResolvedArea[] {
   const areas = input.areas ?? []
   if (areas.length === 0) refuse('area_empty', 'lay_ground needs at least one area.')
@@ -171,24 +205,44 @@ function resolveAreas(input: LayGroundInput, sitePolygon: PlanPoint[]): Resolved
     if (!Object.hasOwn(GROUND_SURFACE, area.ground)) {
       refuse('invalid_ground', `Area ${index} has an unknown ground kind.`, { index })
     }
-    let tint: ResolvedArea['tint'] = null
-    if (area.tint !== undefined) {
-      try {
-        tint = hexToRgb(area.tint)
-      } catch {
-        refuse('invalid_tint', `Area ${index}'s tint is not a hex colour.`, { index })
-      }
-    }
     return {
       index,
       ground: area.ground,
       featherM: Math.min(3, Math.max(0, area.featherM ?? DEFAULT_FEATHER_M)),
       grassHeight:
         area.grassHeight === undefined ? null : Math.min(2, Math.max(0.5, area.grassHeight)),
-      tint,
+      tint: resolveTint(area, index),
       ...resolveShape(area, index, sitePolygon),
     }
   })
+}
+
+/** The site's own Ground cover and Surface, created as the panel creates them when missing. */
+function resolveGroundLayers(
+  nodes: SceneNodes,
+  site: SiteNode,
+  areas: readonly ResolvedArea[],
+): GroundLayers {
+  const bounds = siteBounds(site.polygon.points)
+  const existingGrass = siteChildOfKind<GrassFieldNode>(nodes, String(site.id), GRASS_FIELD_KIND)
+  const existingSurface = siteChildOfKind<SurfaceMaterialNode>(
+    nodes,
+    String(site.id),
+    SURFACE_MATERIAL_KIND,
+  )
+  const grassNode = existingGrass ?? createGroundCoverNode(site)
+  const surfaceNode = existingSurface ?? createSurfaceMaterialNode(site)
+  const paintsHeight = areas.some((area) => area.grassHeight !== null)
+  return {
+    grassNode,
+    grassCreated: existingGrass === null,
+    surfaceNode,
+    surfaceCreated: existingSurface === null,
+    paint: resolveGrassPaintField(grassNode.paintMap, bounds, DEFAULT_GRASS_PAINT_COLOR),
+    height: paintsHeight ? resolveGrassHeightField(grassNode.heightMap, bounds) : null,
+    surface: resolveSurfaceMaterialField(surfaceNode.paintMap, bounds),
+    obstacles: buildGrassObstacleField(site, nodes, createGrassObstacleTopology(bounds)),
+  }
 }
 
 function strengthAt(area: ResolvedArea, x: number, z: number): number {
@@ -197,118 +251,117 @@ function strengthAt(area: ResolvedArea, x: number, z: number): number {
   return Math.min(1, Math.max(0, 0.5 + distance / area.featherM))
 }
 
-function lerpByte(current: number, target: number, amount: number): number {
-  return Math.round(current + (target - current) * amount)
+/** What the brush would do to grass coverage here: paint it (with the tint) or erase it. */
+function grassBlend(area: ResolvedArea): PaintCellBlend {
+  return {
+    mode: area.ground === 'grass' ? 'paint' : 'erase',
+    color: area.tint ?? hexToRgb(DEFAULT_GRASS_PAINT_COLOR),
+    targetDensity: 1,
+    premultiplyColorByDensity: false,
+  }
 }
 
-type AreaFacts = { areaM2: number; grassM2: number; blockedM2: number; paintedCells: number; shapeCells: number }
+/** What the surface brush would do here: paint the material, or erase every channel. */
+function surfaceBlend(area: ResolvedArea): PaintCellBlend {
+  const material = GROUND_SURFACE[area.ground]
+  return {
+    mode: material ? 'paint' : 'erase',
+    color: material ? SURFACE_MATERIAL_PAINT_COLOR[material] : { r: 0, g: 0, b: 0 },
+    targetDensity: 1,
+    premultiplyColorByDensity: true,
+  }
+}
 
-/** One pass over a paint lattice: blend every cell of `field` toward the area's targets. */
-function paintArea(
+function heightBlend(grassHeight: number): PaintCellBlend {
+  const channel = encodeLocalHeightScale(grassHeight)
+  return {
+    mode: 'paint',
+    color: { r: channel, g: channel, b: channel },
+    targetDensity: 1,
+    premultiplyColorByDensity: false,
+  }
+}
+
+/**
+ * Blend every lattice cell of `field` on the lot toward `blend`, by the area's strength there.
+ * `allowed` skips cells the brush would skip (grass under buildings or water).
+ */
+function paintLayer(
+  field: GrassPaintField,
   area: ResolvedArea,
   sitePolygon: PlanPoint[],
-  paint: GrassPaintField,
-  height: GrassPaintField | null,
-  surface: SurfaceMaterialField,
+  blend: PaintCellBlend,
+  allowed: (x: number, z: number) => boolean = () => true,
+): void {
+  for (let row = 0; row < field.rows; row += 1) {
+    const z = field.origin[1] + row * field.spacing
+    for (let col = 0; col < field.cols; col += 1) {
+      const x = field.origin[0] + col * field.spacing
+      if (!pointInPolygon(x, z, sitePolygon) || !allowed(x, z)) continue
+      const amount = strengthAt(area, x, z)
+      if (amount <= 0) continue
+      blendPaintCell(field.values, field.values, (row * field.cols + col) * 4, amount, blend)
+    }
+  }
+}
+
+/** The area's footprint facts, measured on the grass lattice. */
+function measureArea(
+  area: ResolvedArea,
+  sitePolygon: PlanPoint[],
+  lattice: GrassPaintField,
   obstacles: GrassObstacleField,
 ): AreaFacts {
-  const material = GROUND_SURFACE[area.ground]
-  const targetCoverage = area.ground === 'grass' ? 255 : 0
-  const surfaceColor = material ? SURFACE_MATERIAL_PAINT_COLOR[material] : null
-  const heightTarget = area.grassHeight === null ? null : encodeLocalHeightScale(area.grassHeight)
-  const cellM2 = paint.spacing * paint.spacing
+  const cellM2 = lattice.spacing * lattice.spacing
   const facts: AreaFacts = { areaM2: 0, grassM2: 0, blockedM2: 0, paintedCells: 0, shapeCells: 0 }
-
-  for (let row = 0; row < paint.rows; row += 1) {
-    const z = paint.origin[1] + row * paint.spacing
-    for (let col = 0; col < paint.cols; col += 1) {
-      const x = paint.origin[0] + col * paint.spacing
-      const distance = area.signedDistance(x, z)
-      if (distance >= 0) facts.shapeCells += 1
+  for (let row = 0; row < lattice.rows; row += 1) {
+    const z = lattice.origin[1] + row * lattice.spacing
+    for (let col = 0; col < lattice.cols; col += 1) {
+      const x = lattice.origin[0] + col * lattice.spacing
+      const inside = area.signedDistance(x, z) >= 0
+      if (inside) facts.shapeCells += 1
       if (!pointInPolygon(x, z, sitePolygon)) continue
+      const allowed = isGrassAllowedAt(obstacles, x, z)
+      if (inside) facts.areaM2 += cellM2
+      if (inside && !allowed) facts.blockedM2 += cellM2
       const strength = strengthAt(area, x, z)
-      if (distance >= 0) {
-        facts.areaM2 += cellM2
-        if (!isGrassAllowedAt(obstacles, x, z)) facts.blockedM2 += cellM2
-      }
       if (strength <= 0) continue
       facts.paintedCells += 1
-      if (area.ground === 'grass') facts.grassM2 += strength * cellM2
-
-      const offset = (row * paint.cols + col) * 4
-      if (area.tint) {
-        paint.values[offset] = lerpByte(paint.values[offset] ?? 0, area.tint.r, strength)
-        paint.values[offset + 1] = lerpByte(paint.values[offset + 1] ?? 0, area.tint.g, strength)
-        paint.values[offset + 2] = lerpByte(paint.values[offset + 2] ?? 0, area.tint.b, strength)
-      }
-      paint.values[offset + 3] = lerpByte(paint.values[offset + 3] ?? 0, targetCoverage, strength)
-      if (height !== null && heightTarget !== null) {
-        // Both fields resolve over the same bounds, so they share a lattice.
-        const channel = lerpByte(height.values[offset] ?? 0, heightTarget, strength)
-        height.values[offset] = channel
-        height.values[offset + 1] = channel
-        height.values[offset + 2] = channel
-        height.values[offset + 3] = 255
-      }
-      if (surfaceColor) {
-        surface.values[offset] = lerpByte(surface.values[offset] ?? 0, surfaceColor.r, strength)
-        surface.values[offset + 1] = lerpByte(surface.values[offset + 1] ?? 0, surfaceColor.g, strength)
-        surface.values[offset + 2] = lerpByte(surface.values[offset + 2] ?? 0, surfaceColor.b, strength)
-        surface.values[offset + 3] = lerpByte(surface.values[offset + 3] ?? 0, 255, strength)
-      } else {
-        surface.values[offset + 3] = lerpByte(surface.values[offset + 3] ?? 0, 0, strength)
-      }
+      if (area.ground === 'grass' && allowed) facts.grassM2 += strength * cellM2
     }
   }
   return facts
 }
 
-function sameLattice(first: GrassPaintField, second: GrassPaintField): boolean {
-  return (
-    first.cols === second.cols &&
-    first.rows === second.rows &&
-    first.spacing === second.spacing &&
-    first.origin[0] === second.origin[0] &&
-    first.origin[1] === second.origin[1]
+function refuseUnpaintable(area: ResolvedArea, facts: AreaFacts, sitePolygon: PlanPoint[], cellM: number): void {
+  if (facts.paintedCells > 0) return
+  if (facts.shapeCells === 0 && !shapeOverlapsSite(area, sitePolygon)) {
+    refuse('outside_property', `Area ${area.index} does not touch the lot.`, { index: area.index })
+  }
+  refuse('area_empty', `Area ${area.index} covers no paintable cell at this resolution.`, {
+    index: area.index,
+    cellM,
+  })
+}
+
+/** Lay one area on every layer, in the order the brush tools would, and report its facts. */
+function layArea(area: ResolvedArea, sitePolygon: PlanPoint[], layers: GroundLayers) {
+  const facts = measureArea(area, sitePolygon, layers.paint, layers.obstacles)
+  refuseUnpaintable(area, facts, sitePolygon, layers.paint.spacing)
+  paintLayer(layers.paint, area, sitePolygon, grassBlend(area), (x, z) =>
+    isGrassAllowedAt(layers.obstacles, x, z),
   )
-}
-
-/** Resample a height field onto the paint lattice so one cell index addresses both. */
-function alignHeightField(height: GrassPaintField, paint: GrassPaintField): GrassPaintField {
-  if (sameLattice(height, paint)) return height
-  const values = new Uint8Array(paint.cols * paint.rows * 4)
-  for (let row = 0; row < paint.rows; row += 1) {
-    const z = paint.origin[1] + row * paint.spacing
-    for (let col = 0; col < paint.cols; col += 1) {
-      const x = paint.origin[0] + col * paint.spacing
-      const channel = encodeLocalHeightScale(localGrassHeightScaleAt(height, x, z))
-      const offset = (row * paint.cols + col) * 4
-      values[offset] = channel
-      values[offset + 1] = channel
-      values[offset + 2] = channel
-      values[offset + 3] = 255
-    }
+  paintLayer(layers.surface, area, sitePolygon, surfaceBlend(area))
+  if (layers.height && area.grassHeight !== null) {
+    paintLayer(layers.height, area, sitePolygon, heightBlend(area.grassHeight))
   }
-  return { origin: paint.origin, spacing: paint.spacing, cols: paint.cols, rows: paint.rows, values }
-}
-
-/** Resample a surface field onto the paint lattice, through its material weights. */
-function alignSurfaceField(surface: SurfaceMaterialField, paint: GrassPaintField): SurfaceMaterialField {
-  if (sameLattice(surface, paint)) return surface
-  const values = new Uint8Array(paint.cols * paint.rows * 4)
-  for (let row = 0; row < paint.rows; row += 1) {
-    const z = paint.origin[1] + row * paint.spacing
-    for (let col = 0; col < paint.cols; col += 1) {
-      const x = paint.origin[0] + col * paint.spacing
-      const sample = paintAt(surface, x, z)
-      const offset = (row * paint.cols + col) * 4
-      values[offset] = Math.round(sample.r * 255)
-      values[offset + 1] = Math.round(sample.g * 255)
-      values[offset + 2] = Math.round(sample.b * 255)
-      values[offset + 3] = Math.round(sample.a * 255)
-    }
+  return {
+    index: area.index,
+    areaM2: roundFact(facts.areaM2),
+    grassM2: roundFact(facts.grassM2),
+    surface: GROUND_SURFACE[area.ground],
+    blockedM2: roundFact(facts.blockedM2),
   }
-  return { origin: paint.origin, spacing: paint.spacing, cols: paint.cols, rows: paint.rows, values }
 }
 
 function lotGrassCoveragePct(paint: GrassPaintField, sitePolygon: PlanPoint[]): number {
@@ -326,94 +379,46 @@ function lotGrassCoveragePct(paint: GrassPaintField, sitePolygon: PlanPoint[]): 
   return cells === 0 ? 0 : (covered / cells) * 100
 }
 
+/** The painted layers as node changes: created nodes whole, existing ones by their maps. */
+function groundLayerChanges(site: SiteNode, layers: GroundLayers): SceneChanges {
+  const grassData = {
+    paintMap: encodeGrassPaintField(layers.paint),
+    ...(layers.height ? { heightMap: encodeGrassPaintField(layers.height) } : {}),
+  }
+  const surfaceData = { paintMap: encodeSurfaceMaterialField(layers.surface) }
+  const changes: SceneChanges = {}
+  const create: NonNullable<SceneChanges['create']> = []
+  const update: NonNullable<SceneChanges['update']> = []
+  if (layers.grassCreated) {
+    create.push({ node: { ...layers.grassNode, ...grassData } as unknown as AnyNode, parentId: String(site.id) })
+  } else {
+    update.push({ id: String(layers.grassNode.id), data: grassData as Partial<AnyNode> })
+  }
+  if (layers.surfaceCreated) {
+    create.push({ node: { ...layers.surfaceNode, ...surfaceData } as unknown as AnyNode, parentId: String(site.id) })
+  } else {
+    update.push({ id: String(layers.surfaceNode.id), data: surfaceData as Partial<AnyNode> })
+  }
+  if (create.length > 0) changes.create = create
+  if (update.length > 0) changes.update = update
+  return changes
+}
+
 export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
   const site = requireSite(nodes)
   const sitePolygon = requireSitePolygon(site)
   const areas = resolveAreas(input, sitePolygon)
-  const bounds = siteBounds(sitePolygon)
-
-  const grassNode = siteChildOfKind<GrassFieldNode>(nodes, String(site.id), GRASS_FIELD_KIND)
-  const surfaceNode = siteChildOfKind<SurfaceMaterialNode>(
-    nodes,
-    String(site.id),
-    SURFACE_MATERIAL_KIND,
-  )
-  const paint = resolveGrassPaintField(grassNode?.paintMap, bounds, DEFAULT_GRASS_PAINT_COLOR)
-  const surface = alignSurfaceField(
-    resolveSurfaceMaterialField(surfaceNode?.paintMap, bounds),
-    paint,
-  )
-  const resolvedHeight =
-    areas.some((area) => area.grassHeight !== null) || grassNode?.heightMap !== undefined
-      ? resolveGrassHeightField(grassNode?.heightMap, bounds)
-      : null
-  const height = resolvedHeight === null ? null : alignHeightField(resolvedHeight, paint)
-  const obstacles = buildGrassObstacleField(site, nodes, {
-    origin: paint.origin,
-    spacing: paint.spacing,
-    cols: paint.cols,
-    rows: paint.rows,
-  })
-
-  const areaFacts = areas.map((area) => {
-    const facts = paintArea(area, sitePolygon, paint, height, surface, obstacles)
-    if (facts.paintedCells === 0) {
-      if (facts.shapeCells === 0 && !shapeOverlapsSite(area, sitePolygon)) {
-        refuse('outside_property', `Area ${area.index} does not touch the lot.`, {
-          index: area.index,
-        })
-      }
-      refuse('area_empty', `Area ${area.index} covers no paintable cell at this resolution.`, {
-        index: area.index,
-        cellM: paint.spacing,
-      })
-    }
-    return {
-      index: area.index,
-      areaM2: roundFact(facts.areaM2),
-      grassM2: roundFact(facts.grassM2),
-      surface: GROUND_SURFACE[area.ground],
-      blockedM2: roundFact(facts.blockedM2),
-    }
-  })
-
-  const paintMap = encodeGrassPaintField(paint)
-  const surfaceMap = encodeSurfaceMaterialField(surface)
-  const heightMap = height === null ? undefined : encodeGrassPaintField(height)
-  const changes: SceneChanges = { create: [], update: [] }
-  if (grassNode) {
-    changes.update?.push({
-      id: String(grassNode.id),
-      data: { paintMap, ...(heightMap ? { heightMap } : {}) } as Partial<AnyNode>,
-    })
-  } else {
-    const node = GrassFieldNode.parse({
-      parentId: site.id,
-      paintMap,
-      ...(heightMap ? { heightMap } : {}),
-    })
-    changes.create?.push({ node: node as unknown as AnyNode, parentId: String(site.id) })
-  }
-  if (surfaceNode) {
-    changes.update?.push({
-      id: String(surfaceNode.id),
-      data: { paintMap: surfaceMap } as Partial<AnyNode>,
-    })
-  } else {
-    const node = SurfaceMaterialNode.parse({ parentId: site.id, paintMap: surfaceMap })
-    changes.create?.push({ node: node as unknown as AnyNode, parentId: String(site.id) })
-  }
-  if (changes.create?.length === 0) delete changes.create
-  if (changes.update?.length === 0) delete changes.update
-
+  const layers = resolveGroundLayers(nodes, site, areas)
+  const areaFacts = areas.map((area) => layArea(area, sitePolygon, layers))
+  const changes = groundLayerChanges(site, layers)
   return {
     result: {
       areas: areaFacts,
-      grassCoveragePct: roundFact(lotGrassCoveragePct(paint, sitePolygon)),
-      grassCellM: paint.spacing,
-      surfaceCellM: surface.spacing,
-      groundCoverCreated: grassNode === null,
-      surfaceCreated: surfaceNode === null,
+      grassCoveragePct: roundFact(lotGrassCoveragePct(layers.paint, sitePolygon)),
+      grassCellM: layers.paint.spacing,
+      surfaceCellM: layers.surface.spacing,
+      groundCoverCreated: layers.grassCreated,
+      surfaceCreated: layers.surfaceCreated,
       updateBytes: new TextEncoder().encode(JSON.stringify(changes)).length,
       collaborationCapBytes: COLLABORATION_CAP_BYTES,
     },

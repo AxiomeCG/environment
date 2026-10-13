@@ -5,13 +5,27 @@ import {
   type AnyNode,
 } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
-import { decodeGrassPaintField, paintAt } from '../ground-cover/paint-field'
-import { GRASS_FIELD_KIND } from '../ground-cover/schema'
+import { layGroundTool } from '../agent-tools'
+import { createGroundCoverNode } from '../ground-cover/create-node'
+import {
+  DEFAULT_GRASS_PAINT_COLOR,
+  paintAt,
+  resolveGrassPaintField,
+  siteBounds,
+  type GrassPaintField,
+} from '../ground-cover/paint-field'
+import { advancePaintStroke, beginPaintStroke, currentPaintField } from '../ground-cover/paint-stroke'
+import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
 import { POND_KIND, PondNode } from '../pond/schema'
-import { decodeSurfaceMaterialField, surfaceMaterialWeightsAt } from '../surface-material/field'
-import { SURFACE_MATERIAL_KIND } from '../surface-material/schema'
+import {
+  resolveSurfaceMaterialField,
+  surfaceMaterialWeightsAt,
+  type SurfaceMaterialField,
+} from '../surface-material/field'
+import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
 import { environmentAgentOperations } from './index'
 import { refusalCode } from './refuse'
+import type { SceneChanges } from './types'
 
 type Nodes = Record<string, AnyNode>
 
@@ -56,6 +70,32 @@ function bowlLot(): { nodes: Nodes; siteId: string } {
   return { nodes: { [site.id]: site as AnyNode }, siteId: site.id }
 }
 
+/** The scene once `changes` are in, as a store would apply them (children lists included). */
+function applyChanges(nodes: Nodes, changes: SceneChanges | undefined): Nodes {
+  const next: Nodes = { ...nodes }
+  for (const { node, parentId } of changes?.create ?? []) {
+    next[String(node.id)] = node
+    const parent = parentId ? (next[parentId] as AnyNode & { children?: string[] }) : undefined
+    if (parent?.children) next[parent.id] = { ...parent, children: [...parent.children, String(node.id)] } as AnyNode
+  }
+  for (const { id, data } of changes?.update ?? []) next[id] = { ...next[id], ...data } as AnyNode
+  for (const id of changes?.delete ?? []) delete next[id]
+  return next
+}
+
+/** The site's grass and surface fields as the renderer resolves them from the nodes. */
+function groundFieldsOf(nodes: Nodes, siteId: string): { paint: GrassPaintField; surface: SurfaceMaterialField } {
+  const site = nodes[siteId] as SiteNode
+  const bounds = siteBounds(site.polygon.points)
+  const ofKind = (kind: string) => Object.values(nodes).find((node) => String(node.type) === kind)
+  const grass = ofKind(GRASS_FIELD_KIND) as unknown as GrassFieldNode | undefined
+  const surface = ofKind(SURFACE_MATERIAL_KIND) as unknown as SurfaceMaterialNode | undefined
+  return {
+    paint: resolveGrassPaintField(grass?.paintMap, bounds, DEFAULT_GRASS_PAINT_COLOR),
+    surface: resolveSurfaceMaterialField(surface?.paintMap, bounds),
+  }
+}
+
 function codeOf(run: () => unknown): string {
   try {
     run()
@@ -76,7 +116,6 @@ describe('lay_ground', () => {
     const { nodes, siteId } = flatLot()
     const { result, changes } = runLayGround(nodes, [{ site: true, ground: 'grass' }])
 
-    expect(changes?.create).toHaveLength(2)
     const kinds = (changes?.create ?? []).map((entry) => String(entry.node.type))
     expect(kinds).toContain(GRASS_FIELD_KIND)
     expect(kinds).toContain(SURFACE_MATERIAL_KIND)
@@ -85,54 +124,81 @@ describe('lay_ground', () => {
     expect(result.updateBytes).toBeGreaterThan(0)
   })
 
-  test('a path laid after a lawn cuts through it, and only the paint maps change', () => {
-    const { nodes } = flatLot()
+  test('a path laid after a lawn cuts through it', () => {
+    const { nodes, siteId } = flatLot()
     const { changes } = runLayGround(nodes, [
       { site: true, ground: 'grass' },
       { path: { points: [[8, 0], [8, 16]], widthM: 1.2 }, ground: 'path', featherM: 0 },
     ])
-    const made = new Map(
-      (changes?.create ?? []).map((entry) => [String(entry.node.type), entry.node] as const),
+    const laid = groundFieldsOf(applyChanges(nodes, changes), siteId)
+    expect(paintAt(laid.paint, 8, 8).a).toBe(0)
+    expect(paintAt(laid.paint, 2, 8).a).toBe(1)
+    expect(surfaceMaterialWeightsAt(laid.surface, 8, 8)[1]).toBe(1)
+  })
+
+  test('a small lawn on a fresh lot grows grass only inside it, as a panel stroke would', () => {
+    const { nodes, siteId } = flatLot()
+    const { result, changes } = runLayGround(nodes, [
+      { polygon: [[1, 1], [3, 1], [3, 3], [1, 3]], ground: 'grass', featherM: 0 },
+    ])
+    const laid = groundFieldsOf(applyChanges(nodes, changes), siteId)
+    expect(paintAt(laid.paint, 2, 2).a).toBe(1)
+    expect(paintAt(laid.paint, 15, 15).a).toBe(0)
+    // 2x2 m of a 16x16 m lot, give or take one lattice row at the hard edge.
+    expect(result.grassCoveragePct).toBeGreaterThan(1.5)
+    expect(result.grassCoveragePct).toBeLessThan(1.8)
+
+    // The panel's own node, painted by the person's brush over the same spot.
+    const site = nodes[siteId] as SiteNode
+    const panelNode = createGroundCoverNode(site)
+    const panelField = resolveGrassPaintField(
+      panelNode.paintMap,
+      siteBounds(site.polygon.points),
+      DEFAULT_GRASS_PAINT_COLOR,
     )
-
-    const grass = made.get(GRASS_FIELD_KIND) as { paintMap?: unknown } | undefined
-    const paint = decodeGrassPaintField(grass?.paintMap)
-    expect(paint).not.toBeNull()
-    if (!paint) return
-    expect(paintAt(paint, 8, 8).a).toBeLessThan(0.05)
-    expect(paintAt(paint, 2, 8).a).toBeGreaterThan(0.95)
-
-    const surface = made.get(SURFACE_MATERIAL_KIND) as { paintMap?: unknown } | undefined
-    const field = decodeSurfaceMaterialField(surface?.paintMap)
-    expect(field).not.toBeNull()
-    if (!field) return
-    const road = surfaceMaterialWeightsAt(field, 8, 8)
-    expect(road[1]).toBeGreaterThan(0.9)
+    const stroke = beginPaintStroke({ field: panelField, boundary: site.polygon.points })
+    advancePaintStroke(stroke, 2, 2)
+    expect(paintAt(currentPaintField(stroke), 15, 15).a).toBe(0)
   })
 
   test('featherM blends the edge instead of a hard cut', () => {
-    const { nodes } = flatLot()
-    const hard = runLayGround(nodes, [
-      { polygon: [[0, 0], [8, 0], [8, 16], [0, 16]], ground: 'grass', featherM: 0 },
+    const { nodes, siteId } = flatLot()
+    const { changes } = runLayGround(nodes, [
+      { polygon: [[0, 0], [8, 0], [8, 16], [0, 16]], ground: 'grass', featherM: 2 },
     ])
-    const soft = runLayGround(nodes, [
-      { polygon: [[0, 0], [8, 0], [8, 16], [0, 16]], ground: 'earth', featherM: 2 },
-    ])
-    const hardGrass = (hard.changes?.create ?? []).find(
-      (entry) => String(entry.node.type) === GRASS_FIELD_KIND,
-    )?.node as { paintMap?: unknown } | undefined
-    const softGrass = (soft.changes?.create ?? []).find(
-      (entry) => String(entry.node.type) === GRASS_FIELD_KIND,
-    )?.node as { paintMap?: unknown } | undefined
-    const hardField = decodeGrassPaintField(hardGrass?.paintMap)
-    const softField = decodeGrassPaintField(softGrass?.paintMap)
-    expect(hardField).not.toBeNull()
-    expect(softField).not.toBeNull()
-    if (!hardField || !softField) return
-    // Just inside the edge, the feathered earth keeps some of the default grass.
-    expect(paintAt(hardField, 9, 8).a).toBeGreaterThan(0.95)
-    expect(paintAt(softField, 8.6, 8).a).toBeGreaterThan(0.2)
-    expect(paintAt(softField, 8.6, 8).a).toBeLessThan(0.9)
+    const laid = groundFieldsOf(applyChanges(nodes, changes), siteId)
+    expect(paintAt(laid.paint, 4, 8).a).toBe(1)
+    // At the outline the strength is one half; a metre outside, nothing.
+    expect(paintAt(laid.paint, 8, 8).a).toBeCloseTo(0.5, 1)
+    expect(paintAt(laid.paint, 9.05, 8).a).toBe(0)
+  })
+
+  test('clearing a surface clears every channel, so a feathered path reads as road alone', () => {
+    const { nodes, siteId } = flatLot()
+    let scene = nodes
+    for (const area of [
+      { site: true, ground: 'grass', featherM: 0 },
+      { site: true, ground: 'none', featherM: 0 },
+      { site: true, ground: 'path', featherM: 2 },
+    ]) {
+      scene = applyChanges(scene, runLayGround(scene, [area]).changes)
+    }
+    const { surface } = groundFieldsOf(scene, siteId)
+    const [grass, road, desert, paved] = surfaceMaterialWeightsAt(surface, 0, 8)
+    expect(road).toBeCloseTo(1, 6)
+    expect(grass + desert + paved).toBeCloseTo(0, 6)
+  })
+
+  test('is declared not idempotent: a repeated feathered area keeps blending', () => {
+    expect(layGroundTool.annotations.idempotentHint).toBe(false)
+    const { nodes, siteId } = flatLot()
+    const area = { site: true, ground: 'earth', featherM: 2 }
+    const grassed = applyChanges(nodes, runLayGround(nodes, [{ site: true, ground: 'grass', featherM: 0 }]).changes)
+    const once = applyChanges(grassed, runLayGround(grassed, [area]).changes)
+    const twice = applyChanges(once, runLayGround(once, [area]).changes)
+    expect(paintAt(groundFieldsOf(twice, siteId).paint, 0, 8).a).toBeLessThan(
+      paintAt(groundFieldsOf(once, siteId).paint, 0, 8).a,
+    )
   })
 
   test('refuses a degenerate polygon, naming its index', () => {

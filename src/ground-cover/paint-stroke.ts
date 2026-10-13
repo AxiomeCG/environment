@@ -144,57 +144,81 @@ export function maxPaintCoverage(stroke: PaintStroke): number {
   return maximum
 }
 
+/**
+ * How a paint or erase dab moves one cell toward its target: the per-cell rule shared by the
+ * brush and by every other writer of a paint field, so they leave the same bytes.
+ */
+export type PaintCellBlend = {
+  mode: 'paint' | 'erase'
+  color: RgbBytes
+  targetDensity: number
+  /** Surface fields store colour premultiplied by density: erasing clears every channel. */
+  premultiplyColorByDensity: boolean
+}
+
+/**
+ * Blend the RGBA cell at `offset` of `source` toward `blend` by `amount` (0..1), writing it to
+ * `target`. The two may be the same array: the cell is read whole before it is written.
+ */
+export function blendPaintCell(
+  source: Uint8Array,
+  target: Uint8Array,
+  offset: number,
+  amount: number,
+  blend: PaintCellBlend,
+): void {
+  const baseR = source[offset] ?? 0
+  const baseG = source[offset + 1] ?? 0
+  const baseB = source[offset + 2] ?? 0
+  const baseA = source[offset + 3] ?? 0
+  const targetAlpha = Math.round(clamp01(blend.targetDensity) * 255)
+
+  if (blend.mode === 'erase') {
+    const clearColor = blend.premultiplyColorByDensity
+    target[offset] = blendByte(baseR, clearColor ? 0 : baseR, amount)
+    target[offset + 1] = blendByte(baseG, clearColor ? 0 : baseG, amount)
+    target[offset + 2] = blendByte(baseB, clearColor ? 0 : baseB, amount)
+    target[offset + 3] = blendByte(baseA, 0, amount)
+    return
+  }
+
+  if (blend.premultiplyColorByDensity) {
+    target[offset] = blendByte(baseR, Math.round((blend.color.r * targetAlpha) / 255), amount)
+    target[offset + 1] = blendByte(baseG, Math.round((blend.color.g * targetAlpha) / 255), amount)
+    target[offset + 2] = blendByte(baseB, Math.round((blend.color.b * targetAlpha) / 255), amount)
+    target[offset + 3] = blendByte(baseA, targetAlpha, amount)
+    return
+  }
+
+  const colorAmount = lerp(amount, Math.sqrt(amount), 1 - baseA / 255)
+  target[offset] = blendByte(baseR, blend.color.r, colorAmount)
+  target[offset + 1] = blendByte(baseG, blend.color.g, colorAmount)
+  target[offset + 2] = blendByte(baseB, blend.color.b, colorAmount)
+  target[offset + 3] = blendByte(baseA, targetAlpha, amount)
+}
+
 function resolveSample(stroke: PaintStroke, sampleIndex: number, color: RgbBytes): void {
   const offset = sampleIndex * 4
   const values = stroke.snapshot.values
   const result = stroke.result.values
   const coverage = stroke.mask.get(sampleIndex) ?? 0
   const amount = clamp01(coverage * stroke.settings.strength)
-  const baseR = values[offset] ?? 0
-  const baseG = values[offset + 1] ?? 0
-  const baseB = values[offset + 2] ?? 0
-  const baseA = values[offset + 3] ?? 0
-
-  if (stroke.settings.mode === 'erase') {
-    const target = stroke.settings.premultiplyColorByDensity ? 0 : baseR
-    result[offset] = blendByte(baseR, target, amount)
-    result[offset + 1] = blendByte(
-      baseG,
-      stroke.settings.premultiplyColorByDensity ? 0 : baseG,
-      amount,
-    )
-    result[offset + 2] = blendByte(
-      baseB,
-      stroke.settings.premultiplyColorByDensity ? 0 : baseB,
-      amount,
-    )
-    result[offset + 3] = blendByte(baseA, 0, amount)
-    return
-  }
 
   if (stroke.settings.mode === 'smooth') {
     const smoothed = smoothedSnapshot(stroke)
-    result[offset] = blendByte(baseR, smoothed[offset] ?? baseR, amount)
-    result[offset + 1] = blendByte(baseG, smoothed[offset + 1] ?? baseG, amount)
-    result[offset + 2] = blendByte(baseB, smoothed[offset + 2] ?? baseB, amount)
-    result[offset + 3] = blendByte(baseA, smoothed[offset + 3] ?? baseA, amount)
+    for (let channel = 0; channel < 4; channel += 1) {
+      const base = values[offset + channel] ?? 0
+      result[offset + channel] = blendByte(base, smoothed[offset + channel] ?? base, amount)
+    }
     return
   }
 
-  if (stroke.settings.premultiplyColorByDensity) {
-    const targetAlpha = Math.round(stroke.settings.targetDensity * 255)
-    result[offset] = blendByte(baseR, Math.round((color.r * targetAlpha) / 255), amount)
-    result[offset + 1] = blendByte(baseG, Math.round((color.g * targetAlpha) / 255), amount)
-    result[offset + 2] = blendByte(baseB, Math.round((color.b * targetAlpha) / 255), amount)
-    result[offset + 3] = blendByte(baseA, targetAlpha, amount)
-    return
-  }
-
-  const colorAmount = lerp(amount, Math.sqrt(amount), 1 - baseA / 255)
-  result[offset] = blendByte(baseR, color.r, colorAmount)
-  result[offset + 1] = blendByte(baseG, color.g, colorAmount)
-  result[offset + 2] = blendByte(baseB, color.b, colorAmount)
-  result[offset + 3] = blendByte(baseA, Math.round(stroke.settings.targetDensity * 255), amount)
+  blendPaintCell(values, result, offset, amount, {
+    mode: stroke.settings.mode,
+    color,
+    targetDensity: stroke.settings.targetDensity,
+    premultiplyColorByDensity: stroke.settings.premultiplyColorByDensity,
+  })
 }
 
 function smoothedSnapshot(stroke: PaintStroke): Uint8Array {
