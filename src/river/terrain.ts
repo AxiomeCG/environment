@@ -144,30 +144,20 @@ export function riverTerrainFingerprint(
   return hashString(JSON.stringify({ grading, boundary: boundary ?? null, grid: gridKey }))
 }
 
-/** The fingerprint recorded by the Site's last applied river carve, if any. */
-export function riverTerrainAppliedFingerprint(site: SiteNode): string | null {
-  return readRiverTerrainMetadata(site.metadata)?.fingerprint ?? null
-}
-
 /**
  * True when the Site's terrain already carries the carve for exactly these
  * rivers, boundary, and grid — i.e. an apply already wrote it and a
- * reconciliation pass must not write (or record history) again.
+ * reconciliation pass must not write (or record history) again. The persisted
+ * terrain must still be the applied one: a sculpt since the apply leaves the
+ * fingerprint intact but needs the river re-carved from the sculpted ground.
  */
 export function riverTerrainIsApplied(site: SiteNode, rivers: readonly RiverNode[]): boolean {
-  const applied = riverTerrainAppliedFingerprint(site)
-  if (!applied || rivers.length === 0) return false
-  const terrain = site.terrain
-  const grid = terrain
-    ? {
-        cols: terrain.cols,
-        rows: terrain.rows,
-        spacing: terrain.spacing,
-        step: terrain.step,
-        origin: terrain.origin,
-      }
-    : null
-  return applied === riverTerrainFingerprint(rivers, site.polygon.points, grid)
+  const tracked = readRiverTerrainMetadata(site.metadata)
+  if (!tracked?.fingerprint || rivers.length === 0) return false
+  const persisted = persistedTerrainFieldOf(site)
+  const applied = decodeTerrainField(tracked.applied)
+  if (!persisted || !applied || !sameHeights(persisted, applied)) return false
+  return tracked.fingerprint === riverTerrainFingerprint(rivers, site.polygon.points, persisted)
 }
 
 function hashString(value: string): string {
@@ -1258,6 +1248,14 @@ function diffHeightPatch(before: TerrainField, after: TerrainField): HeightPatch
     heights.set(after.heights.subarray(sourceOffset, sourceOffset + cols), row * cols)
   }
   return { col0, row0, cols, rows, heights }
+}
+
+function sameHeights(left: TerrainField, right: TerrainField): boolean {
+  if (!sameGrid(left, right) || left.heights.length !== right.heights.length) return false
+  for (let index = 0; index < left.heights.length; index += 1) {
+    if (left.heights[index] !== right.heights[index]) return false
+  }
+  return true
 }
 
 function sameGrid(left: TerrainField, right: TerrainField): boolean {

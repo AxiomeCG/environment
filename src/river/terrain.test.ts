@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   applyHeightPatch,
   createTerrainField,
+  decodeTerrainField,
   encodeTerrainField,
   SiteNode,
   surfaceHeightAt,
@@ -590,5 +591,32 @@ describe('trapezoid sections', () => {
     expect(plan.facts.depthShortfallM).toBeCloseTo(7, 6)
     const fits = river('river_fits', { width: 4, depth: 0.5, section })
     expect(planRiver(terrain, fits, siteWith(terrain).polygon.points)?.facts.depthShortfallM).toBe(0)
+  })
+})
+
+/** Raise terrain columns 0-7 by 2 m, as a sculpt would, keeping the grid and the river stamp. */
+function sculptWestEdge(site: SiteNodeType): SiteNodeType {
+  const field = decodeTerrainField(site.terrain)
+  if (!field) throw new Error('expected persisted terrain')
+  const heights = new Int16Array(field.heights)
+  for (let row = 0; row < field.rows; row += 1) {
+    for (let col = 0; col <= 7; col += 1) {
+      const index = row * field.cols + col
+      heights[index] = (heights[index] ?? 0) + Math.round(2 / field.step)
+    }
+  }
+  return SiteNode.parse({ ...site, terrain: encodeTerrainField({ ...field, heights }) })
+}
+
+describe('applied-carve recognition', () => {
+  test('sculpting the terrain after an apply means the carve is no longer applied', () => {
+    // Review input: the default downhill river on the flat fixture, then a
+    // 2 m sculpt of columns 0-7 that leaves the grid and fingerprint intact.
+    const site = siteWith()
+    const node = river('river_sculpted', { flow: 'downhill' })
+    const appliedSite = siteAfter(site, rebuildRiverTerrain(site, [node]))
+    expect(riverTerrainIsApplied(appliedSite, [node])).toBe(true)
+
+    expect(riverTerrainIsApplied(sculptWestEdge(appliedSite), [node])).toBe(false)
   })
 })

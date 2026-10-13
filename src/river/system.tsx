@@ -89,6 +89,30 @@ function riverGradingChanged(current: AnyNode | undefined, previous: AnyNode | u
   )
 }
 
+/**
+ * The terrain and metadata that bring a Site in line with its rivers, or null
+ * when it already carries them. An apply stamps the Site with its carve, so
+ * reconciling right after one writes nothing: no second history entry.
+ */
+export function riverReconcileUpdate(
+  site: SiteNode,
+  rivers: readonly RiverNode[],
+): Pick<SiteNode, 'terrain' | 'metadata'> | null {
+  const hasTracking =
+    site.metadata !== null &&
+    Object.prototype.hasOwnProperty.call(site.metadata, 'environmentRiverTerrain')
+  if (rivers.length === 0 && !hasTracking) return null
+  if (riverTerrainIsApplied(site, rivers)) return null
+  const rebuilt = rebuildRiverTerrain(site, rivers)
+  if (
+    terrainDataEqual(site.terrain, rebuilt.terrainData) &&
+    metadataEqual(site.metadata, rebuilt.metadata)
+  ) {
+    return null
+  }
+  return { terrain: rebuilt.terrainData, metadata: rebuilt.metadata }
+}
+
 export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
   useEffect(() => {
     let reconciling = false
@@ -109,28 +133,8 @@ export default function RiverSystem({ sceneApi }: { sceneApi: SceneApi }) {
           .map((candidate) => RiverNode.safeParse(candidate))
           .filter((parsed): parsed is { success: true; data: RiverNode } => parsed.success)
           .map((parsed) => parsed.data)
-        const hasTracking =
-          site.metadata !== null &&
-          Object.prototype.hasOwnProperty.call(site.metadata, 'environmentRiverTerrain')
-        if (rivers.length === 0 && !hasTracking) continue
-        // An apply stamps the Site with the carve fingerprint; when it still
-        // matches, this reconciliation is the same change and must not become
-        // a second history entry.
-        if (riverTerrainIsApplied(site, rivers)) continue
-        const rebuilt = rebuildRiverTerrain(site, rivers)
-        if (
-          terrainDataEqual(site.terrain, rebuilt.terrainData) &&
-          metadataEqual(site.metadata, rebuilt.metadata)
-        ) {
-          continue
-        }
-        updates.push({
-          id: site.id as AnyNodeId,
-          data: {
-            terrain: rebuilt.terrainData,
-            metadata: rebuilt.metadata,
-          } as Partial<AnyNode>,
-        })
+        const update = riverReconcileUpdate(site, rivers)
+        if (update) updates.push({ id: site.id as AnyNodeId, data: update as Partial<AnyNode> })
       }
       if (updates.length > 0) {
         reconciling = true
