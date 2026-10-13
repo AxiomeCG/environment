@@ -6,9 +6,9 @@ import {
   surfaceHeightAt,
   type TerrainField,
 } from '@pascal-app/core'
-import { buildRiverSurface, RIVER_MAX_WATER_TRIANGLES } from './geometry'
+import { buildRiverSurface, RIVER_MAX_WATER_TRIANGLES, riverFlowMaterialDirection } from './geometry'
 import { RiverNode, type RiverNode as RiverNodeType } from './schema'
-import { rebuildRiverTerrain } from './terrain'
+import { planRiver, rebuildRiverTerrain } from './terrain'
 
 const CONCAVE_BOUNDARY: Array<[number, number]> = [
   [-10, -8],
@@ -364,5 +364,97 @@ describe('river geometry boundaries', () => {
     const rebuilt = rebuildRiverTerrain(sourceSite, [pathological])
     const surface = buildRiverSurface(pathological, sourceSite, rebuilt.terrain, source)
     expect((surface?.positions.length ?? 0) / 9).toBeLessThanOrEqual(RIVER_MAX_WATER_TRIANGLES)
+  })
+})
+
+describe('downhill flow orientation', () => {
+  test('course increases downstream even when upstream is the authored end', () => {
+    // Ground rises toward +x, so the authored end is upstream and the current
+    // runs toward -x. Course must start at the upstream (+x) end.
+    const field = terrain()
+    const heights = new Int16Array(field.heights.length)
+    for (let row = 0; row < field.rows; row += 1) {
+      for (let col = 0; col < field.cols; col += 1) {
+        const x = field.origin[0] + col * field.spacing
+        heights[row * field.cols + col] = Math.round((0.3 * x) / field.step)
+      }
+    }
+    const sloping = { ...field, heights }
+    const sourceSite = site(sloping, RECTANGULAR_BOUNDARY)
+    const node = RiverNode.parse({
+      ...river([
+        [-8, 0],
+        [8, 0],
+      ]),
+      flow: 'downhill',
+      flowDirection: 'reverse',
+    })
+    const rebuilt = rebuildRiverTerrain(sourceSite, [node])
+    const carvedSite = SiteNode.parse({
+      ...sourceSite,
+      terrain: rebuilt.terrainData,
+      metadata: rebuilt.metadata,
+    })
+    const surface = buildRiverSurface(node, carvedSite, rebuilt.terrain, sloping)
+    if (!surface) throw new Error('expected a water surface')
+    let upstreamCourse = Number.POSITIVE_INFINITY
+    let downstreamCourse = Number.NEGATIVE_INFINITY
+    for (let vertex = 0; vertex < surface.positions.length / 3; vertex += 1) {
+      const x = surface.positions[vertex * 3] ?? 0
+      const course = surface.waterCourse[vertex * 2] ?? 0
+      if (x > 7) upstreamCourse = Math.min(upstreamCourse, course)
+      if (x < -7) downstreamCourse = Math.max(downstreamCourse, course)
+    }
+    expect(upstreamCourse).toBeLessThan(2)
+    expect(downstreamCourse).toBeGreaterThan(surface.sampledPath.length - 2)
+    let flowX = 0
+    for (let vertex = 0; vertex < surface.waterFlow.length / 2; vertex += 1) {
+      flowX += surface.waterFlow[vertex * 2] ?? 0
+    }
+    expect(flowX / (surface.waterFlow.length / 2)).toBeLessThan(-0.9)
+    // The legacy direction flag must not change downhill orientation.
+    const forwardSurface = buildRiverSurface(
+      RiverNode.parse({ ...node, flowDirection: 'forward' }),
+      carvedSite,
+      rebuilt.terrain,
+      sloping,
+    )
+    expect(forwardSurface?.waterFlow).toEqual(surface.waterFlow)
+    expect(forwardSurface?.waterCourse).toEqual(surface.waterCourse)
+  })
+
+  test('the water material runs forward along the course for downhill rivers, whatever the legacy flag', () => {
+    const reversed = { ...river(), flowDirection: 'reverse' as const }
+    expect(riverFlowMaterialDirection(RiverNode.parse({ ...reversed, flow: 'downhill' }))).toBe(1)
+    expect(riverFlowMaterialDirection(RiverNode.parse({ ...reversed, flow: 'as_drawn' }))).toBe(-1)
+  })
+})
+
+describe('depth-limited sections', () => {
+  test('a trapezoid too narrow for its depth still holds water, inset from the depth it reaches', () => {
+    // Review round 2 input: 1 m wide, 8 m deep, banks at 10:1. The V reaches
+    // only 0.05 m, so an inset taken from the authored 8 m left no water.
+    const field = terrain()
+    const sourceSite = site(field, RECTANGULAR_BOUNDARY)
+    const node = RiverNode.parse({
+      ...river([
+        [-8, 0],
+        [8, 0],
+      ]),
+      width: 1,
+      depth: 8,
+      flow: 'downhill',
+      section: { shape: 'trapezoid', bankSlope: 10, bendAsymmetry: 0, bermM: 0, blendM: 2 },
+    })
+    const plan = planRiver(field, node, RECTANGULAR_BOUNDARY)
+    expect(plan?.facts.depthShortfallM).toBeCloseTo(7.95, 6)
+    const rebuilt = rebuildRiverTerrain(sourceSite, [node])
+    const carvedSite = SiteNode.parse({ ...sourceSite, terrain: rebuilt.terrainData, metadata: rebuilt.metadata })
+
+    const surface = buildRiverSurface(node, carvedSite, rebuilt.terrain, field)
+
+    expect(surface).not.toBeNull()
+    const centreWaterY = plan?.samples[plan.path.authoredStartIndex + 1]?.waterY ?? Number.NaN
+    expect(centreWaterY).toBeGreaterThan(surfaceHeightAt(rebuilt.terrain, -6, 0))
   })
 })

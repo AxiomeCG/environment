@@ -2,7 +2,16 @@
 
 import { create } from 'zustand'
 import type { PondShoreline, WaterQuality } from '../pond/schema'
-import type { RiverFlowDirection, RiverNode, RiverOutlet, RiverPoint, RiverSource } from './schema'
+import type {
+  RiverEnds,
+  RiverFlowDirection,
+  RiverFlowMode,
+  RiverNode,
+  RiverOutlet,
+  RiverPoint,
+  RiverSection,
+  RiverSource,
+} from './schema'
 
 export type RiverSettings = {
   width: number
@@ -13,6 +22,10 @@ export type RiverSettings = {
   flowSpeed: number
   quality: WaterQuality
   shoreline: PondShoreline
+  flow: RiverFlowMode
+  maxSlopePct: number
+  section: RiverSection
+  ends: RiverEnds
 }
 
 export type RiverDraft = {
@@ -48,6 +61,29 @@ export const DEFAULT_RIVER_SETTINGS: Readonly<RiverSettings> = {
   flowSpeed: 0.6,
   quality: 'clear',
   shoreline: 'soft',
+  // New rivers get the solved downhill profile; pre-v3 rivers keep as-drawn.
+  flow: 'downhill',
+  maxSlopePct: 2,
+  section: { shape: 'curved', bankSlope: 2, bendAsymmetry: 0, bermM: 0, blendM: 2 },
+  ends: { start: 'rounded', end: 'rounded' },
+}
+
+/** The authoring settings carried by a river or by the store's defaults. */
+export function riverSettingsOf(source: RiverSettings): RiverSettings {
+  return {
+    width: source.width,
+    depth: source.depth,
+    source: source.source,
+    outlet: source.outlet,
+    flowDirection: source.flowDirection,
+    flowSpeed: source.flowSpeed,
+    quality: source.quality,
+    shoreline: source.shoreline,
+    flow: source.flow,
+    maxSlopePct: source.maxSlopePct,
+    section: source.section,
+    ends: source.ends,
+  }
 }
 
 export const useRiverStore = create<RiverStore>((set, get) => ({
@@ -98,17 +134,7 @@ export const useRiverStore = create<RiverStore>((set, get) => ({
     }),
   setPreviewRiver: (previewRiver) => set({ previewRiver }),
   setFeedback: (feedback) => set({ feedback }),
-  adoptRiverSettings: (river) =>
-    set({
-      width: river.width,
-      depth: river.depth,
-      source: river.source,
-      outlet: river.outlet,
-      flowDirection: river.flowDirection,
-      flowSpeed: river.flowSpeed,
-      quality: river.quality,
-      shoreline: river.shoreline,
-    }),
+  adoptRiverSettings: (river) => set(riverSettingsOf(river)),
   cancelRiverInteraction: () =>
     set({
       draft: null,

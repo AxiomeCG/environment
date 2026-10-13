@@ -6,14 +6,17 @@ import {
   type SiteNode,
 } from '@pascal-app/core'
 import type { PondShoreline, WaterQuality } from '../pond/schema'
-import { rebuildRiverTerrain } from './terrain'
+import { planRiver, rebuildRiverTerrain, riverSourceTerrain } from './terrain'
 import {
   RIVER_KIND,
   RiverNode as RiverNodeSchema,
+  type RiverEnds,
   type RiverFlowDirection,
+  type RiverFlowMode,
   type RiverNode,
   type RiverOutlet,
   type RiverPoint,
+  type RiverSection,
   type RiverSource,
 } from './schema'
 
@@ -36,12 +39,18 @@ export type RiverParameters = {
   points: readonly RiverPoint[]
   width: number
   depth: number
+  pointWidths: readonly (number | null)[]
+  pointDepths: readonly (number | null)[]
   source: RiverSource
   outlet: RiverOutlet
   flowDirection: RiverFlowDirection
   flowSpeed: number
   quality: WaterQuality
   shoreline: PondShoreline
+  flow: RiverFlowMode
+  maxSlopePct: number
+  section: RiverSection
+  ends: RiverEnds
 }
 
 export type RiverActionResult = {
@@ -130,6 +139,11 @@ function validatePoints(points: readonly RiverPoint[]): string | null {
   return null
 }
 
+/** The reason this river cannot be built on its Site, as planned for the carve. */
+function planRefusal(site: SiteNode, river: RiverNode): string | null {
+  return planRiver(riverSourceTerrain(site), river, site.polygon.points)?.refusal?.message ?? null
+}
+
 function siteForMutation(nodes: Readonly<Record<AnyNodeId, AnyNode>>, siteId: string): SiteNode | null {
   const node = nodeAt(nodes, siteId)
   return node?.type === 'site' ? (node as SiteNode) : null
@@ -168,6 +182,8 @@ export function createRiver(
   if (!parsed.success)
     return { ok: false, message: 'River settings are outside their allowed range.' }
   const river = parsed.data
+  const refusal = planRefusal(site, river)
+  if (refusal) return { ok: false, message: refusal }
   const rivers = [...riversForSite(nodes, site.id), river]
   applyRiverChanges(scene, {
     create: [
@@ -213,12 +229,23 @@ export function updateRiver(
     patch.points !== undefined ||
     patch.width !== undefined ||
     patch.depth !== undefined ||
+    patch.pointWidths !== undefined ||
+    patch.pointDepths !== undefined ||
     patch.source !== undefined ||
-    patch.outlet !== undefined
+    patch.outlet !== undefined ||
+    patch.flow !== undefined ||
+    patch.maxSlopePct !== undefined ||
+    patch.section !== undefined ||
+    patch.ends !== undefined
+  // Appearance-only edits (speed, direction, quality, shoreline) are accepted
+  // even on a river the planner refuses: they change neither its carve nor
+  // its refusal, and refusing them would only get in the way while it is fixed.
   if (!excavationChanged) {
     applyRiverChanges(scene, { update: [riverUpdate] })
     return { ok: true, message: 'River updated.', river }
   }
+  const refusal = planRefusal(site, river)
+  if (refusal) return { ok: false, message: refusal, river: current }
   const rivers = riversForSite(nodes, site.id).map((candidate) =>
     candidate.id === river.id ? river : candidate,
   )
@@ -255,6 +282,12 @@ function sameRiver(left: RiverNode, right: RiverNode): boolean {
     left.flowSpeed === right.flowSpeed &&
     left.quality === right.quality &&
     left.shoreline === right.shoreline &&
+    left.flow === right.flow &&
+    left.maxSlopePct === right.maxSlopePct &&
+    JSON.stringify(left.pointWidths) === JSON.stringify(right.pointWidths) &&
+    JSON.stringify(left.pointDepths) === JSON.stringify(right.pointDepths) &&
+    JSON.stringify(left.section) === JSON.stringify(right.section) &&
+    JSON.stringify(left.ends) === JSON.stringify(right.ends) &&
     left.points.length === right.points.length &&
     left.points.every(
       (point, index) =>

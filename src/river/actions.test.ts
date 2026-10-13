@@ -100,12 +100,18 @@ function mutableScene(site: SiteNodeValue) {
 const DEFAULTS = {
   width: 4,
   depth: 1,
+  pointWidths: [],
+  pointDepths: [],
   source: 'rounded' as const,
   outlet: 'rounded' as const,
   flowDirection: 'forward' as const,
   flowSpeed: 0.6,
   quality: 'clear' as const,
   shoreline: 'soft' as const,
+  flow: 'as_drawn' as const,
+  maxSlopePct: 2,
+  section: { shape: 'curved' as const, bankSlope: 2, bendAsymmetry: 0, bermM: 0, blendM: 2 },
+  ends: { start: 'rounded' as const, end: 'rounded' as const },
 }
 
 describe('river authoring scene actions', () => {
@@ -222,4 +228,116 @@ describe('river authoring scene actions', () => {
     expect(result.message).toBe('A river can contain at most 128 points.')
     expect(commits).toEqual([])
   })
+})
+
+describe('downhill rivers that meet themselves', () => {
+  // A path that crosses itself at (8, 8): the first reach passes there early,
+  // the last reach passes there again after running down to x = 14.
+  const crossing = [
+    [2, 2],
+    [14, 14],
+    [2, 14],
+    [14, 2],
+  ] as const
+
+  function siteFallingTowardPositiveX() {
+    const terrain = createTerrainField({ origin: [0, 0], spacing: 1, cols: 17, rows: 17, step: 0.01 })
+    for (let row = 0; row < terrain.rows; row += 1) {
+      for (let col = 0; col < terrain.cols; col += 1) {
+        terrain.heights[row * terrain.cols + col] = Math.round((2 - 0.1 * col) / terrain.step)
+      }
+    }
+    return SiteNode.parse({ ...flatSite(), terrain: encodeTerrainField(terrain) })
+  }
+
+  test('refuses a downhill crossing whose reaches would meet at two water levels', () => {
+    const { commits, scene } = mutableScene(siteFallingTowardPositiveX())
+
+    const result = createRiver(scene, SITE_ID, { ...DEFAULTS, flow: 'downhill', points: crossing })
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('cross')
+    expect(commits).toEqual([])
+  })
+
+  test('accepts a downhill crossing on level ground, where both reaches share one level', () => {
+    const { commits, scene } = mutableScene(flatSite())
+
+    const result = createRiver(scene, SITE_ID, { ...DEFAULTS, flow: 'downhill', points: crossing })
+
+    expect(result.ok).toBe(true)
+    expect(commits).toHaveLength(1)
+  })
+
+  test('refuses switching an as-drawn crossing to downhill on sloping ground', () => {
+    const { commits, scene } = mutableScene(siteFallingTowardPositiveX())
+    const created = createRiver(scene, SITE_ID, { ...DEFAULTS, points: crossing })
+    if (!created.river) throw new Error('expected the as-drawn crossing to be created')
+
+    const switched = updateRiver(scene, created.river.id, { flow: 'downhill' })
+
+    expect(switched.ok).toBe(false)
+    expect(switched.message).toContain('cross')
+    expect(commits).toHaveLength(1)
+  })
+
+  test('accepts appearance-only edits on a river refused for meeting itself, without carving it', () => {
+    // A river can become refused outside the actions (a generic edit, an
+    // old save); its speed or water quality can still be changed, since
+    // neither touches the carve or the refusal.
+    const { commits, nodes, scene } = mutableScene(siteFallingTowardPositiveX())
+    const created = createRiver(scene, SITE_ID, { ...DEFAULTS, points: crossing })
+    if (!created.river) throw new Error('expected the as-drawn crossing to be created')
+    nodes[created.river.id as AnyNodeId] = { ...created.river, flow: 'downhill' } as unknown as AnyNode
+    const siteBefore = nodes[SITE_ID as AnyNodeId]
+
+    const sped = updateRiver(scene, created.river.id, { flowSpeed: 1 })
+
+    expect(sped.ok).toBe(true)
+    expect(commits).toHaveLength(2)
+    expect(commits[1]?.update?.map((update) => String(update.id))).toEqual([created.river.id])
+    expect(nodes[SITE_ID as AnyNodeId]).toBe(siteBefore)
+  })
+})
+
+test('refuses a narrow downhill crossing that falls between coarse samples', () => {
+  // Review round 2 input: a 512 m lot sampled every 8 m, ground falling 2 %
+  // toward +x, and a 1 m wide river crossing itself at the origin between
+  // samples about 6 m apart.
+  const terrain = createTerrainField({ origin: [-256, -256], spacing: 8, cols: 65, rows: 65, step: 0.01 })
+  for (let row = 0; row < terrain.rows; row += 1) {
+    for (let col = 0; col < terrain.cols; col += 1) {
+      const x = terrain.origin[0] + col * terrain.spacing
+      terrain.heights[row * terrain.cols + col] = Math.round((10 - 0.02 * x) / terrain.step)
+    }
+  }
+  const coarseLot = SiteNode.parse({
+    ...flatSite(),
+    polygon: {
+      type: 'polygon',
+      points: [
+        [-256, -256],
+        [256, -256],
+        [256, 256],
+        [-256, 256],
+      ],
+    },
+    terrain: encodeTerrainField(terrain),
+  })
+  const { commits, scene } = mutableScene(coarseLot)
+
+  const result = createRiver(scene, SITE_ID, {
+    ...DEFAULTS,
+    flow: 'downhill',
+    width: 1,
+    points: [
+      [-200, -200],
+      [200, 200],
+      [-200, 200],
+      [200, -200],
+    ],
+  })
+
+  expect(result.ok).toBe(false)
+  expect(commits).toEqual([])
 })

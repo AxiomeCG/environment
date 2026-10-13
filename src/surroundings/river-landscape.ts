@@ -2,13 +2,14 @@ import { terrainFieldOf, type SiteNode } from '@pascal-app/core'
 import { ShapeUtils, Vector2 } from 'three'
 import { POND_WATER_APPEARANCE } from '../pond/appearance'
 import type { WaterQuality } from '../pond/schema'
+import { riverFlowMaterialDirection } from '../river/geometry'
 import type { RiverNode } from '../river/schema'
 import {
+  planRiver,
   riverCrossSection,
   riverSurfaceInset,
   riverTerrainBaseline,
-  sampleRiverPath,
-  type SampledRiverPath,
+  type RiverPlan,
 } from '../river/terrain'
 import type { ExteriorTerrainSectionAddress, ExteriorTerrainSampler } from './exterior-terrain'
 import {
@@ -144,12 +145,12 @@ export function createRiverLandscape(
     .sort((left, right) => String(left.id).localeCompare(String(right.id)))
 
   for (const river of orderedRivers) {
-    const path = sampleRiverPath(baseline, river, boundary)
-    if (!path) continue
+    const plan = planRiver(baseline, river, boundary)
+    if (!plan || plan.refusal) continue
     if (river.source === 'mountain') {
       const channel = buildMountainChannel(
         river,
-        path,
+        plan,
         terrain,
         baseline.spacing * Math.SQRT2,
         boundary,
@@ -162,7 +163,7 @@ export function createRiverLandscape(
     if (river.outlet === 'sea' && region.coast) {
       const channel = buildSeaChannel(
         river,
-        path,
+        plan,
         terrain,
         baseline.spacing * Math.SQRT2,
         boundary,
@@ -337,7 +338,7 @@ function emptyLandscape(terrain: ExteriorTerrainSampler): RiverLandscape {
 
 function buildMountainChannel(
   river: RiverNode,
-  path: SampledRiverPath,
+  plan: RiverPlan,
   terrain: ExteriorTerrainSampler,
   nativeTerrainSupport: number,
   boundary: readonly Point2[],
@@ -345,9 +346,11 @@ function buildMountainChannel(
   protectedRadius: number,
   region: LandscapeRegion,
 ): PendingChannel | null {
-  const seam = path.points[0]
-  const next = path.points[1]
-  if (!seam || !next || distanceToBoundary(boundary, seam[0], seam[2]) > 0.08) return null
+  const seam = plan.path.points[0]
+  const next = plan.path.points[1]
+  const seamSample = plan.samples[0]
+  if (!seam || !next || !seamSample || distanceToBoundary(boundary, seam[0], seam[2]) > 0.08)
+    return null
   const outward = normalized(seam[0] - next[0], seam[2] - next[2])
   const target = mountainTarget(terrain, center, protectedRadius, outward, region)
   if (!target) return null
@@ -361,8 +364,8 @@ function buildMountainChannel(
     riverRouteSeed(river, region, 'mountain'),
   )
   if (route.length < 2) return null
-  const seamWater = seam[1] - riverSurfaceInset(river.depth) + WATER_CLEARANCE
-  const inset = riverSurfaceInset(river.depth)
+  const seamWater = seamSample.waterY + WATER_CLEARANCE
+  const inset = riverSurfaceInset(seamSample.depthM)
   const routeDistances = cumulativeRouteDistances(route)
   const points: ChannelPoint[] = route.map((point, index) => {
     const amount = index / (route.length - 1)
@@ -370,14 +373,14 @@ function buildMountainChannel(
     const base = terrain.heightAt(point[0], point[1])
     const waterY = index === 0 ? seamWater : base - inset * sourceFade + WATER_CLEARANCE
     const tangent = index === 0 ? outward : routeTangent(route, index)
-    const halfWidth = river.width * 0.5 * mix(1, 0.18, smoothstep(0.72, 1, amount))
+    const halfWidth = seamSample.widthM * 0.5 * mix(1, 0.18, smoothstep(0.72, 1, amount))
     const seamResolution = smoothstep(0, RENDERED_TERRAIN_CELL_SIZE * 2, routeDistances[index]!)
     const profileSupport = mix(nativeTerrainSupport, RENDERED_TERRAIN_CELL_DIAGONAL, seamResolution)
     return {
       x: point[0],
       z: point[1],
       waterY,
-      bedReferenceY: index === 0 ? seam[1] : base,
+      bedReferenceY: index === 0 ? seamSample.channelTopY : base,
       halfWidth,
       profileHalfWidth: halfWidth,
       profileSupport,
@@ -391,12 +394,12 @@ function buildMountainChannel(
         ),
       ),
       samplingSafety: seamResolution,
-      depth: river.depth * mix(1, 0.08, smoothstep(0.72, 1, amount)),
+      depth: seamSample.depthM * mix(1, 0.08, smoothstep(0.72, 1, amount)),
       // Native first-to-last flow points from the mountain into the Site.
       flowX: -tangent[0],
       flowZ: -tangent[1],
       course: -routeDistances[index]!,
-      bankConform: 1 - smoothstep(0, 0.08, amount),
+      bankConform: seamBankConform(river, amount),
     }
   })
   return { river, points }
@@ -404,7 +407,7 @@ function buildMountainChannel(
 
 function buildSeaChannel(
   river: RiverNode,
-  path: SampledRiverPath,
+  plan: RiverPlan,
   terrain: ExteriorTerrainSampler,
   nativeTerrainSupport: number,
   boundary: readonly Point2[],
@@ -413,9 +416,16 @@ function buildSeaChannel(
   region: LandscapeRegion,
 ): PendingChannel | null {
   const coast = region.coast
-  const seam = path.points.at(-1)
-  const previous = path.points.at(-2)
-  if (!coast || !seam || !previous || distanceToBoundary(boundary, seam[0], seam[2]) > 0.08)
+  const seam = plan.path.points.at(-1)
+  const previous = plan.path.points.at(-2)
+  const seamSample = plan.samples.at(-1)
+  if (
+    !coast ||
+    !seam ||
+    !previous ||
+    !seamSample ||
+    distanceToBoundary(boundary, seam[0], seam[2]) > 0.08
+  )
     return null
   const outward = normalized(seam[0] - previous[0], seam[2] - previous[2])
   const coastDirection: Point2 = [Math.cos(coast.angle), Math.sin(coast.angle)]
@@ -433,21 +443,24 @@ function buildSeaChannel(
     riverRouteSeed(river, region, 'sea'),
   )
   if (completeRoute.length < 2) return null
-  const mouthIndex = firstOffshorePoint(completeRoute, terrain, river.depth)
+  const mouthIndex = firstOffshorePoint(completeRoute, terrain, seamSample.depthM)
   if (mouthIndex === null) return null
   const route = completeRoute.slice(0, mouthIndex + 1)
   if (route.length < 2) return null
-  const seamWater = seam[1] - riverSurfaceInset(river.depth) + WATER_CLEARANCE
-  const inset = riverSurfaceInset(river.depth)
+  const seamWater = seamSample.waterY + WATER_CLEARANCE
+  const inset = riverSurfaceInset(seamSample.depthM)
   const routeDistances = cumulativeRouteDistances(route)
-  const estuaryHalfWidth = Math.min(28, Math.max(river.width * 1.35, river.width * 0.5 + 5))
+  const estuaryHalfWidth = Math.min(
+    28,
+    Math.max(seamSample.widthM * 1.35, seamSample.widthM * 0.5 + 5),
+  )
   const points: ChannelPoint[] = route.map((point, index) => {
     const amount = index / (route.length - 1)
     const descent = smoothstep(0, 1, amount)
     const waterY = index === route.length - 1 ? SEA_LEVEL : mix(seamWater, SEA_LEVEL, descent)
     const tangent = index === 0 ? outward : routeTangent(route, index)
     const widthMix = smoothstep(0.18, 1, amount)
-    const halfWidth = mix(river.width * 0.5, estuaryHalfWidth, widthMix)
+    const halfWidth = mix(seamSample.widthM * 0.5, estuaryHalfWidth, widthMix)
     const seamResolution = smoothstep(0, RENDERED_TERRAIN_CELL_SIZE * 2, routeDistances[index]!)
     const profileSupport = mix(nativeTerrainSupport, RENDERED_TERRAIN_CELL_DIAGONAL, seamResolution)
     return {
@@ -468,14 +481,23 @@ function buildSeaChannel(
         ),
       ),
       samplingSafety: seamResolution,
-      depth: Math.max(river.depth, mix(river.depth, 1.6, descent)),
+      depth: Math.max(seamSample.depthM, mix(seamSample.depthM, 1.6, descent)),
       flowX: tangent[0],
       flowZ: tangent[1],
-      course: path.length + routeDistances[index]!,
-      bankConform: 1 - smoothstep(0, 0.08, amount),
+      course: plan.path.length + routeDistances[index]!,
+      bankConform: seamBankConform(river, amount),
     }
   })
   return { river, points }
+}
+
+/**
+ * How far the water near the seam hugs the bank ground. As-drawn water hugs
+ * it, matching the native ribbon; downhill water is level across its channel
+ * natively, so its continuation stays level too.
+ */
+function seamBankConform(river: RiverNode, amount: number): number {
+  return river.flow === 'downhill' ? 0 : 1 - smoothstep(0, 0.08, amount)
 }
 
 function mountainTarget(
@@ -778,7 +800,7 @@ function buildWaterBatches(
   const outside = exteriorClipTriangles(boundary, channels)
   for (const channel of channels) {
     const quality = waterQuality(channel.river.quality)
-    const direction = channel.river.flowDirection === 'reverse' ? -1 : 1
+    const direction = riverFlowMaterialDirection(channel.river)
     const speed = channel.river.flowSpeed
     const key = `${quality}:${speed}:${direction}`
     let builder = builders.get(key)

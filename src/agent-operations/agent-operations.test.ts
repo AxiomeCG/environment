@@ -3,6 +3,7 @@ import {
   encodeTerrainField,
   persistedTerrainFieldOf,
   SiteNode,
+  surfaceHeightAt,
   type AnyNode,
 } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
@@ -21,7 +22,14 @@ import { resolveRenderablePondProps } from '../pond/props'
 import { POND_KIND, PondNode, type PondNode as PondNodeValue } from '../pond/schema'
 import { RiverNode, type RiverNode as RiverNodeValue } from '../river/schema'
 import { buildRiverSurface } from '../river/geometry'
-import { rebuildRiverTerrain, riverTerrainBaseline, sampleRiverPath } from '../river/terrain'
+import {
+  planRiver,
+  RIVER_WATER_CLEARANCE,
+  rebuildRiverTerrain,
+  riverSourceTerrain,
+  riverTerrainBaseline,
+  sampleRiverPath,
+} from '../river/terrain'
 import { resolveGroundCoverPaint, resolveSurfacePaint } from '../paint-tiles/layers'
 import { surfaceMaterialWeightsAt, type SurfaceMaterialField } from '../surface-material/field'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
@@ -635,6 +643,107 @@ describe('read_environment', () => {
     const [facts] = runRead(nodes, {}).result.rivers as { lengthM: number }[]
     expect(facts?.lengthM).toBeCloseTo(course?.length ?? 0, 3)
     expect(facts?.lengthM).not.toBeCloseTo(20, 1)
+  })
+
+  test('reads a downhill river through its plan: length, ends, water and bed are the planner\'s', () => {
+    // Ground falling 10 % toward +x under a downhill river held at its 2 % maximum slope: the
+    // water runs on an embankment, so a ground-following reading would be far off.
+    const groundAt = (x: number) => 3 - 0.1 * x
+    const lot = terrainLot(17, 9, (heights) => {
+      for (let row = 0; row < 9; row += 1) {
+        for (let col = 0; col < 17; col += 1) heights[row * 17 + col] = Math.round(groundAt(col) / 0.01)
+      }
+    })
+    const uncarved = lot.site_terrain as SiteNode
+    const river = RiverNode.parse({
+      id: 'river_downhill',
+      parentId: uncarved.id,
+      points: [
+        [2, 4],
+        [14, 4],
+      ],
+      width: 2,
+      flow: 'downhill',
+      source: 'mountain',
+      outlet: 'sea',
+    })
+    const carved = rebuildRiverTerrain(uncarved, [river])
+    const site = SiteNode.parse({
+      ...uncarved,
+      terrain: carved.terrainData,
+      metadata: carved.metadata,
+      children: [river.id],
+    })
+    const nodes: Nodes = { [site.id]: site as AnyNode, [river.id]: river as unknown as AnyNode }
+    const plan = planRiver(riverSourceTerrain(site), river, site.polygon.points)
+    const upstream = plan?.samples[0]
+    const downstream = plan?.samples.at(-1)
+    if (!plan || !upstream || !downstream) throw new Error('expected a planned river')
+
+    const [facts] = runRead(nodes, {}).result.rivers as {
+      lengthM: number
+      flow: string
+      waterProfile: string
+      drawn: boolean
+      start: { atM: number[]; waterM: number; bedM: number }
+      end: { atM: number[]; waterM: number; bedM: number }
+      risesM: number
+    }[]
+
+    expect(facts).toMatchObject({ flow: 'forward', waterProfile: 'downhill', drawn: true })
+    expect(facts?.lengthM).toBeCloseTo(plan.path.length, 3)
+    expect(facts?.start.atM).toEqual([0, 4])
+    expect(facts?.end.atM).toEqual([16, 4])
+    expect(facts?.start.waterM).toBeCloseTo(upstream.waterY + RIVER_WATER_CLEARANCE, 3)
+    expect(facts?.end.waterM).toBeCloseTo(downstream.waterY + RIVER_WATER_CLEARANCE, 3)
+    expect(facts?.end.waterM ?? 0).toBeGreaterThan(groundAt(16) + 1)
+    // ... and the renderer draws that same water where the course enters the lot.
+    const drawn = buildRiverSurface(river, site)
+    const drawnAtEntry = new Set<number>()
+    for (let offset = 0; offset < (drawn?.positions.length ?? 0); offset += 3) {
+      if (Math.abs(drawn?.positions[offset] ?? 1) > 1e-6) continue
+      drawnAtEntry.add(Math.round((drawn?.positions[offset + 1] ?? 0) * 1e3) / 1e3)
+    }
+    expect([...drawnAtEntry]).toEqual([facts?.start.waterM ?? Number.NaN])
+    // The bed is exactly the ground the planner's carve left at each end, under the water. (It
+    // is not the end station's own channel bed: the carve evaluates the section up to one
+    // terrain-triangle reach inside the authored ends, a few centimetres apart on this slope.)
+    const carvedAt = ([x, z]: number[]) => surfaceHeightAt(carved.terrain, x ?? 0, z ?? 0)
+    expect(facts?.start.bedM).toBeCloseTo(carvedAt(facts?.start.atM ?? []), 3)
+    expect(facts?.end.bedM).toBeCloseTo(carvedAt(facts?.end.atM ?? []), 3)
+    expect(facts?.start.bedM ?? 0).toBeLessThan(facts?.start.waterM ?? 0)
+    expect(facts?.end.bedM ?? 0).toBeLessThan(facts?.end.waterM ?? 0)
+    expect(facts?.risesM).toBe(0)
+  })
+
+  test('reports a river the planner refuses as not built, with the reason', () => {
+    // A downhill path crossing itself on ground falling 10 % toward +x.
+    const lot = terrainLot(17, 17, (heights) => {
+      for (let row = 0; row < 17; row += 1) {
+        for (let col = 0; col < 17; col += 1) heights[row * 17 + col] = Math.round((2 - 0.1 * col) / 0.01)
+      }
+    })
+    const site = lot.site_terrain as SiteNode
+    const crossing = RiverNode.parse({
+      id: 'river_crossing',
+      parentId: site.id,
+      points: [
+        [2, 2],
+        [14, 14],
+        [2, 14],
+        [14, 2],
+      ],
+      flow: 'downhill',
+    })
+    const nodes: Nodes = {
+      [site.id]: { ...site, children: [crossing.id] } as AnyNode,
+      [crossing.id]: crossing as unknown as AnyNode,
+    }
+
+    const [facts] = runRead(nodes, {}).result.rivers as { drawn: boolean; notBuilt?: string }[]
+
+    expect(facts?.drawn).toBe(false)
+    expect(facts?.notBuilt).toContain('cannot cross or touch itself')
   })
 
   test('takes a flat bottom of many cells as one hollow, so a second hollow is still found', () => {

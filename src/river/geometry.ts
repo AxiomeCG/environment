@@ -23,11 +23,11 @@ import { buildPondShoreGeometry, createPondShoreDistances } from '../pond/shorel
 import { createWaterMaterial, type WaterMaterialOptions } from '../surroundings/water-material'
 import type { RiverNode } from './schema'
 import {
+  planRiver,
   RIVER_WATER_CLEARANCE,
-  riverPathWidthScale,
   riverTerrainBaseline,
   riverWaterSourceHeight,
-  sampleRiverPath,
+  type RiverPlan,
   type SampledRiverPath,
 } from './terrain'
 
@@ -92,12 +92,13 @@ export function buildRiverSurface(
   const terrain = carvedTerrain ?? terrainFieldOf(site)
   if (!terrain) return null
   const baseline = baselineTerrain ?? riverTerrainBaseline(site) ?? terrain
-  const sampledPath = sampleRiverPath(baseline, node, site.polygon.points)
-  if (!sampledPath) return null
+  const plan = planRiver(baseline, node, site.polygon.points)
+  if (!plan || plan.refusal) return null
+  const sampledPath = plan.path
   const boundaryTriangles = triangulateSiteBoundary(site.polygon.points)
   if (boundaryTriangles.length === 0) return null
 
-  const rows = buildRibbonRows(node, sampledPath, baseline, terrain)
+  const rows = buildRibbonRows(node, plan, baseline, terrain)
   if (rows.length < 2) return null
   const positions: number[] = []
   const depths: number[] = []
@@ -195,6 +196,16 @@ export function buildRiverSurface(
     sampledPath,
     triangleBudget: RIVER_MAX_WATER_TRIANGLES,
   }
+}
+
+/**
+ * Direction the water material advects along `waterCourse`. A downhill
+ * river's course already runs downstream, so its current always runs forward;
+ * the flow-direction flag only steers as-drawn rivers.
+ */
+export function riverFlowMaterialDirection(node: RiverNode): 1 | -1 {
+  if (node.flow === 'downhill') return 1
+  return node.flowDirection === 'reverse' ? -1 : 1
 }
 
 export function buildRiverGeometry(node: RiverNode, context: GeometryContext): Group {
@@ -363,13 +374,20 @@ export function createRiverSurfaceGeometry(
 
 function buildRibbonRows(
   node: RiverNode,
-  path: SampledRiverPath,
+  plan: RiverPlan,
   baseline: TerrainField,
   terrain: TerrainField,
 ): SurfaceVertex[][] {
+  const path = plan.path
   const rows: SurfaceVertex[][] = []
+  // In downhill mode the current runs from the solved upstream end, whichever
+  // way the path was authored: tangents and course both point downstream.
+  // As-drawn rivers keep the authored direction (see riverFlowMaterialDirection).
+  const drawnUpstream = node.flow === 'downhill' && !plan.upstreamAtStart
+  const flowSign = drawnUpstream ? -1 : 1
   for (let index = 0; index < path.points.length; index += 1) {
     const point = path.points[index]!
+    const sample = plan.samples[index]!
     const before = path.points[Math.max(0, index - 1)]!
     const after = path.points[Math.min(path.points.length - 1, index + 1)]!
     let tangentX = after[0] - before[0]
@@ -380,22 +398,23 @@ function buildRibbonRows(
     tangentZ /= tangentLength
     const normalX = -tangentZ
     const normalZ = tangentX
-    const halfWidth = node.width * 0.5 * riverPathWidthScale(path, node, path.distances[index]!)
+    const halfWidth = sample.widthM * 0.5
+    const course = drawnUpstream ? path.length - sample.distanceM : sample.distanceM
     rows.push(
       LATERAL_FRACTIONS.map((fraction): SurfaceVertex => {
         const x = point[0] + normalX * halfWidth * fraction
         const z = point[2] + normalZ * halfWidth * fraction
-        const sourceHeight = riverWaterSourceHeight(point, node, baseline, x, z)
+        const sourceHeight = riverWaterSourceHeight(node, sample, baseline, x, z)
         const bedHeight = surfaceHeightAt(terrain, x, z)
         return {
           x,
           y: sourceHeight + RIVER_WATER_CLEARANCE,
           z,
           depth: sourceHeight - bedHeight,
-          course: path.distances[index]!,
+          course,
           lateral: halfWidth * fraction,
-          flowX: tangentX,
-          flowZ: tangentZ,
+          flowX: tangentX * flowSign,
+          flowZ: tangentZ * flowSign,
         }
       }),
     )
@@ -573,7 +592,7 @@ function riverWaterMaterialOptions(
     foamStrength: appearance.foamStrength,
     flow: {
       speed: node.flowSpeed,
-      direction: node.flowDirection === 'reverse' ? -1 : 1,
+      direction: riverFlowMaterialDirection(node),
     },
     depthRange: appearance.depthRange,
     roughness: appearance.roughness,

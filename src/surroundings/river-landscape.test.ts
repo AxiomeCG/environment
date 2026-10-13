@@ -7,7 +7,7 @@ import {
 } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
 import { RiverNode, type RiverNode as RiverNodeType } from '../river/schema'
-import { riverSurfaceInset, sampleRiverPath } from '../river/terrain'
+import { planRiver, riverSurfaceInset, sampleRiverPath } from '../river/terrain'
 import {
   createRenderedTerrainSampler,
   exteriorTerrainSectionAddressAt,
@@ -454,5 +454,46 @@ describe('procedural exterior river landscape', () => {
     )
     expect(disconnected.sampler).toBe(source)
     expect(disconnected.channelCount).toBe(0)
+  })
+})
+
+describe('downhill sea continuation', () => {
+  test('starts at the solved native water level, so the seam has no step', () => {
+    // Review input: a two-point downhill river with a 2 % maximum slope on
+    // ground falling 10 % toward the sea. The solved water stays embanked
+    // high above the ground at the seam (x = 10).
+    const groundAt = (x: number) => 2 - 0.1 * (x + 10)
+    const field = createTerrainField({ origin: [-16, -16], spacing: 0.5, cols: 65, rows: 65, step: 0.01 })
+    for (let row = 0; row < field.rows; row += 1) {
+      for (let col = 0; col < field.cols; col += 1) {
+        const x = field.origin[0] + col * field.spacing
+        field.heights[row * field.cols + col] = Math.round(groundAt(x) / field.step)
+      }
+    }
+    const slopingSite = SiteNode.parse({ ...site(), terrain: encodeTerrainField(field) })
+    const node = river({ source: 'rounded', depth: 1, flow: 'downhill', maxSlopePct: 2 })
+    const exterior: ExteriorTerrainSampler = {
+      heightAt: (x) => groundAt(x) - (x > 40 ? Math.min(12, (x - 40) * 0.1) : 0),
+      normalAt: () => [0, 1, 0],
+    }
+    const plan = planRiver(field, node, slopingSite.polygon.points)
+    const seamWaterY = plan?.samples.at(-1)?.waterY
+    if (seamWaterY === undefined) throw new Error('expected a planned river')
+    expect(seamWaterY - groundAt(10)).toBeGreaterThan(1)
+
+    const landscape = createRiverLandscape(slopingSite, [node], exterior, regionalFixture())
+
+    const positions = landscape.waters.flatMap((batch) => Array.from(batch.geometry.positions))
+    const seamHeights: number[] = []
+    for (let offset = 0; offset < positions.length; offset += 3) {
+      const x = positions[offset] ?? 0
+      const z = positions[offset + 2] ?? 0
+      if (Math.abs(x - 10) < 1e-6 && Math.abs(z) <= node.width / 2) {
+        seamHeights.push(positions[offset + 1] ?? 0)
+      }
+    }
+    expect(seamHeights.length).toBeGreaterThan(0)
+    // WATER_CLEARANCE lifts every rendered water surface 12 mm above its level.
+    for (const height of seamHeights) expect(height).toBeCloseTo(seamWaterY + 0.012, 6)
   })
 })

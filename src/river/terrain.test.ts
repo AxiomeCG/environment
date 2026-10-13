@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   applyHeightPatch,
   createTerrainField,
+  decodeTerrainField,
   encodeTerrainField,
   SiteNode,
   surfaceHeightAt,
@@ -13,9 +14,15 @@ import {
 import { riverDeleteTerrainUpdates } from './definition'
 import { RiverNode, type RiverNode as RiverNodeType } from './schema'
 import {
+  planRiver,
   rebuildRiverTerrain,
   riverTerrainBaseline,
+  riverTerrainIsApplied,
+  riverSurfaceInset,
+  riverTerrainPayloadBytes,
   sampleRiverPath,
+  type RiverPlan,
+  type RiverPlanSample,
   type RiverTerrainResult,
 } from './terrain'
 
@@ -58,7 +65,22 @@ function siteWith(terrain = flatTerrain()): SiteNodeType {
 
 function river(
   id: string,
-  overrides: Partial<Pick<RiverNodeType, 'points' | 'width' | 'depth' | 'source' | 'outlet'>> = {},
+  overrides: Partial<
+    Pick<
+      RiverNodeType,
+      | 'points'
+      | 'width'
+      | 'depth'
+      | 'pointWidths'
+      | 'pointDepths'
+      | 'source'
+      | 'outlet'
+      | 'flow'
+      | 'maxSlopePct'
+      | 'section'
+      | 'ends'
+    >
+  > = {},
 ): RiverNodeType {
   return RiverNode.parse({
     id,
@@ -74,12 +96,18 @@ function river(
     ],
     width: overrides.width ?? 4,
     depth: overrides.depth ?? 1,
+    ...(overrides.pointWidths ? { pointWidths: overrides.pointWidths } : {}),
+    ...(overrides.pointDepths ? { pointDepths: overrides.pointDepths } : {}),
     source: overrides.source ?? 'rounded',
     outlet: overrides.outlet ?? 'rounded',
     flowDirection: 'forward',
     flowSpeed: 0.6,
     quality: 'clear',
     shoreline: 'soft',
+    ...(overrides.flow ? { flow: overrides.flow } : {}),
+    ...(overrides.maxSlopePct !== undefined ? { maxSlopePct: overrides.maxSlopePct } : {}),
+    ...(overrides.section ? { section: overrides.section } : {}),
+    ...(overrides.ends ? { ends: overrides.ends } : {}),
   })
 }
 
@@ -325,5 +353,343 @@ describe('river terrain reconciliation', () => {
     expect(surfaceHeightAt(rebuildRiverTerrain(restored, []).terrain, 0, -3)).toBeCloseTo(0, 6)
     expect(surfaceHeightAt(rebuildRiverTerrain(restored, []).terrain, 0, 3)).toBeCloseTo(0, 6)
     expect(restored.metadata).toEqual({ retained: 'site-metadata' })
+  })
+})
+
+describe('river v3 model', () => {
+  // Carving such a river exactly as the pre-v3 carver did is proven against
+  // that carver itself in legacy-carve.test.ts.
+  test('a pre-v3 river parses with as-drawn defaults', () => {
+    const legacy = RiverNode.parse({
+      id: 'river_legacy',
+      type: 'environment:river',
+      object: 'node',
+      parentId: 'site_river_terrain',
+      visible: true,
+      metadata: {},
+      name: 'River',
+      points: [
+        [-8, 0],
+        [8, 0],
+      ],
+      width: 4,
+      depth: 1,
+      source: 'rounded',
+      outlet: 'rounded',
+      flowDirection: 'forward',
+      flowSpeed: 0.6,
+      quality: 'clear',
+      shoreline: 'soft',
+    })
+    expect(legacy.flow).toBe('as_drawn')
+    expect(legacy.pointWidths).toEqual([])
+    expect(legacy.section.shape).toBe('curved')
+    expect(legacy.ends).toEqual({ start: 'rounded', end: 'rounded' })
+  })
+
+  test('per-point width and depth shape the channel along the path', () => {
+    const site = siteWith()
+    const node = river('river_per_point', {
+      points: [
+        [-8, 0],
+        [0, 0],
+        [8, 0],
+      ],
+      width: 2,
+      depth: 0.5,
+      pointWidths: [2, 10, 2],
+      pointDepths: [0.5, 3, 0.5],
+    })
+    const rebuilt = rebuildRiverTerrain(site, [node])
+    // Deep and wide in the middle, shallow and narrow near the ends.
+    expect(surfaceHeightAt(rebuilt.terrain, 0, 0)).toBeLessThan(-2.5)
+    expect(surfaceHeightAt(rebuilt.terrain, 0, 4)).toBeLessThan(-0.1)
+    expect(surfaceHeightAt(rebuilt.terrain, -7.5, 0)).toBeGreaterThan(-1.5)
+    expect(surfaceHeightAt(rebuilt.terrain, -7.5, 0)).toBeGreaterThan(
+      surfaceHeightAt(rebuilt.terrain, 0, 0) + 1,
+    )
+    expect(surfaceHeightAt(rebuilt.terrain, -7.5, 2.5)).toBeCloseTo(0, 6)
+  })
+
+  test('downhill water cuts through a ridge and fills across a dip', () => {
+    const groundAt = (x: number) =>
+      2 - 0.1 * (x + 8) + (Math.abs(x) < 2 ? 2 : 0) + (x >= 4 && x <= 6 ? -2 : 0)
+    const terrain = terrainFromFunction(groundAt)
+    const site = siteWith(terrain)
+    const node = river('river_downhill', { flow: 'downhill', maxSlopePct: 2, depth: 1 })
+    const plan = planRiver(terrain, node, site.polygon.points)!
+    expect(plan.upstreamAtStart).toBe(true)
+    for (let index = 1; index < plan.samples.length; index += 1) {
+      expect(plan.samples[index]!.waterY).toBeLessThanOrEqual(plan.samples[index - 1]!.waterY + 1e-9)
+    }
+    expect(plan.facts.cutVolumeM3).toBeGreaterThan(0)
+    expect(plan.facts.fillVolumeM3).toBeGreaterThan(0)
+    expect(plan.facts.embankedLengthM).toBeGreaterThan(0)
+    expect(plan.facts.maxEmbankmentM).toBeGreaterThan(0.5)
+    expect(plan.facts.lengthM).toBeCloseTo(16, 0)
+
+    const rebuilt = rebuildRiverTerrain(site, [node])
+    // The ridge is cut well below its crest; the dip is filled above its floor.
+    expect(surfaceHeightAt(rebuilt.terrain, 0, 0)).toBeLessThan(groundAt(0) - 1.5)
+    expect(surfaceHeightAt(rebuilt.terrain, 5, 0)).toBeGreaterThan(groundAt(5) + 0.3)
+  })
+
+  test('spring shallows the start and fan widens and shallows the end', () => {
+    const terrain = flatTerrain()
+    const site = siteWith(terrain)
+    const node = river('river_ends', {
+      points: [
+        [-4, 0],
+        [4, 0],
+      ],
+      ends: { start: 'spring', end: 'fan' },
+    })
+    const plan = planRiver(terrain, node, site.polygon.points)!
+    const authoredStart = plan.samples.find(
+      (sample) => sample.distanceM >= plan.path.authoredStartDistance,
+    )!
+    expect(plan.samples[0]!.depthM).toBeLessThan(authoredStart.depthM)
+    expect(plan.samples.at(-1)!.widthM).toBeGreaterThan(node.width)
+    expect(plan.samples.at(-1)!.depthM).toBeLessThan(node.depth)
+  })
+
+  test('an applied carve is recognised, so reconciliation writes nothing again', () => {
+    const site = siteWith()
+    const node = river('river_applied', { flow: 'downhill' })
+    const applied = rebuildRiverTerrain(site, [node])
+    const appliedSite = siteAfter(site, applied)
+    expect(riverTerrainIsApplied(appliedSite, [node])).toBe(true)
+    expect(riverTerrainIsApplied(site, [node])).toBe(false)
+    const revised = river('river_applied', { flow: 'downhill', depth: 2 })
+    expect(riverTerrainIsApplied(appliedSite, [revised])).toBe(false)
+    expect(riverTerrainPayloadBytes(applied)).toBeGreaterThan(1_000)
+  })
+})
+
+function terrainFromFunction(heightAtX: (x: number) => number): TerrainField {
+  const terrain = createTerrainField({
+    origin: [-10, -10],
+    spacing: 0.5,
+    cols: 41,
+    rows: 41,
+    step: 0.01,
+  })
+  const heights = new Int16Array(terrain.heights.length)
+  for (let row = 0; row < terrain.rows; row += 1) {
+    for (let col = 0; col < terrain.cols; col += 1) {
+      const x = terrain.origin[0] + col * terrain.spacing
+      heights[row * terrain.cols + col] = Math.round(heightAtX(x) / terrain.step)
+    }
+  }
+  return { ...terrain, heights }
+}
+
+function sampleNearest(plan: RiverPlan, distanceM: number): RiverPlanSample {
+  return plan.samples.reduce((best, sample) =>
+    Math.abs(sample.distanceM - distanceM) < Math.abs(best.distanceM - distanceM) ? sample : best,
+  )
+}
+
+describe('per-point sizes keep their spline span', () => {
+  // Sol's review input: the path crosses itself, so a spatial nearest-segment
+  // lookup confuses the narrow first reach with the wide last one.
+  const crossingPoints: [number, number][] = [
+    [-8, -8],
+    [8, 8],
+    [-8, 8],
+    [8, -8],
+  ]
+
+  test('a self-crossing river keeps each reach on its own width', () => {
+    const terrain = flatTerrain()
+    const node = river('river_crossing', {
+      points: crossingPoints,
+      pointWidths: [2, 2, 12, 12],
+      pointDepths: [1, 1, 4, 4],
+    })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    // Stations from the review: 12.17 m lies on the first (narrow) reach near
+    // the crossing, 52.42 m on the last (wide) reach.
+    expect(sampleNearest(plan, 12.17).widthM).toBeCloseTo(2, 6)
+    expect(sampleNearest(plan, 52.42).widthM).toBeCloseTo(12, 6)
+    expect(sampleNearest(plan, 12.17).depthM).toBeCloseTo(1, 6)
+    expect(sampleNearest(plan, 52.42).depthM).toBeCloseTo(4, 6)
+  })
+
+  test('a loop closing on its first point keeps distinct end sizes', () => {
+    const terrain = flatTerrain()
+    const node = river('river_loop', {
+      points: [
+        [0, -8],
+        [8, 0],
+        [0, 8],
+        [-8, 0],
+        [0, -8],
+      ],
+      pointWidths: [2, 6, 6, 6, 12],
+    })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    expect(plan.authoredStartWidthM).toBeCloseTo(2, 6)
+    expect(plan.authoredEndWidthM).toBeCloseTo(12, 6)
+  })
+})
+
+describe('downhill caps follow the authored ends', () => {
+  test('the higher authored end is upstream even when a cap tip beyond the other end is higher', () => {
+    // Review input: 2 m before x = -8, falling to 1 m at x = 8, then rising to
+    // 5 m at x = 10, under the end cap.
+    const groundAt = (x: number) => (x <= -8 ? 2 : x <= 8 ? 2 - (x + 8) / 16 : 1 + (x - 8) * 2)
+    const terrain = terrainFromFunction(groundAt)
+    const node = river('river_upstream', { flow: 'downhill' })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    expect(plan.upstreamAtStart).toBe(true)
+  })
+
+  test('the profile starts at the authored upstream end and the upstream cap holds its level', () => {
+    // The ground drops to 0 m under the start cap: solving from the cap tip
+    // would pin the whole river 2 m low.
+    const groundAt = (x: number) => (x < -8 ? 0 : 2 - (x + 8) / 16)
+    const terrain = terrainFromFunction(groundAt)
+    const node = river('river_cap_dip', { flow: 'downhill' })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    const authoredStart = plan.samples[plan.path.authoredStartIndex]
+    if (!authoredStart) throw new Error('expected an authored start sample')
+    expect(plan.upstreamAtStart).toBe(true)
+    expect(authoredStart.waterY).toBeCloseTo(groundAt(-8) - riverSurfaceInset(node.depth), 2)
+    for (const capSample of plan.samples.slice(0, plan.path.authoredStartIndex)) {
+      expect(capSample.waterY).toBe(authoredStart.waterY)
+    }
+  })
+})
+
+describe('connected ends', () => {
+  test('a mountain source is solved from the Site boundary, where the water enters', () => {
+    // Ground falls from 3 m at the west boundary to 1 m at x = 10. The reach
+    // from the boundary to the first authored point is river, not a cap.
+    const groundAt = (x: number) => 2 - x / 10
+    const terrain = terrainFromFunction(groundAt)
+    const node = river('river_mountain', { flow: 'downhill', source: 'mountain', maxSlopePct: 20 })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    const seam = plan.samples[0]
+    expect(plan.path.authoredStartIndex).toBeGreaterThan(0)
+    expect(seam?.waterY).toBeCloseTo(groundAt(-10) - riverSurfaceInset(node.depth), 2)
+  })
+})
+
+describe('river facts', () => {
+  test('lengths integrate only the authored reach they report, never the caps', () => {
+    // Review input: ground falling 30 % under a 2 % river, so the whole
+    // authored reach runs embanked at the maximum slope.
+    const terrain = terrainFromFunction((x) => -0.3 * x)
+    const node = river('river_facts', { flow: 'downhill', maxSlopePct: 2 })
+    const plan = planRiver(terrain, node, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    expect(plan.facts.lengthM).toBeCloseTo(16, 6)
+    expect(plan.facts.embankedLengthM).toBeCloseTo(plan.facts.lengthM, 6)
+    expect(plan.facts.rapidLengthM).toBeCloseTo(plan.facts.lengthM, 6)
+  })
+})
+
+describe('trapezoid sections', () => {
+  test('facts report how much shallower a too-narrow trapezoid had to be', () => {
+    const terrain = flatTerrain()
+    const section = { shape: 'trapezoid', bankSlope: 2, bendAsymmetry: 0, bermM: 0, blendM: 2 } as const
+    const narrowDeep = river('river_narrow_deep', { width: 4, depth: 8, section })
+    const plan = planRiver(terrain, narrowDeep, siteWith(terrain).polygon.points)
+    if (!plan) throw new Error('expected a plan')
+    // 2 m half-width at a 2:1 bank slope reaches 1 m: 7 m short of the authored 8 m.
+    expect(plan.facts.depthShortfallM).toBeCloseTo(7, 6)
+    const fits = river('river_fits', { width: 4, depth: 0.5, section })
+    expect(planRiver(terrain, fits, siteWith(terrain).polygon.points)?.facts.depthShortfallM).toBe(0)
+  })
+})
+
+/** Raise terrain columns 0-7 by 2 m, as a sculpt would, keeping the grid and the river stamp. */
+function sculptWestEdge(site: SiteNodeType): SiteNodeType {
+  const field = decodeTerrainField(site.terrain)
+  if (!field) throw new Error('expected persisted terrain')
+  const heights = new Int16Array(field.heights)
+  for (let row = 0; row < field.rows; row += 1) {
+    for (let col = 0; col <= 7; col += 1) {
+      const index = row * field.cols + col
+      heights[index] = (heights[index] ?? 0) + Math.round(2 / field.step)
+    }
+  }
+  return SiteNode.parse({ ...site, terrain: encodeTerrainField({ ...field, heights }) })
+}
+
+describe('applied-carve recognition', () => {
+  test('sculpting the terrain after an apply means the carve is no longer applied', () => {
+    // Review input: the default downhill river on the flat fixture, then a
+    // 2 m sculpt of columns 0-7 that leaves the grid and fingerprint intact.
+    const site = siteWith()
+    const node = river('river_sculpted', { flow: 'downhill' })
+    const appliedSite = siteAfter(site, rebuildRiverTerrain(site, [node]))
+    expect(riverTerrainIsApplied(appliedSite, [node])).toBe(true)
+
+    expect(riverTerrainIsApplied(sculptWestEdge(appliedSite), [node])).toBe(false)
+  })
+})
+
+describe('downhill rivers that meet themselves', () => {
+  // Review round 2 input: a 512 m lot sampled every 8 m, ground falling 2 %
+  // toward +x, and a 1 m wide river crossing itself at the origin. Its samples
+  // are about 6 m apart, so no two sample centres come within its width.
+  const coarseBoundary: Array<[number, number]> = [
+    [-256, -256],
+    [256, -256],
+    [256, 256],
+    [-256, 256],
+  ]
+  function coarseLot(): TerrainField {
+    const field = createTerrainField({ origin: [-256, -256], spacing: 8, cols: 65, rows: 65, step: 0.01 })
+    for (let row = 0; row < field.rows; row += 1) {
+      for (let col = 0; col < field.cols; col += 1) {
+        const x = field.origin[0] + col * field.spacing
+        field.heights[row * field.cols + col] = Math.round((10 - 0.02 * x) / field.step)
+      }
+    }
+    return field
+  }
+  const narrowCrossing = river('river_coarse_crossing', {
+    flow: 'downhill',
+    width: 1,
+    points: [
+      [-200, -200],
+      [200, 200],
+      [-200, 200],
+      [200, -200],
+    ],
+  })
+
+  test('a crossing between coarse samples is found from the channel segments', () => {
+    const plan = planRiver(coarseLot(), narrowCrossing, coarseBoundary)
+    expect(plan?.refusal?.code).toBe('self_crossing')
+    expect(plan?.refusal?.levelGapM ?? 0).toBeGreaterThan(3)
+  })
+
+  test('a river refused for meeting itself is not carved', () => {
+    const terrain = flatTerrain()
+    const crossing = river('river_refused', {
+      flow: 'downhill',
+      points: [
+        [-8, -8],
+        [8, 8],
+        [-8, 8],
+        [8, -8],
+      ],
+    })
+    const sloping = terrainFromFunction((x) => 2 - 0.1 * x)
+    const plan = planRiver(sloping, crossing, siteWith(sloping).polygon.points)
+    expect(plan?.refusal?.code).toBe('self_crossing')
+    const rebuilt = rebuildRiverTerrain(siteWith(sloping), [crossing])
+    expect(Array.from(rebuilt.terrain.heights)).toEqual(Array.from(sloping.heights))
+    // On level ground both reaches share one level, so the same path is built.
+    expect(planRiver(terrain, crossing, siteWith(terrain).polygon.points)?.refusal).toBeNull()
   })
 })

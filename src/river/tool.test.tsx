@@ -7,7 +7,6 @@ import {
 } from '@pascal-app/core'
 import { useEditor, useInteractionScope } from '@pascal-app/editor'
 import { useViewer } from '@pascal-app/viewer'
-import { act, create } from '@react-three/test-renderer'
 import { expect, test } from 'bun:test'
 import { StrictMode, type ComponentType, type ReactNode } from 'react'
 import { OrthographicCamera, Raycaster, Vector2, Vector3 } from 'three'
@@ -17,7 +16,12 @@ import { retainRiverToolBody } from './interaction'
 import { RiverNode } from './schema'
 import { useRiverStore } from './store'
 import { rebuildRiverTerrain } from './terrain'
-import { cancelRiverInteraction, RiverTool } from './tool'
+import { cancelRiverInteraction, reverseRiverFlow, RiverTool } from './tool'
+
+// The renderer's CommonJS build requires three. Loading it only after this
+// file's ES imports have evaluated three keeps the test independent of which
+// test files ran before it (alone, Bun refuses that require mid-evaluation).
+const { act, create } = await import('@react-three/test-renderer')
 
 test('StrictMode body replay preserves first Edit path intent until true unmount', async () => {
   const previousRiver = useRiverStore.getState()
@@ -328,5 +332,45 @@ test('river replacement preserves authored draft until true deactivation', async
     useInteractionScope.setState(previousScope, true)
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
     else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('R never reverses downhill water, whose direction comes from the solved profile', () => {
+  const previousRiver = useRiverStore.getState()
+  const previousViewer = useViewer.getState()
+  const previousScene = useScene.getState()
+  const site = SiteNode.parse({ id: 'site_river_reverse', children: ['river_downhill_reverse'] })
+  const downhill = RiverNode.parse({
+    id: 'river_downhill_reverse',
+    parentId: site.id,
+    points: [
+      [0, 0],
+      [6, 0],
+    ],
+    flow: 'downhill',
+  })
+  try {
+    useScene.getState().setScene(
+      { [site.id]: site, [downhill.id]: downhill as unknown as AnyNode },
+      [site.id],
+    )
+    const sceneApi = createSceneApi(useScene)
+
+    useViewer.getState().setSelection({ selectedIds: [downhill.id as AnyNodeId] })
+    expect(reverseRiverFlow(sceneApi)).toBe(true)
+    expect(riverNodeOf(useScene.getState().nodes[downhill.id as AnyNodeId])?.flowDirection).toBe(
+      'forward',
+    )
+    expect(useRiverStore.getState().feedback).toContain('higher end')
+
+    useViewer.getState().setSelection({ selectedIds: [] })
+    useRiverStore.getState().setSettings({ flow: 'downhill', flowDirection: 'forward' })
+    useRiverStore.getState().beginDraft(site.id)
+    expect(reverseRiverFlow(sceneApi)).toBe(true)
+    expect(useRiverStore.getState().flowDirection).toBe('forward')
+  } finally {
+    useRiverStore.setState(previousRiver, true)
+    useViewer.setState(previousViewer, true)
+    useScene.setState(previousScene, true)
   }
 })

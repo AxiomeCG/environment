@@ -1,18 +1,8 @@
-import {
-  terrainFieldOf,
-  type FloorplanGeometry,
-  type FloorplanPoint,
-  type GeometryContext,
-} from '@pascal-app/core'
+import type { FloorplanGeometry, FloorplanPoint, GeometryContext } from '@pascal-app/core'
 import { POND_WATER_APPEARANCE } from '../pond/appearance'
 import type { WaterQuality } from '../pond/schema'
 import type { RiverNode } from './schema'
-import {
-  riverPathWidthScale,
-  riverTerrainBaseline,
-  sampleRiverPath,
-  type SampledRiverPath,
-} from './terrain'
+import { planRiver, riverRunsFromStart, riverSourceTerrain, type RiverPlan } from './terrain'
 
 export function buildRiverFloorplan(
   node: RiverNode,
@@ -20,23 +10,26 @@ export function buildRiverFloorplan(
 ): FloorplanGeometry | null {
   const parent = context.parent
   if (!parent || parent.type !== 'site') return null
-  const terrain = riverTerrainBaseline(parent) ?? terrainFieldOf(parent)
-  if (!terrain) return null
-  const path = sampleRiverPath(terrain, node, parent.polygon.points)
-  if (!path) return null
+  const plan = planRiver(riverSourceTerrain(parent), node, parent.polygon.points)
+  if (!plan) return null
+  const path = plan.path
   const points = path.points.map((point): FloorplanPoint => [point[0], point[2]])
-  const outline = riverFloorplanOutline(node, path)
+  const outline = riverFloorplanOutline(plan)
   const appearance = POND_WATER_APPEARANCE[waterQuality(node.quality)]
   const active = context.viewState?.selected === true || context.viewState?.highlighted === true
   const stroke =
     active && context.viewState?.palette
       ? context.viewState.palette.selectedStroke
       : appearance.deepColor
+  // A refused river is not built: its outline stays selectable, drawn empty and dashed.
   const children: FloorplanGeometry[] = [
     {
       kind: 'polygon',
       points: outline,
-      fill: appearance.floorplanColor,
+      fill: plan.refusal ? 'none' : appearance.floorplanColor,
+      ...(plan.refusal
+        ? { stroke, strokeDasharray: '4 3', vectorEffect: 'non-scaling-stroke' as const }
+        : {}),
       opacity: active ? 0.66 : 0.5,
       metadata: {
         riverWidth: node.width,
@@ -58,7 +51,7 @@ export function buildRiverFloorplan(
   ]
   const arrow = flowArrow(
     path.points.map((point) => [point[0], point[2]]),
-    node.flowDirection === 'reverse',
+    !riverRunsFromStart(node, plan),
   )
   if (arrow) {
     children.push({
@@ -76,7 +69,8 @@ export function buildRiverFloorplan(
   return { kind: 'group', children }
 }
 
-function riverFloorplanOutline(node: RiverNode, path: SampledRiverPath): readonly FloorplanPoint[] {
+function riverFloorplanOutline(plan: RiverPlan): readonly FloorplanPoint[] {
+  const path = plan.path
   const left: FloorplanPoint[] = []
   const right: FloorplanPoint[] = []
   for (let index = 0; index < path.points.length; index += 1) {
@@ -91,7 +85,7 @@ function riverFloorplanOutline(node: RiverNode, path: SampledRiverPath): readonl
     tangentZ /= tangentLength
     const normalX = -tangentZ
     const normalZ = tangentX
-    const halfWidth = node.width * 0.5 * riverPathWidthScale(path, node, path.distances[index]!)
+    const halfWidth = plan.samples[index]!.widthM * 0.5
     left.push([point[0] + normalX * halfWidth, point[2] + normalZ * halfWidth])
     right.push([point[0] - normalX * halfWidth, point[2] - normalZ * halfWidth])
   }

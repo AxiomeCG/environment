@@ -109,12 +109,18 @@ export function draftPreviewNode(): RiverNode | null {
     points,
     width: state.width,
     depth: state.depth,
+    pointWidths: [],
+    pointDepths: [],
     source: state.source,
     outlet: state.outlet,
     flowDirection: state.flowDirection,
     flowSpeed: state.flowSpeed,
     quality: state.quality,
     shoreline: state.shoreline,
+    flow: state.flow,
+    maxSlopePct: state.maxSlopePct,
+    section: state.section,
+    ends: state.ends,
   })
   return parsed.success ? parsed.data : null
 }
@@ -174,12 +180,18 @@ export function finishRiverDraft(sceneApi: SceneApi): RiverActionResult {
     points: draft.points,
     width: state.width,
     depth: state.depth,
+    pointWidths: [],
+    pointDepths: [],
     source: state.source,
     outlet: state.outlet,
     flowDirection: state.flowDirection,
     flowSpeed: state.flowSpeed,
     quality: state.quality,
     shoreline: state.shoreline,
+    flow: state.flow,
+    maxSlopePct: state.maxSlopePct,
+    section: state.section,
+    ends: state.ends,
   })
   if (!result.ok) {
     state.setFeedback(result.message)
@@ -194,6 +206,41 @@ export function finishRiverDraft(sceneApi: SceneApi): RiverActionResult {
     useRiverStore.getState().setFeedback(result.message)
   }
   return result
+}
+
+const DOWNHILL_DIRECTION_FEEDBACK =
+  'Downhill water always flows from the higher end. Choose the As drawn profile to set its direction.'
+
+/**
+ * The R shortcut: reverse the drafted or selected river's visible flow.
+ * Downhill water takes its direction from the solved profile, so it is never
+ * reversed. Returns whether there was a river to act on.
+ */
+export function reverseRiverFlow(sceneApi: SceneApi): boolean {
+  const state = useRiverStore.getState()
+  if (state.draft) {
+    if (state.flow === 'downhill') {
+      state.setFeedback(DOWNHILL_DIRECTION_FEEDBACK)
+      return true
+    }
+    const direction = state.flowDirection === 'forward' ? 'reverse' : 'forward'
+    state.setSettings({ flowDirection: direction })
+    state.setFeedback(`River flow changed to ${direction}.`)
+    return true
+  }
+  const ids = useViewer.getState().selection.selectedIds
+  const selected = ids.length === 1 ? riverNodeOf(sceneApi.get(ids[0] as AnyNodeId)) : null
+  if (!selected) return false
+  if (selected.flow === 'downhill') {
+    state.setFeedback(DOWNHILL_DIRECTION_FEEDBACK)
+    return true
+  }
+  const result = updateRiver(sceneApi, selected.id, {
+    flowDirection: selected.flowDirection === 'forward' ? 'reverse' : 'forward',
+  })
+  if (result.river) state.adoptRiverSettings(result.river)
+  state.setFeedback(result.ok ? 'River flow reversed.' : result.message)
+  return true
 }
 
 export function cancelRiverInteraction(): boolean {
@@ -225,6 +272,10 @@ export function RiverTool() {
   const flowSpeed = useRiverStore((state) => state.flowSpeed)
   const quality = useRiverStore((state) => state.quality)
   const shoreline = useRiverStore((state) => state.shoreline)
+  const flow = useRiverStore((state) => state.flow)
+  const maxSlopePct = useRiverStore((state) => state.maxSlopePct)
+  const section = useRiverStore((state) => state.section)
+  const ends = useRiverStore((state) => state.ends)
   const activeSite = useMemo(
     () =>
       resolveActiveRiverSite(nodes, [], {
@@ -607,27 +658,9 @@ export function RiverTool() {
         state.setFeedback('Last river point removed.')
         return
       }
-      if (event.key.toLowerCase() === 'r') {
-        const state = useRiverStore.getState()
-        const direction = state.flowDirection === 'forward' ? 'reverse' : 'forward'
-        if (state.draft) {
-          state.setSettings({ flowDirection: direction })
-          state.setFeedback(`River flow changed to ${direction}.`)
-          event.preventDefault()
-          return
-        }
-        const ids = useViewer.getState().selection.selectedIds
-        const selected =
-          ids.length === 1 ? riverNodeOf(sceneApi.get(ids[0] as AnyNodeId)) : null
-        if (selected) {
-          const result = updateRiver(sceneApi, selected.id, {
-            flowDirection: selected.flowDirection === 'forward' ? 'reverse' : 'forward',
-          })
-          if (result.river) state.adoptRiverSettings(result.river)
-          state.setFeedback(result.ok ? 'River flow reversed.' : result.message)
-          event.preventDefault()
-          return
-        }
+      if (event.key.toLowerCase() === 'r' && reverseRiverFlow(sceneApi)) {
+        event.preventDefault()
+        return
       }
       if (event.key === 'Escape') {
         cancelPointer()
@@ -697,22 +730,32 @@ export function RiverTool() {
       points,
       width,
       depth,
+      pointWidths: [],
+      pointDepths: [],
       source,
       outlet,
       flowDirection,
       flowSpeed,
       quality,
       shoreline,
+      flow,
+      maxSlopePct,
+      section,
+      ends,
     })
     return parsed.success ? parsed.data : null
   }, [
     depth,
     draft,
+    ends,
+    flow,
     flowDirection,
     flowSpeed,
+    maxSlopePct,
     outlet,
     previewRiver,
     quality,
+    section,
     shoreline,
     source,
     width,
