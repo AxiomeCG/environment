@@ -355,7 +355,9 @@ describe('river terrain reconciliation', () => {
 })
 
 describe('river v3 model', () => {
-  test('a pre-v3 river parses with as-drawn defaults and carves as before', () => {
+  // Carving such a river exactly as the pre-v3 carver did is proven against
+  // that carver itself in legacy-carve.test.ts.
+  test('a pre-v3 river parses with as-drawn defaults', () => {
     const legacy = RiverNode.parse({
       id: 'river_legacy',
       type: 'environment:river',
@@ -381,15 +383,6 @@ describe('river v3 model', () => {
     expect(legacy.pointWidths).toEqual([])
     expect(legacy.section.shape).toBe('curved')
     expect(legacy.ends).toEqual({ start: 'rounded', end: 'rounded' })
-
-    const site = siteWith()
-    const explicit = river('river_legacy', { flow: 'as_drawn' })
-    const fromLegacy = rebuildRiverTerrain(site, [legacy])
-    const fromExplicit = rebuildRiverTerrain(site, [explicit])
-    expect(Array.from(fromLegacy.terrain.heights)).toEqual(
-      Array.from(fromExplicit.terrain.heights),
-    )
-    expect(surfaceHeightAt(fromLegacy.terrain, 0, 0)).toBeCloseTo(-1, 2)
   })
 
   test('per-point width and depth shape the channel along the path', () => {

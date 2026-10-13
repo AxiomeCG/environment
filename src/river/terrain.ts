@@ -509,7 +509,7 @@ export function riverEndpointSize(
 }
 
 /** Per-point sizes resolved at their stations along the authored polyline. */
-type RiverAuthoredSizes = Readonly<{
+export type RiverAuthoredSizes = Readonly<{
   stationsM: readonly number[]
   widthsM: readonly number[]
   depthsM: readonly number[]
@@ -568,6 +568,8 @@ export type RiverPlan = Readonly<{
   /** Full (uncapped) widths at the authored ends, used to bound the cap discs. */
   authoredStartWidthM: number
   authoredEndWidthM: number
+  /** Per-point sizes, so the carve can evaluate width and depth between samples exactly. */
+  sizes: RiverAuthoredSizes
 }>
 
 /**
@@ -635,6 +637,7 @@ export function planRiver(
     maxReachM: Math.max(...samples.map((sample) => sectionReachM(river, sample))),
     authoredStartWidthM: startSample?.widthM ?? river.width,
     authoredEndWidthM: endSample?.widthM ?? river.width,
+    sizes,
   }
 }
 
@@ -1056,8 +1059,20 @@ function plannedTargetHeight(
     )
     const startSample = plan.samples[index - 1]!
     const endSample = plan.samples[index]!
-    const widthM = lerp(startSample.widthM, endSample.widthM, supportedAmount)
-    const depthM = lerp(startSample.depthM, endSample.depthM, supportedAmount)
+    // Width and depth are evaluated at the supported station itself, never
+    // interpolated between samples: the cap profile is a curve, and the
+    // pre-v3 carve (which migrated rivers must reproduce) evaluated it there.
+    const stationM = lerp(
+      path.authoredStations[index - 1] ?? 0,
+      path.authoredStations[index] ?? 0,
+      supportedAmount,
+    )
+    const widthM =
+      valueAtStation(plan.sizes.stationsM, plan.sizes.widthsM, stationM) *
+      riverPathWidthScale(path, river, supportedAlong)
+    const depthM =
+      valueAtStation(plan.sizes.stationsM, plan.sizes.depthsM, stationM) *
+      riverPathDepthScale(path, river, supportedAlong)
     const bendShiftM = lerp(startSample.bendShiftM, endSample.bendShiftM, supportedAmount)
     const channelTopY = lerp(startSample.channelTopY, endSample.channelTopY, supportedAmount)
     const centerGroundY = lerp(startSample.groundY, endSample.groundY, amount)
