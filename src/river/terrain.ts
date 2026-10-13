@@ -250,29 +250,77 @@ export function sampleRiverPath(
   if (authored.length < 2) return null
   const authoredLength = polylineLength(authored)
   if (authoredLength <= EPSILON) return null
-
-  const widths = sanitizedPointValues(river, river.pointWidths, river.width)
-  const sourceExtension = endpointExtension(
-    authored,
-    true,
-    river.source === 'mountain',
-    (widths[0] ?? river.width) * 0.5,
-    boundary,
-  )
-  const outletExtension = endpointExtension(
-    authored,
-    false,
-    river.outlet === 'sea',
-    // A fan gets a longer run-out so the widening, shallowing mouth can form.
-    (widths.at(-1) ?? river.width) * 0.5 * (river.ends.end === 'fan' ? 2 : 1),
-    boundary,
-  )
-  const desiredSpacing = Math.max(0.35, terrain.spacing * 0.75)
-  const sectionLengths = [sourceExtension.length, authoredLength, outletExtension.length] as const
-  const minimumSegments = [
-    sourceExtension.length > EPSILON ? (river.source === 'rounded' ? 3 : 1) : 0,
+  const { source, outlet } = riverExtensions(river, authored, boundary)
+  const [sourceSegments, authoredSegments, outletSegments] = sectionSegmentCounts(
+    terrain,
+    river,
     authored.length - 1,
-    outletExtension.length > EPSILON ? (river.outlet === 'rounded' ? 3 : 1) : 0,
+    [source.length, authoredLength, outlet.length],
+  )
+  const roadPoints = authored.map((point) => groundPoint(terrain, point))
+  const first = roadPoints[0]
+  const last = roadPoints.at(-1)
+  if (!first || !last) return null
+  const authoredSamples = authoredAlignmentSamples(roadPoints, first, last, authoredSegments)
+  const sourcePrefix = straightSamples(groundPoint(terrain, source.point), first, sourceSegments)
+    .slice(0, -1)
+  const outletSuffix = straightSamples(last, groundPoint(terrain, outlet.point), outletSegments)
+    .slice(1)
+  return assembleSampledPath(terrain, {
+    samples: [...sourcePrefix, ...authoredSamples, ...outletSuffix],
+    stations: [
+      ...sourcePrefix.map(() => 0),
+      ...authoredSpanStations(authored, authoredSamples.length),
+      ...outletSuffix.map(() => authoredLength),
+    ],
+    authoredStartIndex: sourcePrefix.length,
+    authoredEndIndex: sourcePrefix.length + authoredSamples.length - 1,
+  })
+}
+
+type RiverExtension = Readonly<{ point: readonly [number, number]; length: number }>
+
+/**
+ * How far each end runs past its authored point: to the Site boundary for a
+ * connected end, half the end width for a cap (twice that for a fan).
+ */
+function riverExtensions(
+  river: RiverNode,
+  authored: readonly (readonly [number, number])[],
+  boundary?: readonly (readonly [number, number])[],
+): Readonly<{ source: RiverExtension; outlet: RiverExtension }> {
+  const widths = sanitizedPointValues(river, river.pointWidths, river.width)
+  return {
+    source: endpointExtension(
+      authored,
+      true,
+      river.source === 'mountain',
+      (widths[0] ?? river.width) * 0.5,
+      boundary,
+    ),
+    outlet: endpointExtension(
+      authored,
+      false,
+      river.outlet === 'sea',
+      // A fan gets a longer run-out so the widening, shallowing mouth can form.
+      (widths.at(-1) ?? river.width) * 0.5 * (river.ends.end === 'fan' ? 2 : 1),
+      boundary,
+    ),
+  }
+}
+
+/** Centreline segments for the source extension, the authored path and the outlet extension. */
+function sectionSegmentCounts(
+  terrain: TerrainField,
+  river: RiverNode,
+  spanCount: number,
+  sectionLengths: readonly [number, number, number],
+): [number, number, number] {
+  const desiredSpacing = Math.max(0.35, terrain.spacing * 0.75)
+  const minimumSegments = [
+    sectionLengths[0] > EPSILON ? (river.source === 'rounded' ? 3 : 1) : 0,
+    spanCount,
+    sectionLengths[2] > EPSILON ? (river.outlet === 'rounded' ? 3 : 1) : 0,
   ] as const
   const effectiveLength = sectionLengths[0] + sectionLengths[1] + sectionLengths[2]
   const targetSegments = Math.min(
@@ -283,101 +331,86 @@ export function sampleRiverPath(
       Math.ceil(effectiveLength / desiredSpacing),
     ),
   )
-  const [sourceSegments, authoredSegments, outletSegments] = allocateSectionSegments(
-    sectionLengths,
-    minimumSegments,
-    targetSegments,
-  )
-  const roadPoints = authored.map(
-    ([x, z]): RoadGeometryPoint => [x, surfaceHeightAt(terrain, x, z), z],
-  )
-  const spanCount = authored.length - 1
+  return allocateSectionSegments(sectionLengths, minimumSegments, targetSegments)
+}
+
+/** The spline through the authored points, or a uniform line for a two-point path. */
+function authoredAlignmentSamples(
+  roadPoints: readonly RoadGeometryPoint[],
+  first: RoadGeometryPoint,
+  last: RoadGeometryPoint,
+  authoredSegments: number,
+): RoadGeometryPoint[] {
+  const spanCount = roadPoints.length - 1
   const cappedCurveSegments = Math.max(
     spanCount,
     Math.floor(authoredSegments / spanCount) * spanCount,
   )
   const alignmentSamples = sampleRoadAlignmentPoints(
-    roadPoints[0]!,
+    first,
     roadPoints.slice(1, -1),
-    roadPoints.at(-1)!,
+    last,
     cappedCurveSegments,
   )
-  const authoredSamples =
-    alignmentSamples.length === 2
-      ? subdivideStraightAlignment(alignmentSamples[0]!, alignmentSamples[1]!, authoredSegments)
-      : alignmentSamples
-  const sourceSamples =
-    sourceSegments > 0
-      ? subdivideStraightAlignment(
-          [
-            sourceExtension.point[0],
-            surfaceHeightAt(terrain, sourceExtension.point[0], sourceExtension.point[1]),
-            sourceExtension.point[1],
-          ],
-          roadPoints[0]!,
-          sourceSegments,
-        )
-      : []
-  const outletSamples =
-    outletSegments > 0
-      ? subdivideStraightAlignment(
-          roadPoints.at(-1)!,
-          [
-            outletExtension.point[0],
-            surfaceHeightAt(terrain, outletExtension.point[0], outletExtension.point[1]),
-            outletExtension.point[1],
-          ],
-          outletSegments,
-        )
-      : []
-  const sourcePrefix = sourceSamples.slice(0, -1)
-  const outletSuffix = outletSamples.slice(1)
-  const sampled = [...sourcePrefix, ...authoredSamples, ...outletSuffix]
-  const sampledStations = [
-    ...sourcePrefix.map(() => 0),
-    ...authoredSpanStations(authored, authoredSamples.length),
-    ...outletSuffix.map(() => authoredLength),
-  ]
-  const authoredStartIndex = sourcePrefix.length
-  const authoredEndIndex = authoredStartIndex + authoredSamples.length - 1
+  const [alignmentStart, alignmentEnd] = alignmentSamples
+  return alignmentSamples.length === 2 && alignmentStart && alignmentEnd
+    ? subdivideStraightAlignment(alignmentStart, alignmentEnd, authoredSegments)
+    : alignmentSamples
+}
+
+function straightSamples(
+  start: RoadGeometryPoint,
+  end: RoadGeometryPoint,
+  segments: number,
+): RoadGeometryPoint[] {
+  return segments > 0 ? subdivideStraightAlignment(start, end, segments) : []
+}
+
+function groundPoint(terrain: TerrainField, point: readonly [number, number]): RoadGeometryPoint {
+  return [point[0], surfaceHeightAt(terrain, point[0], point[1]), point[1]]
+}
+
+/**
+ * Drop coincident samples, set each on the terrain, and measure the path,
+ * keeping the authored ends and every sample's authored station.
+ */
+function assembleSampledPath(
+  terrain: TerrainField,
+  sampled: Readonly<{
+    samples: readonly RoadGeometryPoint[]
+    stations: readonly number[]
+    authoredStartIndex: number
+    authoredEndIndex: number
+  }>,
+): SampledRiverPath | null {
   const points: SampledRiverPoint[] = []
   const authoredStations: number[] = []
-  let normalizedAuthoredStartIndex = 0
-  let normalizedAuthoredEndIndex = 0
-  for (let index = 0; index < sampled.length; index += 1) {
-    const point = sampled[index]!
+  let authoredStartIndex = 0
+  let authoredEndIndex = 0
+  sampled.samples.forEach((point, index) => {
     const candidate = [point[0], surfaceHeightAt(terrain, point[0], point[2]), point[2]] as const
     const previous = points.at(-1)
     if (!previous || Math.hypot(candidate[0] - previous[0], candidate[2] - previous[2]) > 1e-6) {
       points.push(candidate)
-      authoredStations.push(sampledStations[index] ?? 0)
+      authoredStations.push(sampled.stations[index] ?? 0)
     }
-    if (index === authoredStartIndex) normalizedAuthoredStartIndex = points.length - 1
-    if (index === authoredEndIndex) normalizedAuthoredEndIndex = points.length - 1
-  }
+    if (index === sampled.authoredStartIndex) authoredStartIndex = points.length - 1
+    if (index === sampled.authoredEndIndex) authoredEndIndex = points.length - 1
+  })
   if (points.length < 2) return null
-
-  const distances = [0]
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1]!
-    const point = points[index]!
-    distances.push(
-      distances[index - 1]! + Math.hypot(point[0] - previous[0], point[2] - previous[2]),
-    )
-  }
+  const distances = cumulativeLengths(points.map((point) => [point[0], point[2]] as const))
   const length = distances.at(-1) ?? 0
-  return length > EPSILON
-    ? {
-        points,
-        distances,
-        length,
-        authoredStartDistance: distances[normalizedAuthoredStartIndex] ?? 0,
-        authoredEndDistance: distances[normalizedAuthoredEndIndex] ?? length,
-        authoredStartIndex: normalizedAuthoredStartIndex,
-        authoredEndIndex: normalizedAuthoredEndIndex,
-        authoredStations,
-      }
-    : null
+  if (length <= EPSILON) return null
+  return {
+    points,
+    distances,
+    length,
+    authoredStartDistance: distances[authoredStartIndex] ?? 0,
+    authoredEndDistance: distances[authoredEndIndex] ?? length,
+    authoredStartIndex,
+    authoredEndIndex,
+    authoredStations,
+  }
 }
 
 /**
@@ -684,7 +717,7 @@ function solveOrderedProfile(
     .reverse()
     .map((sample, index) => ({
       ...sample,
-      distanceM: stations[index]!.distanceM,
+      distanceM: stations[index]?.distanceM ?? total - sample.distanceM,
       // Slope sign follows the authored direction, so report descent as negative here.
       slopePct: -sample.slopePct,
     }))
@@ -728,9 +761,10 @@ function bendShiftAt(
   asymmetry: number,
 ): number {
   if (asymmetry <= 0 || index === 0 || index === path.points.length - 1) return 0
-  const before = path.points[index - 1]!
-  const point = path.points[index]!
-  const after = path.points[index + 1]!
+  const before = path.points[index - 1]
+  const point = path.points[index]
+  const after = path.points[index + 1]
+  if (!before || !point || !after) return 0
   const inX = point[0] - before[0]
   const inZ = point[2] - before[2]
   const outX = after[0] - point[0]
@@ -810,9 +844,10 @@ function crossSectionAreas(
   index: number,
   sample: RiverPlanSample,
 ): { cutM2: number; fillM2: number } {
-  const point = path.points[index]!
-  const before = path.points[Math.max(0, index - 1)]!
-  const after = path.points[Math.min(path.points.length - 1, index + 1)]!
+  const point = path.points[index]
+  const before = path.points[Math.max(0, index - 1)]
+  const after = path.points[Math.min(path.points.length - 1, index + 1)]
+  if (!point || !before || !after) return { cutM2: 0, fillM2: 0 }
   let tangentX = after[0] - before[0]
   let tangentZ = after[2] - before[2]
   const tangentLength = Math.hypot(tangentX, tangentZ)
@@ -971,11 +1006,34 @@ function carveRiverTerrain(
   const plans = rivers
     .map((river) => ({ river, plan: planRiver(baseline, river, boundary) }))
     .filter(
-      (entry): entry is { river: RiverNode; plan: RiverPlan } =>
-        entry.plan !== null && entry.plan.refusal === null,
+      (entry): entry is PlannedRiver => entry.plan !== null && entry.plan.refusal === null,
     )
   if (plans.length === 0 || boundary.length < 3) return baseline
+  const range = carveRange(baseline, plans)
+  if (!range) return baseline
 
+  let heights: Int16Array | null = null
+  for (let row = range.row0; row <= range.row1; row += 1) {
+    const z = baseline.origin[1] + row * baseline.spacing
+    for (let col = range.col0; col <= range.col1; col += 1) {
+      const x = baseline.origin[0] + col * baseline.spacing
+      if (!pointInPolygon(boundary, x, z)) continue
+      const sampleIndex = row * baseline.cols + col
+      const original = baseline.heights[sampleIndex] ?? 0
+      const target = carvedHeight(baseline, plans, x, z, original)
+      if (target !== original) {
+        heights ??= new Int16Array(baseline.heights)
+        heights[sampleIndex] = target
+      }
+    }
+  }
+  return heights ? { ...baseline, heights } : baseline
+}
+
+type PlannedRiver = Readonly<{ river: RiverNode; plan: RiverPlan }>
+
+/** Grid samples the carve can touch: every river's reach around its path. */
+function carveRange(baseline: TerrainField, plans: readonly PlannedRiver[]) {
   let minX = Number.POSITIVE_INFINITY
   let minZ = Number.POSITIVE_INFINITY
   let maxX = Number.NEGATIVE_INFINITY
@@ -993,46 +1051,43 @@ function carveRiverTerrain(
       maxZ = Math.max(maxZ, point[2] + margin)
     }
   }
-  const range = sampleRangeOver(baseline, minX, minZ, maxX, maxZ)
-  if (!range) return baseline
+  return sampleRangeOver(baseline, minX, minZ, maxX, maxZ)
+}
 
-  let heights: Int16Array | null = null
-  for (let row = range.row0; row <= range.row1; row += 1) {
-    const z = baseline.origin[1] + row * baseline.spacing
-    for (let col = range.col0; col <= range.col1; col += 1) {
-      const x = baseline.origin[0] + col * baseline.spacing
-      if (!pointInPolygon(boundary, x, z)) continue
-      const sampleIndex = row * baseline.cols + col
-      const original = baseline.heights[sampleIndex] ?? 0
-      let target = original
-      let downhillTarget: number | null = null
-      let downhillLateral = Number.POSITIVE_INFINITY
-      for (const { river, plan } of plans) {
-        const candidate = plannedTargetHeight(baseline, plan, river, x, z, original * baseline.step)
-        if (!candidate) continue
-        if (river.flow === 'downhill') {
-          // A downhill river sets its bed and banks outright (cut or fill), so
-          // the nearest channel wins over any ground-following cut nearby.
-          if (candidate.lateralM < downhillLateral) {
-            downhillLateral = candidate.lateralM
-            downhillTarget = candidate.height
-          }
-        } else {
-          target = Math.min(target, candidate.height)
-        }
+/** Quantized height of one grid sample after every river's carve. */
+function carvedHeight(
+  baseline: TerrainField,
+  plans: readonly PlannedRiver[],
+  x: number,
+  z: number,
+  original: number,
+): number {
+  let target = original
+  let downhillTarget: number | null = null
+  let downhillLateral = Number.POSITIVE_INFINITY
+  for (const { river, plan } of plans) {
+    const candidate = plannedTargetHeight(baseline, plan, river, x, z, original * baseline.step)
+    if (!candidate) continue
+    if (river.flow === 'downhill') {
+      // A downhill river sets its bed and banks outright (cut or fill), so
+      // the nearest channel wins over any ground-following cut nearby.
+      if (candidate.lateralM < downhillLateral) {
+        downhillLateral = candidate.lateralM
+        downhillTarget = candidate.height
       }
-      if (downhillTarget !== null) target = downhillTarget
-      if (target !== original) {
-        heights ??= new Int16Array(baseline.heights)
-        heights[sampleIndex] = target
-      }
+    } else {
+      target = Math.min(target, candidate.height)
     }
   }
-  return heights ? { ...baseline, heights } : baseline
+  return downhillTarget ?? target
 }
 
 type PlannedTarget = Readonly<{ height: number; lateralM: number }>
 
+/**
+ * One river's target for a grid sample: the nearest channel's bed or bank in
+ * downhill mode, the deepest cut of any segment in as-drawn mode.
+ */
 function plannedTargetHeight(
   terrain: TerrainField,
   plan: RiverPlan,
@@ -1041,119 +1096,189 @@ function plannedTargetHeight(
   z: number,
   groundM: number,
 ): PlannedTarget | null {
-  const path = plan.path
-  const vertexReach = terrain.spacing * TERRAIN_TRIANGLE_REACH_FACTOR
   let bestCut = Number.POSITIVE_INFINITY
   let nearest: PlannedTarget | null = null
-
-  for (let index = 1; index < path.points.length; index += 1) {
-    const start = path.points[index - 1]!
-    const end = path.points[index]!
-    const dx = end[0] - start[0]
-    const dz = end[2] - start[2]
-    const segmentLengthSquared = dx * dx + dz * dz
-    if (segmentLengthSquared <= EPSILON) continue
-    const projected = ((x - start[0]) * dx + (z - start[2]) * dz) / segmentLengthSquared
-    const amount = clamp01(projected)
-    const nearestX = start[0] + dx * amount
-    const nearestZ = start[2] + dz * amount
-    const segmentLength = Math.sqrt(segmentLengthSquared)
-    const along = path.distances[index - 1]! + segmentLength * amount
-    const capCenter =
-      river.source === 'rounded' && along < path.authoredStartDistance
-        ? { point: river.points[0], halfWidthM: plan.authoredStartWidthM * 0.5 }
-        : river.outlet === 'rounded' && along > path.authoredEndDistance
-          ? { point: river.points.at(-1), halfWidthM: plan.authoredEndWidthM * 0.5 }
-          : undefined
-    if (
-      capCenter?.point &&
-      Math.hypot(x - capCenter.point[0], z - capCenter.point[1]) > capCenter.halfWidthM + vertexReach
-    ) {
+  for (let index = 1; index < plan.path.points.length; index += 1) {
+    const station = carveStationAt(terrain, plan, river, index, x, z)
+    if (!station) continue
+    if (river.flow === 'downhill') {
+      const candidate = downhillTarget(terrain, river, station, groundM)
+      if (candidate && isNearer(candidate, nearest)) nearest = candidate
       continue
     }
-    // At a rounded tip the analytic width reaches zero. Move no farther than
-    // one terrain-triangle reach toward the authored path so the vertices of
-    // the final triangle are still excavated beneath the compact cap.
-    const supportedAlong =
-      along < path.authoredStartDistance
-        ? Math.min(path.authoredStartDistance, along + vertexReach)
-        : along > path.authoredEndDistance
-          ? Math.max(path.authoredEndDistance, along - vertexReach)
-          : along
-    const supportedAmount = clamp01(
-      (supportedAlong - path.distances[index - 1]!) / segmentLength,
-    )
-    const startSample = plan.samples[index - 1]!
-    const endSample = plan.samples[index]!
-    // Width and depth are evaluated at the supported station itself, never
-    // interpolated between samples: the cap profile is a curve, and the
-    // pre-v3 carve (which migrated rivers must reproduce) evaluated it there.
-    const stationM = lerp(
-      path.authoredStations[index - 1] ?? 0,
-      path.authoredStations[index] ?? 0,
-      supportedAmount,
-    )
-    const widthM =
-      valueAtStation(plan.sizes.stationsM, plan.sizes.widthsM, stationM) *
-      riverPathWidthScale(path, river, supportedAlong)
-    const depthM = riverSectionDepthM(
-      river.section,
-      widthM * 0.5,
-      valueAtStation(plan.sizes.stationsM, plan.sizes.depthsM, stationM) *
-        riverPathDepthScale(path, river, supportedAlong),
-    )
-    const bendShiftM = lerp(startSample.bendShiftM, endSample.bendShiftM, supportedAmount)
-    const channelTopY = lerp(startSample.channelTopY, endSample.channelTopY, supportedAmount)
-    const centerGroundY = lerp(startSample.groundY, endSample.groundY, amount)
-    const localHalfWidth = widthM * 0.5
-    if (localHalfWidth <= EPSILON) continue
-    const lateralDistance = Math.hypot(x - nearestX, z - nearestZ)
-    const lateralSign =
-      ((x - nearestX) * -dz + (z - nearestZ) * dx) / segmentLength >= 0 ? 1 : -1
+    const cut = asDrawnCut(terrain, river, station)
+    if (cut !== null) bestCut = Math.min(bestCut, cut)
+  }
+  if (river.flow === 'downhill') return nearest
+  return Number.isFinite(bestCut) ? { height: bestCut, lateralM: 0 } : null
+}
+
+function isNearer(candidate: PlannedTarget, nearest: PlannedTarget | null): boolean {
+  return (
+    !nearest ||
+    candidate.lateralM < nearest.lateralM ||
+    (candidate.lateralM === nearest.lateralM && candidate.height < nearest.height)
+  )
+}
+
+/** The channel cross-section a grid sample sees from one path segment. */
+type CarveStation = Readonly<{
+  /** Signed offset from the centreline, eroded by one terrain-triangle reach. */
+  representedLateralM: number
+  halfWidthM: number
+  depthM: number
+  bendShiftM: number
+  channelTopY: number
+  centerGroundY: number
+}>
+
+/**
+ * Project a grid sample onto path segment `index` and resolve the section
+ * there, or null where the segment does not reach it (beyond a rounded cap).
+ */
+function carveStationAt(
+  terrain: TerrainField,
+  plan: RiverPlan,
+  river: RiverNode,
+  index: number,
+  x: number,
+  z: number,
+): CarveStation | null {
+  const path = plan.path
+  const vertexReach = terrain.spacing * TERRAIN_TRIANGLE_REACH_FACTOR
+  const start = path.points[index - 1]
+  const end = path.points[index]
+  const startSample = plan.samples[index - 1]
+  const endSample = plan.samples[index]
+  if (!start || !end || !startSample || !endSample) return null
+  const dx = end[0] - start[0]
+  const dz = end[2] - start[2]
+  const segmentLengthSquared = dx * dx + dz * dz
+  if (segmentLengthSquared <= EPSILON) return null
+  const amount = clamp01(((x - start[0]) * dx + (z - start[2]) * dz) / segmentLengthSquared)
+  const nearestX = start[0] + dx * amount
+  const nearestZ = start[2] + dz * amount
+  const segmentLength = Math.sqrt(segmentLengthSquared)
+  const segmentStart = path.distances[index - 1] ?? 0
+  const along = segmentStart + segmentLength * amount
+  if (beyondRoundedCap(plan, river, along, x, z, vertexReach)) return null
+  // At a rounded tip the analytic width reaches zero. Move no farther than
+  // one terrain-triangle reach toward the authored path so the vertices of
+  // the final triangle are still excavated beneath the compact cap.
+  const supportedAlong =
+    along < path.authoredStartDistance
+      ? Math.min(path.authoredStartDistance, along + vertexReach)
+      : along > path.authoredEndDistance
+        ? Math.max(path.authoredEndDistance, along - vertexReach)
+        : along
+  const supportedAmount = clamp01((supportedAlong - segmentStart) / segmentLength)
+  const section = supportedSection(plan, river, index, supportedAlong, supportedAmount)
+  if (section.halfWidthM <= EPSILON) return null
+  const lateralDistance = Math.hypot(x - nearestX, z - nearestZ)
+  const lateralSign = ((x - nearestX) * -dz + (z - nearestZ) * dx) / segmentLength >= 0 ? 1 : -1
+  return {
+    ...section,
     // A point on a native terrain triangle can be up to √2 grid spacings from
     // any of its vertices. Eroding that distance here guarantees every vertex
     // influencing the visible ribbon receives at least the point's intended
     // cross-section cut, instead of leaving a raised corner to form a spike.
-    const representedLateral = lateralSign * Math.max(0, lateralDistance - vertexReach)
-    if (river.flow === 'downhill') {
-      const targetMetres = riverSectionTargetHeight({
-        lateralM: representedLateral,
-        groundY: groundM,
-        centerGroundY,
-        channelTopY,
-        depthM,
-        halfWidthM: localHalfWidth,
-        bendShiftM,
-        section: river.section,
-      })
-      if (targetMetres === null) continue
-      const candidate: PlannedTarget = {
-        height: quantize(terrain, targetMetres),
-        lateralM: Math.abs(representedLateral),
-      }
-      if (
-        !nearest ||
-        candidate.lateralM < nearest.lateralM ||
-        (candidate.lateralM === nearest.lateralM && candidate.height < nearest.height)
-      ) {
-        nearest = candidate
-      }
-      continue
-    }
-    const fromDeepLine = Math.abs(representedLateral - bendShiftM)
-    if (fromDeepLine >= localHalfWidth) continue
-    const crossSection = riverSectionShape(
-      river.section.shape,
-      fromDeepLine,
-      localHalfWidth,
-      depthM,
-      river.section.bankSlope,
-    )
-    if (crossSection <= 0) continue
-    bestCut = Math.min(bestCut, quantize(terrain, centerGroundY - depthM * crossSection))
+    representedLateralM: lateralSign * Math.max(0, lateralDistance - vertexReach),
+    bendShiftM: lerp(startSample.bendShiftM, endSample.bendShiftM, supportedAmount),
+    channelTopY: lerp(startSample.channelTopY, endSample.channelTopY, supportedAmount),
+    centerGroundY: lerp(startSample.groundY, endSample.groundY, amount),
   }
-  if (river.flow === 'downhill') return nearest
-  return Number.isFinite(bestCut) ? { height: bestCut, lateralM: 0 } : null
+}
+
+/** A grid sample past a rounded cap's disc, which the cap's segments must not cut. */
+function beyondRoundedCap(
+  plan: RiverPlan,
+  river: RiverNode,
+  along: number,
+  x: number,
+  z: number,
+  vertexReach: number,
+): boolean {
+  const path = plan.path
+  const capCenter =
+    river.source === 'rounded' && along < path.authoredStartDistance
+      ? { point: river.points[0], halfWidthM: plan.authoredStartWidthM * 0.5 }
+      : river.outlet === 'rounded' && along > path.authoredEndDistance
+        ? { point: river.points.at(-1), halfWidthM: plan.authoredEndWidthM * 0.5 }
+        : undefined
+  return Boolean(
+    capCenter?.point &&
+      Math.hypot(x - capCenter.point[0], z - capCenter.point[1]) > capCenter.halfWidthM + vertexReach,
+  )
+}
+
+/**
+ * Half-width and reached depth at a supported station. They are evaluated at
+ * the station itself, never interpolated between samples: the cap profile is
+ * a curve, and the pre-v3 carve (which migrated rivers must reproduce)
+ * evaluated it there.
+ */
+function supportedSection(
+  plan: RiverPlan,
+  river: RiverNode,
+  index: number,
+  supportedAlong: number,
+  supportedAmount: number,
+): Readonly<{ halfWidthM: number; depthM: number }> {
+  const { path, sizes } = plan
+  const stationM = lerp(
+    path.authoredStations[index - 1] ?? 0,
+    path.authoredStations[index] ?? 0,
+    supportedAmount,
+  )
+  const widthM =
+    valueAtStation(sizes.stationsM, sizes.widthsM, stationM) *
+    riverPathWidthScale(path, river, supportedAlong)
+  const depthM = riverSectionDepthM(
+    river.section,
+    widthM * 0.5,
+    valueAtStation(sizes.stationsM, sizes.depthsM, stationM) *
+      riverPathDepthScale(path, river, supportedAlong),
+  )
+  return { halfWidthM: widthM * 0.5, depthM }
+}
+
+/** Downhill: the bed or bank height set outright from the solved profile. */
+function downhillTarget(
+  terrain: TerrainField,
+  river: RiverNode,
+  station: CarveStation,
+  groundM: number,
+): PlannedTarget | null {
+  const targetMetres = riverSectionTargetHeight({
+    lateralM: station.representedLateralM,
+    groundY: groundM,
+    centerGroundY: station.centerGroundY,
+    channelTopY: station.channelTopY,
+    depthM: station.depthM,
+    halfWidthM: station.halfWidthM,
+    bendShiftM: station.bendShiftM,
+    section: river.section,
+  })
+  if (targetMetres === null) return null
+  return {
+    height: quantize(terrain, targetMetres),
+    lateralM: Math.abs(station.representedLateralM),
+  }
+}
+
+/** As drawn: the pre-v3 cut below the centreline ground, or null outside the channel. */
+function asDrawnCut(terrain: TerrainField, river: RiverNode, station: CarveStation): number | null {
+  const fromDeepLine = Math.abs(station.representedLateralM - station.bendShiftM)
+  if (fromDeepLine >= station.halfWidthM) return null
+  const crossSection = riverSectionShape(
+    river.section.shape,
+    fromDeepLine,
+    station.halfWidthM,
+    station.depthM,
+    river.section.bankSlope,
+  )
+  if (crossSection <= 0) return null
+  return quantize(terrain, station.centerGroundY - station.depthM * crossSection)
 }
 
 function lerp(start: number, end: number, amount: number): number {
