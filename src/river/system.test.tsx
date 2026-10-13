@@ -101,8 +101,10 @@ const DOWNHILL_RIVER = {
 
 describe('RiverSystem reconciliation', () => {
   let previousScene = useScene.getState()
+  let previousHistory = useScene.temporal.getState()
   beforeEach(() => {
     previousScene = useScene.getState()
+    previousHistory = useScene.temporal.getState()
     const site = flatSite()
     useScene.getState().setScene({ [site.id]: site } as Record<AnyNodeId, AnyNode>, [
       site.id as AnyNodeId,
@@ -110,6 +112,7 @@ describe('RiverSystem reconciliation', () => {
   })
   afterEach(() => {
     useScene.setState(previousScene, true)
+    useScene.temporal.setState(previousHistory, true)
   })
 
   test('an apply is the only write: reconciliation adds no second one', async () => {
