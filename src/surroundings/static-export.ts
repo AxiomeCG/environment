@@ -65,7 +65,6 @@ import {
   createExteriorTerrainSampler,
   createRenderedTerrainSampler,
   createTerrainSubdivisionSampler,
-  deriveExteriorTerrainGroundBoundary,
   deriveExteriorTerrainSectionAddresses,
   mergeExteriorTerrainSections,
   EXTERIOR_TERRAIN_GROUND_OFFSET,
@@ -1229,7 +1228,7 @@ export async function buildStaticSurroundings(
       '[Environment] Static surroundings require a finite, non-degenerate Site boundary',
     )
   }
-  const groundBoundary = deriveExteriorTerrainGroundBoundary(boundary, terrainFieldOf(site))
+  const groundBoundary = boundary
   const state: TextureCloneState = { textures: new Map(), materials: new Map() }
   const regional = deriveLandscapeRegion(configuration.seed)
   const region =

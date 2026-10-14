@@ -52,30 +52,6 @@ export type ExteriorTerrainGeometry = Readonly<{
   triangleCount: number
 }>
 
-/**
- * The footprint of the ground surface rendered by the host.
- *
- * Sculpted terrain replaces the flat Site fill with its complete sample grid,
- * which can extend beyond the property polygon. Exterior geometry must cut
- * around that grid rather than overlap the extra rows and columns.
- */
-export function deriveExteriorTerrainGroundBoundary(
-  boundary: readonly Point2[],
-  terrain: TerrainField | null,
-): readonly Point2[] {
-  if (!terrain) return boundary
-  const minX = terrain.origin[0]
-  const minZ = terrain.origin[1]
-  const maxX = minX + (terrain.cols - 1) * terrain.spacing
-  const maxZ = minZ + (terrain.rows - 1) * terrain.spacing
-  return [
-    [minX, minZ],
-    [maxX, minZ],
-    [maxX, maxZ],
-    [minX, maxZ],
-  ]
-}
-
 export function exteriorTerrainSectionKey(sectionX: number, sectionZ: number): string {
   return `exterior-terrain:${sectionX}:${sectionZ}`
 }
@@ -478,9 +454,9 @@ export function buildExteriorTerrainSections(
     (left, right) => left.z - right.z || left.x - right.x,
   )
   const sampler = createExteriorTerrainSampler(context)
-  const groundBoundary = deriveExteriorTerrainGroundBoundary(context.boundary, context.terrain)
+  // Grid padding is sampling support, not a rendered hole outside the property.
   return orderedAddresses.map((address) =>
-    buildExteriorTerrainSection(address, sampler, groundBoundary),
+    buildExteriorTerrainSection(address, sampler, context.boundary),
   )
 }
 

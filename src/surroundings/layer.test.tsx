@@ -128,7 +128,7 @@ describe('Surroundings presentation layer', () => {
     }
   })
 
-  test('tracks the first live Terrain field mount and cancellation', async () => {
+  test('keeps the lot padding drawn during the first live Terrain mount and cancellation', async () => {
     const boundary = [
       [-15, -15],
       [15, -15],
@@ -172,7 +172,7 @@ describe('Surroundings presentation layer', () => {
       await act(async () => {
         useLiveTerrain.getState().begin(site.id, liveTerrain)
       })
-      expect(exteriorHitAt(15.5)).toBeUndefined()
+      expect(exteriorHitAt(15.5)).toBeDefined()
       expect(exteriorHitAt(16.01)).toBeDefined()
 
       await act(async () => {

@@ -1,5 +1,6 @@
-import { createTerrainField, surfaceHeightAt, type TerrainField } from '@pascal-app/core'
+import { createTerrainField, SiteNode, surfaceHeightAt, terrainFieldOf, type TerrainField } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { BufferAttribute, BufferGeometry, Mesh, MeshBasicMaterial, Raycaster, Vector3 } from 'three'
 import {
   deriveSurroundingsLayout,
@@ -22,6 +23,8 @@ import {
 import { deriveRuntimeRoadNetwork } from './runtime-road-graph'
 import { buildRoadPresentationPlan } from './streetscape-road-presentation'
 import { clipConvexPolygon } from './neighborhood'
+
+const cliffLot: unknown = JSON.parse(readFileSync(new URL('./fixtures/cliff-lot.json', import.meta.url), 'utf8'))
 
 const DEFAULT_SITE = [
   [-15, -15],
@@ -115,6 +118,59 @@ function expectNoExteriorAreaWithin(
     }
   }
 }
+
+function exteriorAreaWithin(sections: readonly ExteriorTerrainSection[], footprint: readonly Point2[]): number {
+  let area = 0
+  for (const section of sections) {
+    for (let offset = 0; offset < section.indices.length; offset += 3) {
+      const triangle: Point2[] = []
+      for (let corner = 0; corner < 3; corner += 1) {
+        const vertex = (section.indices[offset + corner] ?? 0) * 3
+        triangle.push([section.positions[vertex] ?? 0, section.positions[vertex + 2] ?? 0])
+      }
+      const clipped = clipConvexPolygon(triangle, footprint.map(([x, z]) => [x, z]))
+      const doubledArea = clipped.reduce((sum, point, index) => {
+        const next = clipped[(index + 1) % clipped.length]
+        return next ? sum + point[0] * next[1] - next[0] * point[1] : sum
+      }, 0)
+      area += Math.abs(doubledArea) / 2
+    }
+  }
+  return area
+}
+
+describe('lot-polygon exterior cutout', () => {
+  test('draws the complete padding ring on the owner cliff lot', () => {
+    const site = SiteNode.parse(cliffLot)
+    const terrain = terrainFieldOf(site)
+    if (!terrain) throw new Error('Owner fixture must contain its terrain field')
+    const coverage = buildExteriorCoverage(site.polygon.points, terrain)
+    // The owner's 30 × 30 m lot lies inside a 32 × 32 m field: 124 m² of padding.
+    const fieldRectangle: Point2[] = [[-16, -16], [16, -16], [16, 16], [-16, 16]]
+    try {
+      expect(exteriorAreaWithin(coverage.sections, fieldRectangle)).toBeCloseTo(124, 5)
+      expectNoExteriorAreaWithin(coverage.sections, site.polygon.points)
+      for (let x = -15.875; x < 16; x += 0.25) {
+        for (let z = -15.875; z < 16; z += 0.25) {
+          if (Math.abs(x) < 15 && Math.abs(z) < 15) continue
+          expect(coverage.heightAt([x, z])).toBeDefined()
+        }
+      }
+    } finally { coverage.dispose() }
+  })
+
+  test('a flat terrain field preserves the flat lot mesh and height samples', () => {
+    const field = createTerrainField({ origin: [-16, -16], spacing: 0.5, cols: 65, rows: 65 })
+    const flat = buildExteriorCoverage(DEFAULT_SITE, null)
+    const withField = buildExteriorCoverage(DEFAULT_SITE, field)
+    try {
+      expect(withField.sections.map(sectionSignature)).toEqual(flat.sections.map(sectionSignature))
+      for (const point of [[15.5, 0], [-15.5, 0], [0, 15.5], [0, -15.5]] as const) {
+        expect(withField.heightAt(point)).toBe(flat.heightAt(point))
+      }
+    } finally { flat.dispose(); withField.dispose() }
+  })
+})
 
 describe('exterior Terrain section addresses', () => {
   test('uses stable world keys across negative coordinates', () => {
@@ -235,7 +291,7 @@ describe('exterior Terrain sampling', () => {
     }
   })
 
-  test('tracks the active cutout when Terrain is added, resized, or removed', () => {
+  test('keeps the lot cutout when Terrain is added, resized, or removed', () => {
     const concaveSite = [
       [83, -37],
       [93, -37],
@@ -251,12 +307,6 @@ describe('exterior Terrain sampling', () => {
       spacing: 2,
       step: 0.01,
     })
-    const paddedFootprint = [
-      [80, -38],
-      [96, -38],
-      [96, -32],
-      [80, -32],
-    ] as const satisfies readonly Point2[]
     const resizedTerrain = createTerrainField({
       cols: 13,
       origin: [82, -38],
@@ -264,36 +314,18 @@ describe('exterior Terrain sampling', () => {
       spacing: 1,
       step: 0.01,
     })
-    const resizedFootprint = [
-      [82, -38],
-      [94, -38],
-      [94, -32],
-      [82, -32],
-    ] as const satisfies readonly Point2[]
 
     const padded = buildExteriorCoverage(concaveSite, paddedTerrain)
     const resized = buildExteriorCoverage(concaveSite, resizedTerrain)
     const removed = buildExteriorCoverage(concaveSite, null)
     try {
-      // A grid has (cols - 1) by (rows - 1) cells, so these literal
-      // rectangles are analytical oracles rather than candidate-derived output.
-      expectNoExteriorAreaWithin(padded.sections, paddedFootprint)
-      expect(padded.heightAt([91, -34])).toBeUndefined()
-      for (const point of [
-        [79.99, -35],
-        [96.01, -35],
-        [88, -38.01],
-        [88, -31.99],
-      ] as const satisfies readonly Point2[]) {
-        expect(padded.heightAt(point)).toBeDefined()
+      expect(padded.sections.map(sectionSignature)).toEqual(removed.sections.map(sectionSignature))
+      expect(resized.sections.map(sectionSignature)).toEqual(removed.sections.map(sectionSignature))
+      for (const coverage of [padded, resized, removed]) {
+        expect(coverage.heightAt([84, -36])).toBeUndefined()
+        expect(coverage.heightAt([91, -34])).toBeDefined()
+        expect(coverage.heightAt([82.25, -34])).toBeDefined()
       }
-
-      expectNoExteriorAreaWithin(resized.sections, resizedFootprint)
-      expect(resized.heightAt([82.25, -34])).toBeUndefined()
-      expect(resized.heightAt([94.01, -35])).toBeDefined()
-
-      expect(removed.heightAt([84, -36])).toBeUndefined()
-      expect(removed.heightAt([91, -34])).toBeDefined()
     } finally {
       padded.dispose()
       resized.dispose()
