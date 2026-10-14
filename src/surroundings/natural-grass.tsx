@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Color, type Group } from 'three'
+import { Color, type Group, type Material } from 'three'
 import * as TSL from 'three/tsl'
 import type { MeshStandardNodeMaterial, Node } from 'three/webgpu'
 import { createGrassBladeMaterial } from '../ground-cover/render/blade-material'
@@ -18,6 +18,7 @@ import {
 } from '../ground-cover/render/grass-tiles'
 import type { GrassCandidateVisitor } from '../ground-cover/scatter'
 import type { SiteBounds } from '../ground-cover/paint-field'
+import { plantingDensityAt, plantingTerrainSample } from '../planting-terrain'
 import type {
   NaturalLowVegetationPlacement,
   NaturalSurroundingsVegetationProps,
@@ -44,6 +45,7 @@ const varyingFloat = TSL.varying as unknown as (node: Node<'float'>, name: strin
 export type NaturalGrassCandidateContext = Readonly<{
   boundary: NaturalSurroundingsVegetationProps['boundary']
   heightAt: NaturalSurroundingsVegetationProps['heightAt']
+  normalAt?: NaturalSurroundingsVegetationProps['normalAt']
   waterLevelAt: NaturalSurroundingsVegetationProps['waterLevelAt']
   patches: readonly NaturalLowVegetationPlacement[]
   presetId: NaturalSurroundingsPresetId
@@ -69,6 +71,8 @@ export function visitNaturalGrassCandidates(
       if (signedBoundaryDistance(context.boundary, x, z) < 0.6) continue
       const y = dryNaturalHeightAt(x, z, context.heightAt, context.waterLevelAt)
       if (y === null) continue
+      const terrain = plantingTerrainSample(y, context.normalAt?.(x, z) ?? [0, 1, 0])
+      if (seededUnit(patch.id, `${domain}:slope`) >= plantingDensityAt(terrain, 'grass')) continue
       visitor(
         x,
         y,
@@ -149,38 +153,48 @@ function disposeNaturalGrass(group: Group): void {
   group.clear()
 }
 
+export function buildNaturalGrassInstances(
+  context: NaturalGrassCandidateContext,
+  material: Material,
+): Group {
+  const { boundary, heightAt, normalAt, patches } = context
+  const next = createGrassTiles(
+    BLADE_DIMENSIONS,
+    boundary,
+    boundsOfPatches(patches),
+    null,
+    material,
+    {
+      candidates: (visitor) => { visitNaturalGrassCandidates(context, visitor) },
+      tileSize: NATURAL_GRASS_TILE_SIZE,
+      candidatesApplyTerrainDensity: true,
+      sampleTerrain: (x, z) => plantingTerrainSample(heightAt(x, z), normalAt?.(x, z) ?? [0, 1, 0]),
+    },
+  )
+  const runtime = getGrassTilesRuntime(next)
+  next.name = 'environment-natural-gpu-grass'
+  next.userData = {
+    bladeCount: runtime?.tiles.reduce((sum, tile) => sum + tile.candidateCount, 0) ?? 0,
+    tileCount: runtime?.tiles.length ?? 0,
+    maximumVisibleDrawCallCount: runtime?.tiles.length ?? 0,
+  }
+  return next
+}
+
 export function NaturalGrass({
   boundary,
   heightAt,
+  normalAt,
   waterLevelAt,
   patches,
   presetId,
 }: NaturalGrassCandidateContext) {
   const material = useMemo(() => createNaturalGrassMaterial(presetId), [presetId])
-  const candidates = useMemo(
-    () => (visitor: GrassCandidateVisitor) => {
-      visitNaturalGrassCandidates({ boundary, heightAt, waterLevelAt, patches, presetId }, visitor)
-    },
-    [boundary, heightAt, waterLevelAt, patches, presetId],
+  const context = useMemo(
+    () => ({ boundary, heightAt, normalAt, waterLevelAt, patches, presetId }),
+    [boundary, heightAt, normalAt, waterLevelAt, patches, presetId],
   )
-  const group = useMemo(() => {
-    const next = createGrassTiles(
-      BLADE_DIMENSIONS,
-      boundary,
-      boundsOfPatches(patches),
-      null,
-      material,
-      { candidates, tileSize: NATURAL_GRASS_TILE_SIZE },
-    )
-    const runtime = getGrassTilesRuntime(next)
-    next.name = 'environment-natural-gpu-grass'
-    next.userData = {
-      bladeCount: runtime?.tiles.reduce((sum, tile) => sum + tile.candidateCount, 0) ?? 0,
-      tileCount: runtime?.tiles.length ?? 0,
-      maximumVisibleDrawCallCount: runtime?.tiles.length ?? 0,
-    }
-    return next
-  }, [boundary, candidates, material, patches])
+  const group = useMemo(() => buildNaturalGrassInstances(context, material), [context, material])
   const invalidate = useThree((state) => state.invalidate)
 
   useLayoutEffect(() => {

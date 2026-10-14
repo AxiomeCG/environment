@@ -1,9 +1,12 @@
 import type { GeometryContext } from '@pascal-app/core'
+import { plantingDensityAt, samplePlantingTerrain } from '../planting-terrain'
+import { setPlantingRotation } from '../planting-transform'
 import {
   BufferAttribute,
   BufferGeometry,
   DoubleSide,
   Group,
+  Matrix4,
   Mesh,
   MeshStandardMaterial,
   Quaternion,
@@ -178,6 +181,11 @@ function buildResolvedGrassFieldBakeGeometry(
   const yawRotation = new Quaternion()
   const normalVariationRotation = new Quaternion()
   const transformedNormal = new Vector3()
+  const transformedPosition = new Vector3()
+  const terrainRotation = new Matrix4()
+  const terrainNormal = new Vector3()
+  const terrainRestDirection = new Vector3()
+  const terrainObstacleDirection = new Vector3()
   const restCurve: GrassBladeCurvePoint = { horizontal: 0, vertical: 0 }
   const surfaceSample: SurfaceExportSample = {
     r: 0,
@@ -202,6 +210,9 @@ function buildResolvedGrassFieldBakeGeometry(
         if (bladeHeight <= 0) return
 
         resolveBladeIntrinsicColors(node, tint, evaluation)
+        const terrainSample = samplePlantingTerrain(fields.terrain, x, z)
+        terrainNormal.set(...terrainSample.normal)
+        setPlantingRotation(terrainRotation, terrainSample.normal, 0)
         yawRotation.setFromAxisAngle(up, yaw)
         normalVariationRotation.setFromAxisAngle(up, -tint * MAX_GRASS_NORMAL_YAW)
         const width = node.bladeWidth * widthFactor
@@ -212,6 +223,9 @@ function buildResolvedGrassFieldBakeGeometry(
         const restDirectionLength = Math.hypot(restDirectionX, restDirectionZ)
         const normalizedRestDirectionX = restDirectionX / restDirectionLength
         const normalizedRestDirectionZ = restDirectionZ / restDirectionLength
+        terrainRestDirection.set(restDirectionX, 0, restDirectionZ).projectOnPlane(terrainNormal).normalize()
+        terrainObstacleDirection.set(evaluation.obstacleDirectionX, 0, evaluation.obstacleDirectionZ)
+          .projectOnPlane(terrainNormal)
         const obstacleOffset =
           (node.obstacleBendStrength ?? 0.12) *
           evaluation.obstacleInfluence *
@@ -248,13 +262,28 @@ function buildResolvedGrassFieldBakeGeometry(
             rotatedSourceZ +
             normalizedRestDirectionZ * restCurve.horizontal +
             evaluation.obstacleDirectionZ * obstacleOffset * contactHeightMask
+          if (terrainSample.normal[0] !== 0 || terrainSample.normal[2] !== 0) {
+            transformedPosition.set(
+              rotatedSourceX, 0, rotatedSourceZ,
+            ).applyMatrix4(terrainRotation)
+              .addScaledVector(terrainNormal, restCurve.vertical)
+              .addScaledVector(terrainRestDirection, restCurve.horizontal)
+              .addScaledVector(terrainObstacleDirection, obstacleOffset * contactHeightMask)
+            chunk.positions[outputOffset] = x + transformedPosition.x
+            chunk.positions[outputOffset + 1] = y + transformedPosition.y
+            chunk.positions[outputOffset + 2] = z + transformedPosition.z
+          }
 
           transformedNormal
             .fromBufferAttribute(bladeNormals, vertexIndex)
             .applyQuaternion(yawRotation)
             .applyQuaternion(normalVariationRotation)
           transformedNormal.y = Math.abs(transformedNormal.y) * 0.2 + 0.85
-          transformedNormal.normalize().toArray(chunk.normals, outputOffset)
+          transformedNormal.normalize()
+          if (terrainSample.normal[0] !== 0 || terrainSample.normal[2] !== 0) {
+            transformedNormal.transformDirection(terrainRotation)
+          }
+          transformedNormal.toArray(chunk.normals, outputOffset)
 
           const groundRootBlend = 1 - smoothstep(0, SURFACE_ROOT_BLEND_END, bladeProgress)
           let groundRed = evaluation.red
@@ -327,7 +356,8 @@ function evaluateCandidate(
 ): boolean {
   sampleGrassPaintTexture(fields.paint, x, z, paintSample)
   const density = shapeGrassCoverageValue(paintSample.alpha * ((node.density ?? 100) / 100))
-  if (density <= 0 || threshold > density) return false
+  const terrainDensity = plantingDensityAt(samplePlantingTerrain(fields.terrain, x, z), 'grass')
+  if (density <= 0 || terrainDensity <= 0 || threshold > density * terrainDensity) return false
 
   const obstacle = sampleGrassObstacle(fields.obstacles, x, z)
   if (obstacle.allowed < 0.5) return false

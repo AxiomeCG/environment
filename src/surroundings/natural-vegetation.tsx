@@ -7,19 +7,21 @@ import {
   DoubleSide,
   Group,
   Matrix4,
-  Quaternion,
   Vector3,
   type BufferGeometry,
   type Material,
 } from 'three'
 import { FLOWER_KINDS, type FlowerKind } from '../ground-cover/flower-scatter'
 import { createFlowerGeometry } from '../ground-cover/render/flower-geometry'
+import { plantingDensityAt, plantingTerrainSample, type PlantingTerrainSample } from '../planting-terrain'
+import { setPlantingRotation } from '../planting-transform'
 import { mulberry32 } from '../variant-utils'
 import { polygonCentroid } from './exterior-terrain'
 import type { Point2 } from './frontages'
 import type { HorizonFoliagePlan, HorizonFoliageSpecies } from './horizon-foliage'
 import { NaturalGrass, NATURAL_GRASS_BLADE_BUDGET } from './natural-grass'
-import type { TreePlan, TreeSize, TreeSpecies, TreeType } from './neighborhood-decoration'
+import type { TreeSize, TreeSpecies, TreeType } from './neighborhood-decoration'
+import type { GroundedTreePlan } from './neighborhood-trees'
 import { dryNaturalHeightAt, signedBoundaryDistance } from './natural-spatial'
 import { PresentationMaterial } from './presentation-material'
 import { createContextInstances, disposePrimitiveInstances } from './primitive-instances'
@@ -49,6 +51,7 @@ export type NaturalFlowerKind = FlowerKind
 type NaturalPlacement = Readonly<{
   id: string
   position: readonly [number, number, number]
+  normal: readonly [number, number, number]
   rotationY: number
   scale: number
   color: string
@@ -92,6 +95,7 @@ export type NaturalVegetationContext = Readonly<{
   seed: string
   presetId: NaturalSurroundingsPresetId
   heightAt: (x: number, z: number) => number
+  normalAt?: (x: number, z: number) => readonly [number, number, number]
   waterLevelAt?: (x: number, z: number) => number | null
   foliageColors?: readonly string[]
 }>
@@ -99,7 +103,7 @@ export type NaturalVegetationContext = Readonly<{
 export type NaturalSurroundingsVegetationProps = NaturalVegetationContext
 
 export type NaturalTreeRenderPlan = Readonly<{
-  detailed: readonly TreePlan[]
+  detailed: readonly GroundedTreePlan[]
   distant: readonly HorizonFoliagePlan[]
 }>
 
@@ -113,7 +117,6 @@ const LOW_COLORS: Readonly<Record<NaturalSurroundingsPresetId, readonly string[]
   'woodland-edge': ['#496b43', '#58774a', '#3f623d', '#6c8052'],
 })
 const TRUNK_COLORS = ['#655044', '#765d49', '#54483c'] as const
-const UP = new Vector3(0, 1, 0)
 const NO_RAYCAST = () => undefined
 const LOW_SLOTS_PER_TILE = 24
 const FLOWER_SLOTS_PER_TILE = 12
@@ -232,9 +235,12 @@ function treeSpecies(
   seed: string,
   domain: string,
   presetId: NaturalSurroundingsPresetId,
+  terrain: PlantingTerrainSample,
 ): TreeSpecies {
   const value = seededUnit(seed, `${domain}:species`)
-  const pineShare = presetId === 'woodland-edge' ? 0.3 : 0.16
+  const pineShare =
+    (presetId === 'woodland-edge' ? 0.3 : 0.16) +
+    terrain.slopeDeg / 40 * 0.14 - terrain.southExposure * 0.12
   if (value < pineShare) return 'pine'
   const deciduous = (value - pineShare) / (1 - pineShare)
   if (deciduous < 0.42) return 'oak'
@@ -242,11 +248,42 @@ function treeSpecies(
   return 'aspen'
 }
 
+function flowerKind(seed: string, domain: string, terrain: PlantingTerrainSample): FlowerKind {
+  const value = seededUnit(seed, `${domain}:kind`)
+  if (terrain.slopeDeg === 0) {
+    return FLOWER_KINDS[Math.floor(value * FLOWER_KINDS.length)] ?? 'daisy'
+  }
+  // These are visual aspect proxies, not simulated sunlight or botanical claims.
+  const daisyShare = 1 / 3 + terrain.southExposure * 0.12 - terrain.slopeDeg / 55 * 0.05
+  const cupShare = 1 / 3 - terrain.southExposure * 0.06
+  if (value < daisyShare) return 'daisy'
+  if (value < daisyShare + cupShare) return 'cup'
+  return 'spike'
+}
+
+function sampleNaturalTerrain(
+  height: number,
+  position: Point2,
+  normalAt: NaturalVegetationContext['normalAt'],
+): PlantingTerrainSample {
+  return plantingTerrainSample(height, normalAt?.(position[0], position[1]) ?? [0, 1, 0])
+}
+
+function acceptsSlope(
+  seed: string,
+  domain: string,
+  terrain: PlantingTerrainSample,
+  category: 'grass' | 'flower' | 'tree',
+): boolean {
+  return seededUnit(seed, `${domain}:slope`) < plantingDensityAt(terrain, category)
+}
+
 export function deriveNaturalVegetationPlan({
   boundary,
   seed,
   presetId,
   heightAt,
+  normalAt,
   foliageColors,
   waterLevelAt,
 }: NaturalVegetationContext): NaturalVegetationPlan {
@@ -298,9 +335,12 @@ export function deriveNaturalVegetationPlan({
         waterLevelAt,
       )
       if (height === null) continue
+      const terrain = sampleNaturalTerrain(height, position, normalAt)
+      if (!acceptsSlope(seed, domain, terrain, 'grass')) continue
       lowVegetation.push({
         id: domain,
         position: [position[0], height, position[1]],
+        normal: terrain.normal,
         rotationY: seededRange(seed, `${domain}:rotation`, -Math.PI, Math.PI),
         scale: seededRange(
           seed,
@@ -333,12 +373,14 @@ export function deriveNaturalVegetationPlan({
         waterLevelAt,
       )
       if (height === null) continue
-      const kind =
-        FLOWER_KINDS[Math.floor(seededUnit(seed, `${domain}:kind`) * FLOWER_KINDS.length)]!
+      const terrain = sampleNaturalTerrain(height, position, normalAt)
+      if (!acceptsSlope(seed, domain, terrain, 'flower')) continue
+      const kind = flowerKind(seed, domain, terrain)
       flowers.push({
         id: domain,
         kind,
         position: [position[0], height, position[1]],
+        normal: terrain.normal,
         rotationY: seededRange(seed, `${domain}:rotation`, -Math.PI, Math.PI),
         scale: seededRange(seed, `${domain}:scale`, 0.78, 1.34),
         color: '#ffffff',
@@ -369,18 +411,21 @@ export function deriveNaturalVegetationPlan({
       if (seededUnit(seed, `${domain}:accepted`) >= acceptance) continue
       const height = dryNaturalHeightAt(position[0], position[1], heightAt, waterLevelAt)
       if (height === null) continue
+      const terrain = sampleNaturalTerrain(height, position, normalAt)
+      if (!acceptsSlope(seed, domain, terrain, 'tree')) continue
       const treeHeight = seededRange(
         seed,
         `${domain}:height`,
         presetId === 'open-meadow' ? 8 : 9.5,
         presetId === 'open-meadow' ? 15 : 23,
       )
-      const species = treeSpecies(seed, domain, presetId)
+      const species = treeSpecies(seed, domain, presetId, terrain)
       trees.push({
         id: domain,
         kind: species === 'pine' ? 'pine' : 'deciduous',
         species,
         position: [position[0], height, position[1]],
+        normal: terrain.normal,
         rotationY: seededRange(seed, `${domain}:rotation`, -Math.PI, Math.PI),
         scale: 1,
         height: treeHeight,
@@ -443,7 +488,7 @@ export function deriveNaturalTreeRenderPlan(
   })
   const detailedPlacements = ranked.slice(0, NATURAL_VEGETATION_BUDGET.detailedTrees)
   const detailedIds = new Set(detailedPlacements.map((tree) => tree.id))
-  const detailed: TreePlan[] = detailedPlacements.map((tree) => ({
+  const detailed: GroundedTreePlan[] = detailedPlacements.map((tree) => ({
     id: tree.id,
     species: tree.species,
     size: treeSize(tree.height),
@@ -452,6 +497,8 @@ export function deriveNaturalTreeRenderPlan(
     leafColor: tree.color,
     seed: Math.floor(seededRange(tree.id, `${tree.id}:prototype`, 1, 145)),
     position: [tree.position[0], tree.position[2]],
+    heightM: tree.position[1],
+    normal: tree.normal,
     rotationY: tree.rotationY,
     height: tree.height,
   }))
@@ -476,6 +523,7 @@ export function deriveNaturalTreeRenderPlan(
 
 type BatchPlacement = Readonly<{
   position: readonly [number, number, number]
+  normal: readonly [number, number, number]
   rotationY: number
   dimensions: readonly [number, number, number]
   color: string
@@ -496,19 +544,20 @@ function addBatch(
   instances.receiveShadow = false
   const matrix = new Matrix4()
   const position = new Vector3()
-  const rotation = new Quaternion()
   const scale = new Vector3()
   const color = new Color()
   for (let index = 0; index < placements.length; index += 1) {
-    const placement = placements[index]!
+    const placement = placements[index]
+    if (!placement) continue
     position.fromArray(placement.position)
-    rotation.setFromAxisAngle(UP, placement.rotationY)
     scale.fromArray(placement.dimensions)
-    instances.setMatrixAt(index, matrix.compose(position, rotation, scale))
+    setPlantingRotation(matrix, placement.normal, placement.rotationY)
+    matrix.scale(scale).setPosition(position)
+    instances.setMatrixAt(index, matrix)
     instances.setColorAt(index, color.set(placement.color))
   }
   instances.instanceMatrix.needsUpdate = true
-  instances.instanceColor!.needsUpdate = true
+  if (instances.instanceColor) instances.instanceColor.needsUpdate = true
   instances.computeBoundingSphere()
   root.add(instances)
 }
@@ -521,6 +570,7 @@ function flowerBatch(
     .filter((placement) => placement.kind === kind)
     .map((placement) => ({
       position: placement.position,
+      normal: placement.normal,
       rotationY: placement.rotationY,
       dimensions: [placement.scale, placement.scale, placement.scale],
       color: placement.color,
@@ -555,7 +605,7 @@ export function buildNaturalVegetationInstances(
 }
 
 export function NaturalSurroundingsVegetation(props: NaturalSurroundingsVegetationProps) {
-  const { boundary, seed, presetId, heightAt, waterLevelAt, foliageColors } = props
+  const { boundary, seed, presetId, heightAt, normalAt, waterLevelAt, foliageColors } = props
   const plan = useMemo(
     () =>
       deriveNaturalVegetationPlan({
@@ -563,10 +613,11 @@ export function NaturalSurroundingsVegetation(props: NaturalSurroundingsVegetati
         seed,
         presetId,
         heightAt,
+        normalAt,
         waterLevelAt,
         foliageColors,
       }),
-    [boundary, seed, presetId, heightAt, waterLevelAt, foliageColors],
+    [boundary, seed, presetId, heightAt, normalAt, waterLevelAt, foliageColors],
   )
   const treeRenderPlan = useMemo(
     () => deriveNaturalTreeRenderPlan(plan, boundary),
@@ -586,6 +637,7 @@ export function NaturalSurroundingsVegetation(props: NaturalSurroundingsVegetati
       <NaturalGrass
         boundary={boundary}
         heightAt={heightAt}
+        normalAt={normalAt}
         waterLevelAt={waterLevelAt}
         patches={grassPatches}
         presetId={presetId}

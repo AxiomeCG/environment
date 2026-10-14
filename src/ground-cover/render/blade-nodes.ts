@@ -24,25 +24,57 @@ export type GrassBladeShading = {
 
 export const GRASS_BLADE_PROGRESS = TSL.clamp(TSL.positionGeometry.y, 0, 1)
 
+function projectOntoTerrainTangent(
+  vector: Node<'vec3'>,
+  terrainNormal: Node<'vec3'>,
+): Node<'vec3'> {
+  return vector.sub(terrainNormal.mul(TSL.dot(vector, terrainNormal)))
+}
+
+function createRestBendDirection(
+  surfaceSampleBasis: Node<'vec2'>,
+  terrainNormal: Node<'vec3'>,
+): Node<'vec3'> {
+  const horizontalDirection = TSL.vec3(
+    surfaceSampleBasis.y.add(1e-6),
+    0,
+    surfaceSampleBasis.x,
+  )
+  return TSL.normalize(
+    projectOntoTerrainTangent(horizontalDirection, terrainNormal),
+  )
+}
+
 export function createGrassBladePosition(
   options: GrassBladePositionOptions,
 ): Node<'vec3'> {
   const grassRoot = TSL.attribute<'vec3'>('grassRoot', 'vec3')
+  const terrainNormal = TSL.normalize(
+    TSL.attribute<'vec3'>('grassTerrainNormal', 'vec3'),
+  )
   const surfaceSampleBasis = TSL.attribute<'vec2'>(
     'grassSurfaceSampleBasis',
     'vec2',
   )
   const rootRelativePosition = TSL.positionLocal.sub(grassRoot)
-  const straightHeight = rootRelativePosition.y.mul(options.heightScale)
-  const restBendDirection = TSL.normalize(
-    TSL.vec3(surfaceSampleBasis.y.add(1e-6), 0, surfaceSampleBasis.x),
+  const projectedHeight = TSL.dot(rootRelativePosition, terrainNormal)
+  const straightHeight = projectedHeight.mul(options.heightScale)
+  const tangentPosition = rootRelativePosition.sub(
+    terrainNormal.mul(projectedHeight),
+  )
+  const restBendDirection = createRestBendDirection(
+    surfaceSampleBasis,
+    terrainNormal,
   )
 
-  const windBend = grassWindBend(
-    grassRoot,
-    options.windStrength,
-    options.windInfluence,
-  ).mul(2)
+  const windBend = projectOntoTerrainTangent(
+    grassWindBend(
+      grassRoot,
+      options.windStrength,
+      options.windInfluence,
+    ).mul(2),
+    terrainNormal,
+  )
   const obstacleInfluence = options.obstacleInfluence
   const effectiveWindBend = obstacleInfluence
     ? windBend.mul(TSL.sub(1, obstacleInfluence.mul(0.75)))
@@ -72,15 +104,14 @@ export function createGrassBladePosition(
     : TSL.vec3(0, 0, 0)
 
   return grassRoot.add(
-    TSL.vec3(
-      rootRelativePosition.x
-        .add(bendDirection.x.mul(curvedHorizontal))
-        .add(obstacleOffset.x),
-      curvedHeight,
-      rootRelativePosition.z
-        .add(bendDirection.z.mul(curvedHorizontal))
-        .add(obstacleOffset.z),
-    ),
+    tangentPosition
+      .add(terrainNormal.mul(curvedHeight))
+      .add(bendDirection.mul(curvedHorizontal))
+      .add(
+        obstacleInfluence
+          ? projectOntoTerrainTangent(obstacleOffset, terrainNormal)
+          : obstacleOffset,
+      ),
   )
 }
 

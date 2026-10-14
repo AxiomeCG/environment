@@ -1,4 +1,5 @@
-import { pointInPolygon2D, surfaceHeightAt } from '@pascal-app/core'
+import { pointInPolygon2D } from '@pascal-app/core'
+import { plantingDensityAt, samplePlantingTerrain } from '../planting-terrain'
 import type { GroundCoverFields } from './field-context'
 import { localGrassHeightScaleAt } from './height-field'
 import { sampleGrassObstacle } from './obstacle-field'
@@ -16,11 +17,15 @@ export type FlowerPlacement = Readonly<{
   position: readonly [number, number, number]
   rotationY: number
   scale: number
+  normal?: readonly [number, number, number]
+  terrainDensityThreshold?: number
+  terrainVisible?: boolean
 }>
 
 export function collectFlowerPlacements(
   node: GrassFieldNode,
   fields: GroundCoverFields,
+  retainTerrainCandidates = false,
 ): FlowerPlacement[] {
   const flowerDensity = clamp01((node.flowerDensity ?? 0) / 100)
   const grassDensity = clamp01((node.density ?? 100) / 100)
@@ -51,16 +56,22 @@ export function collectFlowerPlacements(
 
       const localHeightScale = localGrassHeightScaleAt(fields.height, x, z)
       if (localHeightScale <= 0) continue
+      const terrain = samplePlantingTerrain(fields.terrain, x, z)
+      const terrainDensityThreshold = hash01(column, row, 0x452821e6)
+      const terrainVisible = terrainDensityThreshold < plantingDensityAt(terrain, 'flower')
+      if (!terrainVisible && !retainTerrainCandidates) continue
       const speciesValue = mix(
         coherentValueNoise(x, z, 2.4, 0xa4093822),
         hash01(column, row, 0x299f31d0),
         0.22,
-      )
+      ) + terrain.southExposure * 0.12 + terrain.slopeDeg / 90 * 0.1
       const kind = speciesValue < 1 / 3 ? 'daisy' : speciesValue < 2 / 3 ? 'cup' : 'spike'
-      const y = fields.terrain ? surfaceHeightAt(fields.terrain, x, z) : 0
       placements.push({
         kind,
-        position: [x, y, z],
+        position: [x, terrain.heightM, z],
+        normal: terrain.normal,
+        terrainDensityThreshold,
+        terrainVisible,
         rotationY: hash01(column, row, 0x082efa98) * Math.PI * 2,
         scale: (0.78 + hash01(column, row, 0xec4e6c89) * 0.44) * clamp(localHeightScale, 0.5, 1.5),
       })

@@ -759,6 +759,7 @@ export default function SurroundingsLayer({
           seed={seed}
           presetId={presetId}
           heightAt={distantLandscape.sampler.heightAt}
+          normalAt={distantLandscape.sampler.normalAt}
           foliageColors={region.palette.foliage}
           waterLevelAt={presentedLayout.landscape?.waterLevelAt}
         />

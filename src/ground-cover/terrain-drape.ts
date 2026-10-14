@@ -1,4 +1,5 @@
-import { normalAt, surfaceHeightAt, type TerrainField } from "@pascal-app/core";
+import { type TerrainField } from "@pascal-app/core";
+import { samplePlantingTerrain } from "../planting-terrain";
 import {
 	BufferGeometry,
 	Float32BufferAttribute,
@@ -128,9 +129,9 @@ function appendVertex(
 	positions: number[],
 	normals: number[],
 ): void {
-	const y = surfaceHeightAt(field, x, z);
-	const [nx, ny, nz] = normalAt(field, x, z);
-	positions.push(x, y + GROUND_OFFSET, z);
+	const sample = samplePlantingTerrain(field, x, z);
+	const [nx, ny, nz] = sample.normal;
+	positions.push(x, sample.heightM + GROUND_OFFSET, z);
 	normals.push(nx, ny, nz);
 }
 

@@ -34,6 +34,8 @@ import {
 } from '../export/material-baker'
 import { bakeWaterMaterial } from '../export/water-material-bake'
 import { POND_WATER_APPEARANCE } from '../pond/appearance'
+import { plantingTerrainSample } from '../planting-terrain'
+import { setPlantingRotation } from '../planting-transform'
 import type { EnvironmentConfiguration } from '../presentation-configuration'
 import { RIVER_KIND, type RiverNode } from '../river/schema'
 import { riverTerrainBaseline } from '../river/terrain'
@@ -583,16 +585,17 @@ function buildRoads(
   return root
 }
 
-function buildPortableNaturalGrass(
+export function buildPortableNaturalGrass(
   plan: NaturalVegetationPlan,
   boundary: readonly Point2[],
   heightAt: (x: number, z: number) => number,
   waterLevelAt: (x: number, z: number) => number | null,
+  normalAt?: (x: number, z: number) => readonly [number, number, number],
 ): Group {
   const root = new Group()
   root.name = 'environment-static-natural-grass'
   const patches = plan.tiles.flatMap((tile) => tile.lowVegetation)
-  const context = { boundary, heightAt, waterLevelAt, patches, presetId: plan.presetId }
+  const context = { boundary, heightAt, normalAt, waterLevelAt, patches, presetId: plan.presetId }
   let bladeCount = 0
   visitNaturalGrassCandidates(context, (_x, _y, _z, _yaw, _width, _height, density) => {
     if (density <= 0.92) bladeCount += 1
@@ -618,6 +621,10 @@ function buildPortableNaturalGrass(
   const tip = new Color(plan.presetId === 'woodland-edge' ? '#78905a' : '#a4b965')
   const vertexColor = new Color()
   const restBend = plan.presetId === 'woodland-edge' ? 0.32 : 0.22
+  const alignment = new Matrix4()
+  const offset = new Vector3()
+  const terrainNormal = new Vector3()
+  const restDirection = new Vector3()
   let bladeIndex = 0
   visitNaturalGrassCandidates(context, (x, y, z, yaw, widthFactor, heightFactor, density, tint) => {
     if (density > 0.92) return
@@ -625,6 +632,12 @@ function buildPortableNaturalGrass(
     const height = 0.3 * heightFactor
     const cosine = Math.cos(yaw)
     const sine = Math.sin(yaw)
+    const terrain = plantingTerrainSample(y, normalAt?.(x, z) ?? [0, 1, 0])
+    setPlantingRotation(alignment, terrain.normal, 0)
+    terrainNormal.fromArray(terrain.normal)
+    // Match the shader's grassSurfaceSampleBasis yaw seed and tangent projection.
+    restDirection.set(sine * width + 1e-6, 0, cosine * width)
+    restDirection.addScaledVector(terrainNormal, -restDirection.dot(terrainNormal)).normalize()
     const tintScale = Math.max(0.82, Math.min(1.12, 1 + tint * 0.1))
     for (let vertex = 0; vertex < verticesPerBlade; vertex += 1) {
       const sourceOffset = vertex * 3
@@ -638,9 +651,23 @@ function buildPortableNaturalGrass(
       const curvedHeight =
         bendAngle > 1e-5 ? (straightHeight * Math.sin(bendAngle)) / bendAngle : straightHeight
       const outputOffset = (bladeIndex * verticesPerBlade + vertex) * 3
-      positions[outputOffset] = x + cosine * localX + sine * localZ + sine * curvedHorizontal
-      positions[outputOffset + 1] = y + curvedHeight
-      positions[outputOffset + 2] = z - sine * localX + cosine * localZ + cosine * curvedHorizontal
+      if (terrain.slopeDeg === 0) {
+        // Preserve the existing flat export arithmetic exactly.
+        positions[outputOffset] = x + cosine * localX + sine * localZ + sine * curvedHorizontal
+        positions[outputOffset + 1] = y + curvedHeight
+        positions[outputOffset + 2] = z - sine * localX + cosine * localZ + cosine * curvedHorizontal
+      } else {
+        offset.set(
+          cosine * localX + sine * localZ,
+          0,
+          -sine * localX + cosine * localZ,
+        ).applyMatrix4(alignment)
+          .addScaledVector(terrainNormal, curvedHeight)
+          .addScaledVector(restDirection, curvedHorizontal)
+        positions[outputOffset] = x + offset.x
+        positions[outputOffset + 1] = y + offset.y
+        positions[outputOffset + 2] = z + offset.z
+      }
       const tipMix = smoothstep(0.12, 0.92, progress)
       const rootShade = 0.78 + (1 - 0.78) * progress ** 0.65
       vertexColor
@@ -1323,6 +1350,7 @@ export async function buildStaticSurroundings(
           seed: configuration.seed,
           presetId: configuration.preset,
           heightAt: renderedTerrain.heightAt,
+          normalAt: renderedTerrain.normalAt,
           waterLevelAt,
           foliageColors: region.palette.foliage,
         })
@@ -1343,6 +1371,7 @@ export async function buildStaticSurroundings(
       boundary,
       renderedTerrain.heightAt,
       waterLevelAt,
+      renderedTerrain.normalAt,
     )
     const flowers = naturalPlan.tiles.flatMap((tile) => tile.flowers)
     const flowerRoot = createBakedFlowerBatches(flowers)

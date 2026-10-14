@@ -1,6 +1,7 @@
 import {
   createTerrainField,
   encodeTerrainField,
+  normalAt,
   type GeometryContext,
   SiteNode,
   surfaceHeightAt,
@@ -310,7 +311,7 @@ test('full density scatters one candidate per site cell', () => {
   expect(surfaceSampleBases.getY(0)).toBeCloseTo(-(matrix.elements[2] as number))
 })
 
-test('drapes roots and painted ground over slopes while blades remain upright', () => {
+test('drapes roots and painted ground over slopes and aligns blades to terrain normals', () => {
   const terrain = createTerrainField({
     origin: [0, 0],
     spacing: 0.1,
@@ -365,7 +366,8 @@ test('drapes roots and painted ground over slopes while blades remain upright', 
   const rotation = new Quaternion()
   blade.getMatrixAt(0, matrix)
   matrix.decompose(new Vector3(), rotation, new Vector3())
-  expect(new Vector3(0, 1, 0).applyQuaternion(rotation).toArray()).toEqual([0, 1, 0])
+  const terrainNormal = new Vector3(...normalAt(terrain, roots.getX(0), roots.getZ(0)))
+  expect(new Vector3(0, 1, 0).applyQuaternion(rotation).distanceTo(terrainNormal)).toBeLessThan(1e-6)
 
   const positions = ground.geometry.getAttribute('position')
   const normals = ground.geometry.getAttribute('normal')

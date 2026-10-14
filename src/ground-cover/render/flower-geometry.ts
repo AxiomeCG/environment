@@ -1,4 +1,4 @@
-import { surfaceHeightAt, type HeightPatch, type TerrainField } from '@pascal-app/core'
+import { type HeightPatch, type TerrainField } from '@pascal-app/core'
 import {
   Box3,
   BufferAttribute,
@@ -27,6 +27,8 @@ import { MeshStandardNodeMaterial, type Node } from 'three/webgpu'
 import { grassWindBend } from '../../wind-node'
 import { FLOWER_KINDS, type FlowerKind, type FlowerPlacement } from '../flower-scatter'
 import { queueTerrainAttributeUpdate, terrainPatchBounds, type TerrainPatchBounds } from '../terrain-patch'
+import { plantingDensityAt, samplePlantingTerrain, type PlantingTerrainSample } from '../../planting-terrain'
+import { setPlantingRotation, writePlantingMatrix } from '../../planting-transform'
 
 const MAX_BAKED_FLOWER_VERTICES = 65_535
 const STEM_COLOR = new Color('#31552b')
@@ -48,6 +50,7 @@ type FlowerBatch = {
   mesh: InstancedMesh
   roots: InstancedBufferAttribute
   rootBounds: TerrainPatchBounds
+  placements: readonly FlowerPlacement[]
 }
 
 type FlowerBatchRuntime = {
@@ -127,8 +130,8 @@ export function createAnimatedFlowerBatches(
       rootBounds.minZ = Math.min(rootBounds.minZ, roots.getZ(index))
       rootBounds.maxX = Math.max(rootBounds.maxX, roots.getX(index))
       rootBounds.maxZ = Math.max(rootBounds.maxZ, roots.getZ(index))
-      matrix.makeRotationY(placement.rotationY)
-      scale.setScalar(placement.scale)
+      setPlantingRotation(matrix, placement.normal ?? [0, 1, 0], placement.rotationY)
+      scale.setScalar(placement.terrainVisible === false ? 0 : placement.scale)
       matrix.scale(scale)
       matrix.setPosition(...placement.position)
       matrix.toArray(matrices, index * 16)
@@ -144,7 +147,7 @@ export function createAnimatedFlowerBatches(
     mesh.computeBoundingBox()
     mesh.computeBoundingSphere()
     group.add(mesh)
-    batches.push({ mesh, roots, rootBounds })
+    batches.push({ mesh, roots, rootBounds, placements: kindPlacements })
   }
 
   runtimes.set(group, {
@@ -163,11 +166,11 @@ export function updateFlowerBatchTerrain(
 ): boolean {
   const runtime = flowerRuntime(root)
   if (!runtime) return false
-  const patchBounds = terrain && patch ? terrainPatchBounds(terrain, patch) : null
+  const patchBounds = terrain && patch ? terrainPatchBounds(terrain, patch, 2) : null
   if (patch && !patchBounds) return true
 
   const { scratchBox, scratchMatrix, scratchSphere } = runtime
-  for (const { mesh, roots, rootBounds } of runtime.batches) {
+  for (const { mesh, roots, rootBounds, placements } of runtime.batches) {
     if (patchBounds && (
       rootBounds.maxX < patchBounds.minX || rootBounds.minX > patchBounds.maxX ||
       rootBounds.maxZ < patchBounds.minZ || rootBounds.minZ > patchBounds.maxZ
@@ -181,24 +184,27 @@ export function updateFlowerBatchTerrain(
     let lastMatrix = -1
     for (let index = 0; index < roots.count; index += 1) {
       const offset = index * 3
-      const x = rootValues[offset]!
-      const z = rootValues[offset + 2]!
+      const x = rootValues[offset] ?? 0
+      const z = rootValues[offset + 2] ?? 0
       if (patchBounds && (
         x < patchBounds.minX || x > patchBounds.maxX ||
         z < patchBounds.minZ || z > patchBounds.maxZ
       )) continue
 
-      const y = terrain ? Math.fround(surfaceHeightAt(terrain, x, z)) : 0
+      const sample = samplePlantingTerrain(terrain, x, z)
+      const y = Math.fround(sample.heightM)
       if (rootValues[offset + 1] !== y) {
         rootValues[offset + 1] = y
         firstRoot = Math.min(firstRoot, offset + 1)
         lastRoot = offset + 1
       }
-      const matrixOffset = index * 16 + 13
-      if (matrices[matrixOffset] !== y) {
-        matrices[matrixOffset] = y
+      const placement = placements[index]
+      if (!placement) continue
+      const matrixOffset = index * 16
+      flowerTerrainMatrix(placement, sample, scratchMatrix)
+      if (writePlantingMatrix(matrices, matrixOffset, scratchMatrix)) {
         firstMatrix = Math.min(firstMatrix, matrixOffset)
-        lastMatrix = matrixOffset
+        lastMatrix = matrixOffset + 15
         if (patchBounds) {
           mesh.getMatrixAt(index, scratchMatrix)
           scratchBox.copy(mesh.geometry.boundingBox!).applyMatrix4(scratchMatrix)
@@ -222,6 +228,17 @@ export function updateFlowerBatchTerrain(
   return true
 }
 
+function flowerTerrainMatrix(
+  placement: FlowerPlacement,
+  sample: PlantingTerrainSample,
+  matrix: Matrix4,
+): void {
+  const visible = (placement.terrainDensityThreshold ?? 0) < plantingDensityAt(sample, 'flower')
+  setPlantingRotation(matrix, sample.normal, placement.rotationY)
+  matrix.scale(new Vector3().setScalar(visible ? placement.scale : 0))
+  matrix.setPosition(placement.position[0], sample.heightM, placement.position[2])
+}
+
 /** Disposes every geometry and shared material owned by a flower batch group. */
 export function disposeFlowerBatches(root: Object3D): void {
   const geometries = new Set<BufferGeometry>()
@@ -241,6 +258,9 @@ export function createBakedFlowerBatches(placements: readonly FlowerPlacement[])
   const group = new Group()
   group.name = 'grass-field-static-flowers'
   if (placements.length === 0) return group
+  const terrainRotation = new Matrix4()
+  const transformedPosition = new Vector3()
+  const transformedNormal = new Vector3()
 
   const material = new MeshStandardMaterial({
     color: '#ffffff',
@@ -279,7 +299,10 @@ export function createBakedFlowerBatches(placements: readonly FlowerPlacement[])
       const indices = new Uint16Array(count * sourceIndices.count)
 
       for (let localIndex = 0; localIndex < count; localIndex += 1) {
-        const placement = kindPlacements[placementOffset + localIndex]!
+        const placement = kindPlacements[placementOffset + localIndex]
+        if (!placement) continue
+        const terrainNormal: readonly [number, number, number] = placement.normal ?? [0, 1, 0]
+        setPlantingRotation(terrainRotation, terrainNormal, 0)
         const cosine = Math.cos(placement.rotationY)
         const sine = Math.sin(placement.rotationY)
         const vertexOffset = localIndex * sourcePositions.count
@@ -301,6 +324,18 @@ export function createBakedFlowerBatches(placements: readonly FlowerPlacement[])
           normals[outputOffset] = cosine * normalX + sine * normalZ
           normals[outputOffset + 1] = sourceNormals.getY(vertexIndex)
           normals[outputOffset + 2] = -sine * normalX + cosine * normalZ
+          if (terrainNormal[0] !== 0 || terrainNormal[2] !== 0) {
+            transformedPosition.set(
+              cosine * localX + sine * localZ, localY, -sine * localX + cosine * localZ,
+            ).applyMatrix4(terrainRotation)
+            positions[outputOffset] = placement.position[0] + transformedPosition.x
+            positions[outputOffset + 1] = placement.position[1] + transformedPosition.y
+            positions[outputOffset + 2] = placement.position[2] + transformedPosition.z
+            transformedNormal.set(
+              normals[outputOffset] ?? 0, normals[outputOffset + 1] ?? 0, normals[outputOffset + 2] ?? 0,
+            ).transformDirection(terrainRotation)
+            transformedNormal.toArray(normals, outputOffset)
+          }
           colors[outputOffset] = sourceColors.getX(vertexIndex)
           colors[outputOffset + 1] = sourceColors.getY(vertexIndex)
           colors[outputOffset + 2] = sourceColors.getZ(vertexIndex)

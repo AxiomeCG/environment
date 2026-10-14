@@ -43,6 +43,8 @@ type Variant = {
 // only their instance buffers so every neighborhood remount reuses this pool.
 const variants = new Map<Species, Variant>()
 const PRESETS: Record<Species, string> = {
+  // Native surroundings have no palm prototype. Any host-catalog palm remains
+  // a host item, outside this plugin's procedural planting pipeline.
   oak: 'Oak Medium',
   ash: 'Ash Medium',
   pine: 'Pine Medium',
@@ -52,6 +54,11 @@ const PRESETS: Record<Species, string> = {
 const SEEDS: Record<Species, number> = { oak: 21, ash: 55, pine: 89, aspen: 34, bush: 13 }
 export const NEIGHBORHOOD_TREE_PROTOTYPE_CAP = 5
 export const FLAT_TREE_HEIGHT_AT = () => 0
+/** Natural plans carry their accepted root sample across runtime and static LODs. */
+export type GroundedTreePlan = TreePlan & Readonly<{
+  heightM?: number
+  normal?: readonly [number, number, number]
+}>
 const EMPTY_HORIZON_PLANS: readonly HorizonFoliagePlan[] = []
 const UP = new Vector3(0, 1, 0)
 const WHITE = new Color('#ffffff')
@@ -203,7 +210,7 @@ function buildInstances(plans: readonly Placement[], root = new Group()): Group 
 }
 
 export function buildTreeInstances(
-  plans: readonly TreePlan[],
+  plans: readonly GroundedTreePlan[],
   heightAt: (x: number, z: number) => number = FLAT_TREE_HEIGHT_AT,
   root = new Group(),
   horizonPlans: readonly HorizonFoliagePlan[] = EMPTY_HORIZON_PLANS,
@@ -215,7 +222,7 @@ export function buildTreeInstances(
       crownAspect,
       position: [
         plan.position[0],
-        heightAt(plan.position[0], plan.position[1]),
+        plan.heightM ?? heightAt(plan.position[0], plan.position[1]),
         plan.position[1],
       ] as const,
     }
@@ -223,6 +230,8 @@ export function buildTreeInstances(
   for (const plan of horizonPlans) {
     placements.push({ ...plan, whitening: 0.65 })
   }
+  // Mature trunks grow upright. Their normal affects placement acceptance and
+  // species upstream, not a full-slope tilt of an 8–23 m prototype.
   return buildInstances(placements, root)
 }
 export function NeighborhoodTrees({
@@ -230,7 +239,7 @@ export function NeighborhoodTrees({
   horizonPlans = EMPTY_HORIZON_PLANS,
   heightAt = FLAT_TREE_HEIGHT_AT,
 }: {
-  plans: readonly TreePlan[]
+  plans: readonly GroundedTreePlan[]
   horizonPlans?: readonly HorizonFoliagePlan[]
   heightAt?: (x: number, z: number) => number
 }) {

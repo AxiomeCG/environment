@@ -278,6 +278,78 @@ describe('terrain subscriptions acceptance', () => {
     expect(versions(untouched.host)).toEqual(otherVersions)
   })
 
+  test('persisted no-water terrain changes invalidate flower species for a fresh rebuild, including undo', async () => {
+    const { main, untouched, dirty } = await fixture(false, true)
+    const otherVersions = versions(untouched.host)
+    const next = applyHeightPatch(main.terrain, patch(1, 1, 4))
+
+    await publish({ ...main.site, terrain: commitTerrainField(next) })
+    // Updating roots/normals alone cannot reassign slope/aspect-dependent species.
+    // The viewer must receive a dirty rebuild even without water obstacles.
+    expect(dirty).toEqual([main.field.id])
+    expect(useScene.getState().dirtyNodes.has(main.field.id as AnyNodeId)).toBe(true)
+    expect(groundHeight(main.ground, 1, 1)).toBeCloseTo(4.005, 6)
+    await publish(main.site)
+    expect(dirty).toEqual([main.field.id, main.field.id])
+    expect(groundHeight(main.ground, 1, 1)).toBeCloseTo(0.005, 6)
+    expect(obstacleSpy).toHaveBeenCalledTimes(0)
+    expect(versions(untouched.host)).toEqual(otherVersions)
+  })
+
+  test('no-water flower species rebuild only on completed live sculpt, not begin, dabs or commit-before-end', async () => {
+    const { main, untouched, dirty } = await fixture(false, true)
+    const live = useLiveTerrain.getState()
+    const otherVersions = versions(untouched.host)
+    const flowerGroup = main.host.getObjectByName('grass-field-flowers')!
+    const batches = [...flowerGroup.children]
+    expect(batches.some((child) => child instanceof InstancedMesh && child.count > 0)).toBe(true)
+    const a = patch(1, 1, 4)
+    const afterA = applyHeightPatch(main.terrain, a)
+    const b = patch(3, 1, 6)
+    const afterB = applyHeightPatch(afterA, b)
+
+    await event(() => live.begin(main.site.id, main.terrain))
+    const farVersions = farTileVersions(main.host)
+    await event(() => live.advance(main.site.id, afterA, a))
+    await event(() => live.advance(main.site.id, afterB, b))
+    await publish({ ...main.site, terrain: commitTerrainField(afterB) })
+    expect(dirty).toEqual([])
+    expect(flowerGroup.children).toHaveLength(batches.length)
+    for (const [index, batch] of batches.entries()) {
+      expect(flowerGroup.children[index]).toBe(batch)
+    }
+    expect(farTileVersions(main.host)).toEqual(farVersions)
+    expect(groundHeight(main.ground, 3, 1)).toBeCloseTo(6.005, 6)
+
+    await event(() => live.end(main.site.id))
+    expect(dirty).toEqual([main.field.id])
+    expect(useScene.getState().dirtyNodes.has(main.field.id as AnyNodeId)).toBe(true)
+    await event(() => live.end(main.site.id))
+    expect(dirty).toEqual([main.field.id])
+    expect(obstacleSpy).toHaveBeenCalledTimes(0)
+    expect(versions(untouched.host)).toEqual(otherVersions)
+  })
+
+  test('no-water flower cancellation restores persisted roots and invalidates species once', async () => {
+    const { main, untouched, dirty } = await fixture(false, true)
+    const live = useLiveTerrain.getState()
+    const original = new Float32Array(main.ground.geometry.getAttribute('position').array)
+    const otherVersions = versions(untouched.host)
+    const a = patch(1, 1, 4)
+    await event(() => live.begin(main.site.id, main.terrain))
+    await event(() => live.advance(main.site.id, applyHeightPatch(main.terrain, a), a))
+    expect(dirty).toEqual([])
+    expect(groundHeight(main.ground, 1, 1)).toBeCloseTo(4.005, 6)
+
+    await event(() => live.end(main.site.id))
+    expect(main.ground.geometry.getAttribute('position').array).toEqual(original)
+    expect(dirty).toEqual([main.field.id])
+    await event(() => live.end(main.site.id))
+    expect(dirty).toEqual([main.field.id])
+    expect(obstacleSpy).toHaveBeenCalledTimes(0)
+    expect(versions(untouched.host)).toEqual(otherVersions)
+  })
+
   test('no-water dabs stay local; completion and persisted undo reconcile without rebuilding', async () => {
     const { main, untouched, dirty } = await fixture()
     const live = useLiveTerrain.getState()

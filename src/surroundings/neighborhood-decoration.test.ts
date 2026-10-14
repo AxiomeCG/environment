@@ -250,6 +250,23 @@ describe('neighborhood decoration grammar', () => {
       expect(rootScales.size).toBeGreaterThan(1)
 
       for (const instance of instances) instance.dispose()
+
+      const groundedPlans = decorations.trees.slice(0, 3).map((plan) => ({
+        ...plan,
+        heightM: 7,
+        normal: [0, Math.cos(Math.PI / 6), Math.sin(Math.PI / 6)] as const,
+      }))
+      const grounded = buildTreeInstances(groundedPlans, () => {
+        throw new Error('Accepted natural root must not be resampled')
+      })
+      for (const child of grounded.children) {
+        if (!(child instanceof InstancedMesh)) continue
+        child.getMatrixAt(0, transform)
+        expect(transform.elements[13]).toBe(7)
+        const up = new Vector3(0, 1, 0).transformDirection(transform)
+        expect(up.toArray()).toEqual([0, 1, 0])
+        child.dispose()
+      }
     } finally {
       if (originalDocument === undefined) Reflect.deleteProperty(globalThis, 'document')
       else Object.defineProperty(globalThis, 'document', {

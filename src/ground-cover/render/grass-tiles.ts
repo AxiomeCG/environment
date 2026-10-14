@@ -1,4 +1,4 @@
-import { surfaceHeightAt, type HeightPatch, type TerrainField } from '@pascal-app/core'
+import { type HeightPatch, type TerrainField } from '@pascal-app/core'
 import {
   Box3,
   BufferGeometry,
@@ -16,8 +16,10 @@ import {
 } from 'three'
 import type { SiteBounds } from '../paint-field'
 import { visitGrassCandidates, type GrassBladeDimensions, type GrassCandidateVisitor } from '../scatter'
-import { queueTerrainAttributeUpdate, terrainPatchBounds } from '../terrain-patch'
+import { queueTerrainAttributeUpdate, terrainPatchBounds, type TerrainPatchBounds } from '../terrain-patch'
 import { buildBladeGeometry } from './blade-geometry'
+import { plantingDensityAt, samplePlantingTerrain, type PlantingTerrainSample } from '../../planting-terrain'
+import { setPlantingRotation, writePlantingMatrix } from '../../planting-transform'
 
 export const GRASS_TILE_SIZE = 8
 export const GRASS_LOD_FULL_PIXELS = 12
@@ -32,6 +34,7 @@ const MID_LOD_ENTER_PIXELS = GRASS_LOD_MID_PIXELS * 1.25
 const MID_LOD_EXIT_PIXELS = GRASS_LOD_MID_PIXELS * 0.75
 const CANDIDATE_STRIDE = 8
 const MAX_OBSTACLE_BEND_STRENGTH = 2
+const scratchScale = new Vector3()
 const runtimes = new WeakMap<Object3D, InternalGrassTilesRuntime>()
 
 export type GrassTileOptions = {
@@ -40,12 +43,15 @@ export type GrassTileOptions = {
   tileSize?: number
   maxHeightScale?: number
   maxObstacleBendStrength?: number
+  sampleTerrain?: (x: number, z: number) => PlantingTerrainSample
+  candidatesApplyTerrainDensity?: boolean
 }
 
 export type GrassTileLod = 'full' | 'mid' | 'far'
 
 export type GrassTileAttributes = {
   readonly root: InstancedBufferAttribute
+  readonly terrainNormal: InstancedBufferAttribute
   readonly densityThreshold: InstancedBufferAttribute
   readonly tintVariation: InstancedBufferAttribute
   readonly surfaceSampleBasis: InstancedBufferAttribute
@@ -85,6 +91,7 @@ type TileBuildData = {
 type InternalGrassTileRuntime = GrassTileRuntime & {
   readonly group: Group
   readonly rootBounds: Box3
+  readonly baseTransforms: Float64Array
 }
 
 type InternalGrassTilesRuntime = GrassTilesRuntime & {
@@ -134,12 +141,12 @@ export function createGrassTiles(
 
   visit((x, _y, z) => {
     const index = tileIndexAt(grid, x, z)
-    counts[index] = counts[index]! + 1
+    counts[index] = (counts[index] ?? 0) + 1
   })
 
   const buildDataByGridIndex: Array<TileBuildData | undefined> = new Array(counts.length)
   for (let index = 0; index < counts.length; index += 1) {
-    const count = counts[index]!
+    const count = counts[index] ?? 0
     if (count === 0) continue
     const column = index % grid.columns
     const row = Math.floor(index / grid.columns)
@@ -190,6 +197,8 @@ export function createGrassTiles(
       material,
       maxBladeHeight,
       radialPadding,
+      options.sampleTerrain ?? ((x, z) => samplePlantingTerrain(terrain, x, z)),
+      options.candidatesApplyTerrainDensity ?? false,
     )
     tiles.push(tile)
     group.add(tile.group)
@@ -212,64 +221,147 @@ export function updateGrassTileTerrain(
 ): boolean {
   const runtime = getInternalRuntime(group)
   if (!runtime) return false
-  const patchBounds = terrain && patch ? terrainPatchBounds(terrain, patch) : null
+  const patchBounds = terrain && patch ? terrainPatchBounds(terrain, patch, 2) : null
   if (patch && !patchBounds) return true
-
-  for (const tile of runtime.tiles) {
-    const { rootBounds } = tile
-    if (patchBounds && (
-      rootBounds.max.x < patchBounds.minX || rootBounds.min.x > patchBounds.maxX ||
-      rootBounds.max.z < patchBounds.minZ || rootBounds.min.z > patchBounds.maxZ
-    )) continue
-
-    const roots = tile.attributes.root.array as Float32Array
-    const matrices = tile.full.instanceMatrix.array as Float32Array
-    let minY = patchBounds ? rootBounds.min.y : Infinity
-    let maxY = patchBounds ? rootBounds.max.y : -Infinity
-    let firstRoot = Infinity
-    let lastRoot = -1
-    let firstMatrix = Infinity
-    let lastMatrix = -1
-
-    for (let index = 0; index < tile.candidateCount; index += 1) {
-      const rootOffset = index * 3
-      const x = roots[rootOffset]!
-      const z = roots[rootOffset + 2]!
-      if (patchBounds && (
-        x < patchBounds.minX || x > patchBounds.maxX ||
-        z < patchBounds.minZ || z > patchBounds.maxZ
-      )) continue
-
-      const y = terrain ? Math.fround(surfaceHeightAt(terrain, x, z)) : 0
-      if (roots[rootOffset + 1] !== y) {
-        roots[rootOffset + 1] = y
-        firstRoot = Math.min(firstRoot, rootOffset + 1)
-        lastRoot = rootOffset + 1
-      }
-      const matrixOffset = index * 16 + 13
-      if (matrices[matrixOffset] !== y) {
-        matrices[matrixOffset] = y
-        firstMatrix = Math.min(firstMatrix, matrixOffset)
-        lastMatrix = matrixOffset
-      }
-      minY = Math.min(minY, y)
-      maxY = Math.max(maxY, y)
-    }
-
-    if (firstRoot <= lastRoot) {
-      queueTerrainAttributeUpdate(tile.attributes.root, firstRoot, lastRoot - firstRoot + 1)
-    }
-    if (firstMatrix <= lastMatrix) {
-      queueTerrainAttributeUpdate(tile.full.instanceMatrix, firstMatrix, lastMatrix - firstMatrix + 1)
-    }
-    if (patchBounds && firstRoot > lastRoot && firstMatrix > lastMatrix) continue
-
-    rootBounds.min.y = minY
-    rootBounds.max.y = maxY
-    updateTileBounds(tile, runtime.maxBladeHeight, runtime.radialPadding)
-  }
-
+  for (const tile of runtime.tiles) updateGrassTile(tile, runtime, terrain, patchBounds)
   return true
+}
+
+function updateGrassTile(
+  tile: InternalGrassTileRuntime,
+  runtime: InternalGrassTilesRuntime,
+  terrain: TerrainField | null,
+  patchBounds: TerrainPatchBounds | null,
+): void {
+  const { rootBounds } = tile
+  if (patchBounds && (
+    rootBounds.max.x < patchBounds.minX || rootBounds.min.x > patchBounds.maxX ||
+    rootBounds.max.z < patchBounds.minZ || rootBounds.min.z > patchBounds.maxZ
+  )) return
+  const roots = tile.attributes.root.array as Float32Array
+  const matrix = new Matrix4()
+  let minY = patchBounds ? rootBounds.min.y : Infinity
+  let maxY = patchBounds ? rootBounds.max.y : -Infinity
+  const changes = createTerrainChangeRanges()
+  for (let index = 0; index < tile.candidateCount; index += 1) {
+    const rootOffset = index * 3
+    const x = roots[rootOffset] ?? 0
+    const z = roots[rootOffset + 2] ?? 0
+    if (!isInPatch(x, z, patchBounds)) continue
+    const sample = samplePlantingTerrain(terrain, x, z)
+    const y = Math.fround(sample.heightM)
+    if (updateGrassTerrainNormal(tile.attributes.terrainNormal, index, sample.normal)) {
+      includeRange(changes.normal, rootOffset, rootOffset + 2)
+    }
+    if (roots[rootOffset + 1] !== y) {
+      roots[rootOffset + 1] = y
+      includeRange(changes.root, rootOffset + 1, rootOffset + 1)
+    }
+    updateGrassDensityThreshold(tile, index, sample, changes)
+    if (updateGrassInstanceMatrix(tile, index, sample, matrix)) {
+      includeRange(changes.matrix, index * 16, index * 16 + 15)
+    }
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y)
+  }
+  flushGrassTileChanges(tile, changes)
+  if (patchBounds && changes.root[0] > changes.root[1] && changes.matrix[0] > changes.matrix[1]) return
+  rootBounds.min.y = minY
+  rootBounds.max.y = maxY
+  updateTileBounds(tile, runtime.maxBladeHeight, runtime.radialPadding)
+}
+
+type TerrainChangeRange = [number, number]
+type TerrainChangeRanges = {
+  root: TerrainChangeRange
+  matrix: TerrainChangeRange
+  threshold: TerrainChangeRange
+  normal: TerrainChangeRange
+}
+
+function createTerrainChangeRanges(): TerrainChangeRanges {
+  const emptyRange: TerrainChangeRange = [Infinity, -1]
+  return {
+    root: [...emptyRange],
+    matrix: [...emptyRange],
+    threshold: [...emptyRange],
+    normal: [...emptyRange],
+  }
+}
+
+function isInPatch(
+  x: number,
+  z: number,
+  bounds: TerrainPatchBounds | null,
+): boolean {
+  return !bounds || (
+    x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ
+  )
+}
+
+function includeRange(range: TerrainChangeRange, first: number, last: number): void {
+  range[0] = Math.min(range[0], first)
+  range[1] = Math.max(range[1], last)
+}
+
+function updateGrassDensityThreshold(
+  tile: InternalGrassTileRuntime,
+  index: number,
+  sample: PlantingTerrainSample,
+  changes: TerrainChangeRanges,
+): void {
+  const threshold = Math.fround(terrainDensityThreshold(tile.baseTransforms[index * 4 + 3] ?? 0, sample))
+  if (tile.attributes.densityThreshold.getX(index) === threshold) return
+  tile.attributes.densityThreshold.setX(index, threshold)
+  includeRange(changes.threshold, index, index)
+}
+
+function flushGrassTileChanges(
+  tile: InternalGrassTileRuntime,
+  changes: TerrainChangeRanges,
+): void {
+  const { root, matrix, threshold, normal } = changes
+  if (root[0] <= root[1]) queueTerrainAttributeUpdate(tile.attributes.root, root[0], root[1] - root[0] + 1)
+  if (matrix[0] <= matrix[1]) queueTerrainAttributeUpdate(tile.full.instanceMatrix, matrix[0], matrix[1] - matrix[0] + 1)
+  if (threshold[0] <= threshold[1]) queueTerrainAttributeUpdate(tile.attributes.densityThreshold, threshold[0], threshold[1] - threshold[0] + 1)
+  if (normal[0] <= normal[1]) queueTerrainAttributeUpdate(tile.attributes.terrainNormal, normal[0], normal[1] - normal[0] + 1)
+}
+
+function terrainDensityThreshold(threshold: number, sample: PlantingTerrainSample): number {
+  const density = plantingDensityAt(sample, 'grass')
+  return density === 0 ? 2 : threshold / density
+}
+
+function updateGrassTerrainNormal(
+  attribute: InstancedBufferAttribute,
+  index: number,
+  normal: readonly [number, number, number],
+): boolean {
+  const x = Math.fround(normal[0])
+  const y = Math.fround(normal[1])
+  const z = Math.fround(normal[2])
+  if (attribute.getX(index) === x && attribute.getY(index) === y && attribute.getZ(index) === z) {
+    return false
+  }
+  attribute.setXYZ(index, x, y, z)
+  return true
+}
+
+function updateGrassInstanceMatrix(
+  tile: InternalGrassTileRuntime,
+  index: number,
+  sample: PlantingTerrainSample,
+  matrix: Matrix4,
+): boolean {
+  const offset = index * 4
+  const yaw = tile.baseTransforms[offset] ?? 0
+  const width = tile.baseTransforms[offset + 1] ?? 0
+  const height = tile.baseTransforms[offset + 2] ?? 0
+  setPlantingRotation(matrix, sample.normal, yaw)
+  scratchScale.set(width, height, width)
+  matrix.scale(scratchScale)
+  matrix.setPosition(tile.attributes.root.getX(index), sample.heightM, tile.attributes.root.getZ(index))
+  return writePlantingMatrix(tile.full.instanceMatrix.array as Float32Array, index * 16, matrix)
 }
 
 export function updateGrassTileLod(
@@ -381,8 +473,8 @@ function siftDown(
   let root = start
   while (root * 2 + 1 < end) {
     let child = root * 2 + 1
-    if (child + 1 < end && ranks[child]! < ranks[child + 1]!) child += 1
-    if (ranks[root]! >= ranks[child]!) return
+    if (child + 1 < end && (ranks[child] ?? 0) < (ranks[child + 1] ?? 0)) child += 1
+    if ((ranks[root] ?? 0) >= (ranks[child] ?? 0)) return
     swapCandidates(values, ranks, root, child)
     root = child
   }
@@ -394,14 +486,14 @@ function swapCandidates(
   first: number,
   second: number,
 ): void {
-  const rank = ranks[first]!
-  ranks[first] = ranks[second]!
+  const rank = ranks[first] ?? 0
+  ranks[first] = ranks[second] ?? 0
   ranks[second] = rank
   const firstOffset = first * CANDIDATE_STRIDE
   const secondOffset = second * CANDIDATE_STRIDE
   for (let component = 0; component < CANDIDATE_STRIDE; component += 1) {
-    const value = values[firstOffset + component]!
-    values[firstOffset + component] = values[secondOffset + component]!
+    const value = values[firstOffset + component] ?? 0
+    values[firstOffset + component] = values[secondOffset + component] ?? 0
     values[secondOffset + component] = value
   }
 }
@@ -412,58 +504,133 @@ function buildTile(
   material: Material,
   maxBladeHeight: number,
   radialPadding: number,
+  sampleTerrain: (x: number, z: number) => PlantingTerrainSample,
+  candidatesApplyTerrainDensity: boolean,
 ): InternalGrassTileRuntime {
   const count = data.ranks.length
-  const roots = new Float32Array(count * 3)
-  const thresholds = new Float32Array(count)
-  const tints = new Float32Array(count)
-  const surfaceSampleBases = new Float32Array(count * 2)
-  const matrices = new Float32Array(count * 16)
+  const buffers = buildTileBuffers(node, data, count, sampleTerrain, candidatesApplyTerrainDensity)
+  const attributes = buildTileAttributes(buffers)
+  const meshes = createTileMeshes(node, material, attributes, buffers.matrices, count)
+  const { full, mid, far, tileGroup, fullCount, midCount, farCount } = meshes
+  const { min, max, baseTransforms } = buffers
+  const tile: InternalGrassTileRuntime = {
+    tileX: data.tileX, tileZ: data.tileZ, candidateCount: count,
+    fullCount, midCount, farCount, full, mid, far, attributes,
+    bounds: new Box3(), sphere: new Sphere(), lod: null,
+    projectedBladePixels: 0, group: tileGroup,
+    rootBounds: new Box3(min, max), baseTransforms,
+  }
+  updateTileBounds(tile, maxBladeHeight, radialPadding)
+  return tile
+}
+
+type TileBuffers = {
+  roots: Float32Array
+  terrainNormals: Float32Array
+  thresholds: Float32Array
+  tints: Float32Array
+  surfaceSampleBases: Float32Array
+  matrices: Float32Array
+  baseTransforms: Float64Array
+  min: Vector3
+  max: Vector3
+}
+
+function buildTileBuffers(
+  node: GrassBladeDimensions,
+  data: TileBuildData,
+  count: number,
+  sampleTerrain: (x: number, z: number) => PlantingTerrainSample,
+  candidatesApplyTerrainDensity: boolean,
+): TileBuffers {
+  const buffers: TileBuffers = {
+    roots: new Float32Array(count * 3),
+    terrainNormals: new Float32Array(count * 3),
+    thresholds: new Float32Array(count),
+    tints: new Float32Array(count),
+    surfaceSampleBases: new Float32Array(count * 2),
+    matrices: new Float32Array(count * 16),
+    baseTransforms: new Float64Array(count * 4),
+    min: new Vector3(Infinity, Infinity, Infinity),
+    max: new Vector3(-Infinity, -Infinity, -Infinity),
+  }
   const matrix = new Matrix4()
   const position = new Vector3()
   const scale = new Vector3()
-  const min = new Vector3(Infinity, Infinity, Infinity)
-  const max = new Vector3(-Infinity, -Infinity, -Infinity)
-
   for (let index = 0; index < count; index += 1) {
-    const sourceOffset = index * CANDIDATE_STRIDE
-    const x = data.values[sourceOffset]!
-    const y = data.values[sourceOffset + 1]!
-    const z = data.values[sourceOffset + 2]!
-    const yaw = data.values[sourceOffset + 3]!
-    const widthFactor = data.values[sourceOffset + 4]!
-    const heightFactor = data.values[sourceOffset + 5]!
-    const scaledWidth = node.bladeWidth * widthFactor
-    roots[index * 3] = x
-    roots[index * 3 + 1] = y
-    roots[index * 3 + 2] = z
-    thresholds[index] = data.values[sourceOffset + 6]!
-    tints[index] = data.values[sourceOffset + 7]!
-    surfaceSampleBases[index * 2] = Math.cos(yaw) * scaledWidth
-    surfaceSampleBases[index * 2 + 1] = Math.sin(yaw) * scaledWidth
-    position.set(x, y, z)
-    scale.set(scaledWidth, node.bladeHeight * heightFactor, scaledWidth)
-    matrix.makeRotationY(yaw)
-    matrix.scale(scale)
-    matrix.setPosition(position)
-    matrix.toArray(matrices, index * 16)
-    min.x = Math.min(min.x, x)
-    min.y = Math.min(min.y, y)
-    min.z = Math.min(min.z, z)
-    max.x = Math.max(max.x, x)
-    max.y = Math.max(max.y, y)
-    max.z = Math.max(max.z, z)
+    fillTileInstance(node, data, index, sampleTerrain, candidatesApplyTerrainDensity, buffers, matrix, position, scale)
   }
+  return buffers
+}
 
-  const attributes: GrassTileAttributes = {
-    root: new InstancedBufferAttribute(roots, 3).setUsage(DynamicDrawUsage),
-    densityThreshold: new InstancedBufferAttribute(thresholds, 1),
-    tintVariation: new InstancedBufferAttribute(tints, 1),
-    surfaceSampleBasis: new InstancedBufferAttribute(surfaceSampleBases, 2),
+function fillTileInstance(
+  node: GrassBladeDimensions,
+  data: TileBuildData,
+  index: number,
+  sampleTerrain: (x: number, z: number) => PlantingTerrainSample,
+  candidatesApplyTerrainDensity: boolean,
+  buffers: TileBuffers,
+  matrix: Matrix4,
+  position: Vector3,
+  scale: Vector3,
+): void {
+  const sourceOffset = index * CANDIDATE_STRIDE
+  const x = data.values[sourceOffset] ?? 0
+  const z = data.values[sourceOffset + 2] ?? 0
+  const yaw = data.values[sourceOffset + 3] ?? 0
+  const widthFactor = data.values[sourceOffset + 4] ?? 0
+  const heightFactor = data.values[sourceOffset + 5] ?? 0
+  const scaledWidth = node.bladeWidth * widthFactor
+  const height = node.bladeHeight * heightFactor
+  const sample = sampleTerrain(x, z)
+  const rootOffset = index * 3
+  buffers.roots[rootOffset] = x
+  buffers.roots[rootOffset + 1] = sample.heightM
+  buffers.roots[rootOffset + 2] = z
+  buffers.terrainNormals.set(sample.normal, rootOffset)
+  const threshold = data.values[sourceOffset + 6] ?? 0
+  buffers.thresholds[index] = candidatesApplyTerrainDensity
+    ? threshold : terrainDensityThreshold(threshold, sample)
+  buffers.tints[index] = data.values[sourceOffset + 7] ?? 0
+  buffers.surfaceSampleBases[index * 2] = Math.cos(yaw) * scaledWidth
+  buffers.surfaceSampleBases[index * 2 + 1] = Math.sin(yaw) * scaledWidth
+  buffers.baseTransforms.set([yaw, scaledWidth, height, threshold], index * 4)
+  position.set(x, sample.heightM, z)
+  scale.set(scaledWidth, height, scaledWidth)
+  setPlantingRotation(matrix, sample.normal, yaw)
+  matrix.scale(scale)
+  matrix.setPosition(position)
+  matrix.toArray(buffers.matrices, index * 16)
+  buffers.min.set(Math.min(buffers.min.x, x), Math.min(buffers.min.y, sample.heightM), Math.min(buffers.min.z, z))
+  buffers.max.set(Math.max(buffers.max.x, x), Math.max(buffers.max.y, sample.heightM), Math.max(buffers.max.z, z))
+}
+
+function buildTileAttributes(buffers: TileBuffers): GrassTileAttributes {
+  return {
+    root: new InstancedBufferAttribute(buffers.roots, 3).setUsage(DynamicDrawUsage),
+    terrainNormal: new InstancedBufferAttribute(buffers.terrainNormals, 3).setUsage(DynamicDrawUsage),
+    densityThreshold: new InstancedBufferAttribute(buffers.thresholds, 1).setUsage(DynamicDrawUsage),
+    tintVariation: new InstancedBufferAttribute(buffers.tints, 1),
+    surfaceSampleBasis: new InstancedBufferAttribute(buffers.surfaceSampleBases, 2),
   }
-  const instanceMatrix = new InstancedBufferAttribute(matrices, 16).setUsage(
-    DynamicDrawUsage,
-  )
+}
+
+function createTileMeshes(
+  node: GrassBladeDimensions,
+  material: Material,
+  attributes: GrassTileAttributes,
+  matrices: Float32Array,
+  count: number,
+): {
+  full: InstancedMesh
+  mid: InstancedMesh
+  far: InstancedMesh
+  tileGroup: Group
+  fullCount: number
+  midCount: number
+  farCount: number
+} {
+  const instanceMatrix = new InstancedBufferAttribute(matrices, 16).setUsage(DynamicDrawUsage)
   const fullGeometry = buildBladeGeometry({
     width: node.bladeWidth,
     height: node.bladeHeight,
@@ -501,26 +668,7 @@ function buildTile(
   const tileGroup = new Group()
   tileGroup.name = 'grass-field-tile'
   tileGroup.add(full, mid, far)
-  const tile: InternalGrassTileRuntime = {
-    tileX: data.tileX,
-    tileZ: data.tileZ,
-    candidateCount: count,
-    fullCount,
-    midCount,
-    farCount,
-    full,
-    mid,
-    far,
-    attributes,
-    bounds: new Box3(),
-    sphere: new Sphere(),
-    lod: null,
-    projectedBladePixels: 0,
-    group: tileGroup,
-    rootBounds: new Box3(min, max),
-  }
-  updateTileBounds(tile, maxBladeHeight, radialPadding)
-  return tile
+  return { full, mid, far, tileGroup, fullCount, midCount, farCount }
 }
 
 function reducedCount(candidateCount: number, ratio: number): number {
@@ -532,6 +680,7 @@ function addInstanceAttributes(
   attributes: GrassTileAttributes,
 ): void {
   geometry.setAttribute('grassRoot', attributes.root)
+  geometry.setAttribute('grassTerrainNormal', attributes.terrainNormal)
   geometry.setAttribute('grassDensityThreshold', attributes.densityThreshold)
   geometry.setAttribute('grassTintVariation', attributes.tintVariation)
   geometry.setAttribute('grassSurfaceSampleBasis', attributes.surfaceSampleBasis)

@@ -1,8 +1,8 @@
 import {
   pointInPolygon2D,
-  surfaceHeightAt,
   type TerrainField,
 } from '@pascal-app/core'
+import { samplePlantingTerrain } from '../planting-terrain'
 import { mulberry32 } from '../variant-utils'
 import type { SiteBounds } from './paint-field'
 import type { GrassFieldNode } from './schema'
@@ -70,7 +70,7 @@ export function visitGrassCandidates(
       if (!pointInPolygon2D([x, z], boundary as [number, number][])) continue
       visitor(
         x,
-        terrain ? surfaceHeightAt(terrain, x, z) : 0,
+        samplePlantingTerrain(terrain, x, z).heightM,
         z,
         yaw,
         widthFactor,

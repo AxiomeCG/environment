@@ -134,6 +134,10 @@ export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
           group &&
           updateGrassFieldTerrain(group, site)
         ) {
+          // Root/normal updates preserve batches, but species also depend on slope/aspect.
+          if (((node as unknown as GrassFieldNode).flowerDensity ?? 0) > 0) {
+            sceneApi.markDirty(change.id as AnyNodeId)
+          }
           continue
         }
         sceneApi.markDirty(change.id as AnyNodeId)
@@ -198,11 +202,13 @@ export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
           let rebuild = site?.type !== 'site' || !group ||
             !updateGrassFieldTerrain(group, site as SiteNode, patch)
 
-          // Root heights preview live. Water exclusion and flower placement settle on release/cancel.
-          if (reconcileObstacles && site?.type === 'site' && !rebuild) {
-            const field = node as unknown as GrassFieldNode
-            rebuild = (field.flowerDensity ?? 0) > 0 ||
-              !updateGrassFieldObstacles(field, site, nodes)
+          // Roots preview in place; slope/aspect-dependent species settle on release/cancel,
+          // including sites without water. Never reallocate flower batches for each dab.
+          const field = node as unknown as GrassFieldNode
+          if (!active && (field.flowerDensity ?? 0) > 0) {
+            rebuild = true
+          } else if (reconcileObstacles && site?.type === 'site' && !rebuild) {
+            rebuild = !updateGrassFieldObstacles(field, site, nodes)
           }
           if (rebuild) sceneApi.markDirty(node.id)
         }

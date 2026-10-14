@@ -1,7 +1,5 @@
 import {
   type AnyNode,
-  normalAt,
-  surfaceHeightAt,
   terrainFieldOf,
   type GeometryContext,
   type HeightPatch,
@@ -54,6 +52,7 @@ import {
 import type { GrassFieldNode } from './schema'
 import { buildDrapedGroundGeometry } from './terrain-drape'
 import { terrainPatchBounds } from './terrain-patch'
+import { samplePlantingTerrain } from '../planting-terrain'
 
 const {
   attribute,
@@ -422,7 +421,7 @@ export function buildGrassFieldGeometry(node: GrassFieldNode, context: GeometryC
   })
   group.add(
     createAnimatedFlowerBatches(
-      collectFlowerPlacements(node, fields),
+      collectFlowerPlacements(node, fields, true),
       grassFieldUniforms.windStrength,
       grassFieldUniforms.windInfluence,
     ),
@@ -497,7 +496,7 @@ export function updateGrassFieldTerrain(
       x >= heightBounds.minX && x <= heightBounds.maxX &&
       z >= heightBounds.minZ && z <= heightBounds.maxZ
     )) {
-      const y = Math.fround(terrain ? surfaceHeightAt(terrain, x, z) + 0.005 : 0.005)
+      const y = Math.fround(samplePlantingTerrain(terrain, x, z).heightM + 0.005)
       if (positions.getY(index) !== y) {
         positions.setY(index, y)
         changedPositions.push(index)
@@ -505,13 +504,13 @@ export function updateGrassFieldTerrain(
       minY = Math.min(minY, y)
       maxY = Math.max(maxY, y)
     }
-    const [nx, ny, nz] = terrain ? normalAt(terrain, x, z) : [0, 1, 0]
+    const [nx, ny, nz] = samplePlantingTerrain(terrain, x, z).normal
     if (
-      normals.getX(index) !== Math.fround(nx!) ||
-      normals.getY(index) !== Math.fround(ny!) ||
-      normals.getZ(index) !== Math.fround(nz!)
+      normals.getX(index) !== Math.fround(nx) ||
+      normals.getY(index) !== Math.fround(ny) ||
+      normals.getZ(index) !== Math.fround(nz)
     ) {
-      normals.setXYZ(index, nx!, ny!, nz!)
+      normals.setXYZ(index, nx, ny, nz)
       changedNormals.push(index)
     }
   }
