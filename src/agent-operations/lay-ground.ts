@@ -1,4 +1,4 @@
-import { segmentsIntersect, type AnyNode, type SiteNode } from '@pascal-app/core'
+import { persistedTerrainFieldOf, segmentsIntersect, type AnyNode, type SiteNode, type TerrainField } from '@pascal-app/core'
 import { createGroundCoverNode } from '../ground-cover/create-node'
 import { encodeLocalHeightScale } from '../ground-cover/height-field'
 import { buildGrassObstacleField } from '../ground-cover/obstacle-adapter'
@@ -28,6 +28,7 @@ import {
   type PaintTileChanges,
 } from '../paint-tiles/plan'
 import { PAINT_TILE_KIND, type PaintTileMap } from '../paint-tiles/schema'
+import { PLANTING_MAX_SLOPE_DEG, samplePlantingTerrain } from '../planting-terrain'
 import { createSurfaceMaterialNode } from '../surface-material/create-node'
 import {
   SURFACE_MATERIAL_PAINT_COLOR,
@@ -47,6 +48,12 @@ import {
   signedDistanceToPolygon,
   siteChildOfKind,
 } from './scene'
+import {
+  createTerrainSamples,
+  includeTerrainSample,
+  terrainSampleFacts,
+  type TerrainSamples,
+} from './terrain-facts'
 import type { AgentOperation, PlanPoint, SceneNodes } from './types'
 
 export type LayGroundKind = 'grass' | 'earth' | 'path' | 'paving' | 'none'
@@ -119,6 +126,9 @@ type AreaFacts = {
   blockedM2: number
   paintedCells: number
   shapeCells: number
+  excludedSteepM2: number
+  nonSteepCells: number
+  terrain: TerrainSamples
 }
 
 function resolveShape(
@@ -332,9 +342,9 @@ function paintLayer(
     const z = field.origin[1] + row * field.spacing
     for (let col = 0; col < field.cols; col += 1) {
       const x = field.origin[0] + col * field.spacing
-      if (!pointInPolygon(x, z, sitePolygon) || !allowed(x, z)) continue
+      if (!pointInPolygon(x, z, sitePolygon)) continue
       const amount = strengthAt(area, x, z)
-      if (amount <= 0) continue
+      if (amount <= 0 || !allowed(x, z)) continue
       blendPaintCell(field.values, field.values, (row * field.cols + col) * 4, amount, blend)
     }
   }
@@ -346,9 +356,13 @@ function measureArea(
   sitePolygon: PlanPoint[],
   lattice: GrassPaintField,
   obstacles: GrassObstacleField,
+  terrain: TerrainField | null,
 ): AreaFacts {
   const cellM2 = lattice.spacing * lattice.spacing
-  const facts: AreaFacts = { areaM2: 0, grassM2: 0, blockedM2: 0, paintedCells: 0, shapeCells: 0 }
+  const facts: AreaFacts = {
+    areaM2: 0, grassM2: 0, blockedM2: 0, paintedCells: 0, shapeCells: 0,
+    excludedSteepM2: 0, nonSteepCells: 0, terrain: createTerrainSamples(),
+  }
   for (let row = 0; row < lattice.rows; row += 1) {
     const z = lattice.origin[1] + row * lattice.spacing
     for (let col = 0; col < lattice.cols; col += 1) {
@@ -362,7 +376,12 @@ function measureArea(
       const strength = strengthAt(area, x, z)
       if (strength <= 0) continue
       facts.paintedCells += 1
-      if (area.ground === 'grass' && allowed) facts.grassM2 += strength * cellM2
+      const sample = samplePlantingTerrain(terrain, x, z)
+      includeTerrainSample(facts.terrain, sample)
+      const steep = area.ground === 'grass' && sample.slopeDeg >= PLANTING_MAX_SLOPE_DEG.grass
+      if (steep) facts.excludedSteepM2 += strength * cellM2
+      else facts.nonSteepCells += 1
+      if (area.ground === 'grass' && allowed && !steep) facts.grassM2 += strength * cellM2
     }
   }
   return facts
@@ -374,6 +393,14 @@ function refuseUnpaintable(
   sitePolygon: PlanPoint[],
   cellM: number,
 ): void {
+  if (facts.paintedCells > 0 && facts.nonSteepCells === 0) {
+    refuse('slope_too_steep', `Area ${area.index} has no grass paint samples below the slope limit.`, {
+      index: area.index,
+      maxSlopeDeg: PLANTING_MAX_SLOPE_DEG.grass,
+      excludedSteepM2: roundFact(facts.excludedSteepM2),
+      terrain: terrainSampleFacts(facts.terrain, cellM, 'paint-lattice-points-in-brush'),
+    })
+  }
   if (facts.paintedCells > 0) return
   if (facts.shapeCells === 0 && !shapeOverlapsSite(area, sitePolygon)) {
     refuse('outside_property', `Area ${area.index} does not touch the lot.`, { index: area.index })
@@ -385,15 +412,23 @@ function refuseUnpaintable(
 }
 
 /** Lay one area on every layer, in the order the brush tools would, and report its facts. */
-function layArea(area: ResolvedArea, sitePolygon: PlanPoint[], layers: GroundLayers) {
-  const facts = measureArea(area, sitePolygon, layers.paint.after, layers.obstacles)
+function layArea(
+  area: ResolvedArea,
+  sitePolygon: PlanPoint[],
+  layers: GroundLayers,
+  terrain: TerrainField | null,
+) {
+  const facts = measureArea(area, sitePolygon, layers.paint.after, layers.obstacles, terrain)
   refuseUnpaintable(area, facts, sitePolygon, layers.paint.after.spacing)
+  const slopeAllowed = (x: number, z: number) =>
+    area.ground !== 'grass' ||
+    samplePlantingTerrain(terrain, x, z).slopeDeg < PLANTING_MAX_SLOPE_DEG.grass
   paintLayer(layers.paint.after, area, sitePolygon, grassBlend(area), (x, z) =>
-    isGrassAllowedAt(layers.obstacles, x, z),
+    isGrassAllowedAt(layers.obstacles, x, z) && slopeAllowed(x, z),
   )
-  paintLayer(layers.surface.after, area, sitePolygon, surfaceBlend(area))
+  paintLayer(layers.surface.after, area, sitePolygon, surfaceBlend(area), slopeAllowed)
   if (layers.height && area.grassHeight !== null) {
-    paintLayer(layers.height.after, area, sitePolygon, heightBlend(area.grassHeight))
+    paintLayer(layers.height.after, area, sitePolygon, heightBlend(area.grassHeight), slopeAllowed)
   }
   return {
     index: area.index,
@@ -401,6 +436,8 @@ function layArea(area: ResolvedArea, sitePolygon: PlanPoint[], layers: GroundLay
     grassM2: roundFact(facts.grassM2),
     surface: GROUND_SURFACE[area.ground],
     blockedM2: roundFact(facts.blockedM2),
+    excludedSteepM2: roundFact(facts.excludedSteepM2),
+    terrain: terrainSampleFacts(facts.terrain, layers.paint.after.spacing, 'paint-lattice-points-in-brush'),
   }
 }
 
@@ -474,7 +511,8 @@ export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
   const sitePolygon = requireSitePolygon(site)
   const areas = resolveAreas(input, sitePolygon)
   const layers = resolveGroundLayers(nodes, site, areas)
-  const areaFacts = areas.map((area) => layArea(area, sitePolygon, layers))
+  const terrain = persistedTerrainFieldOf(site)
+  const areaFacts = areas.map((area) => layArea(area, sitePolygon, layers, terrain))
   const changes = groundLayerChanges(nodes, site, layers)
   return {
     result: {

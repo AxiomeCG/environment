@@ -12,6 +12,7 @@ import {
   resolveGroundCoverPaint,
   resolveSurfacePaint,
 } from '../paint-tiles/layers'
+import { PLANTING_MAX_SLOPE_DEG, samplePlantingTerrain } from '../planting-terrain'
 import { analyzePondBasin, buildPondSurface } from '../pond/basin'
 import { renderablePondProps } from '../pond/prop-fit'
 import { POND_KIND, type PondNode } from '../pond/schema'
@@ -32,6 +33,7 @@ import {
   siteChildOfKind,
   siteChildrenOfKind,
 } from './scene'
+import { createTerrainSamples, includeTerrainSample, terrainSampleFacts } from './terrain-facts'
 import type { AgentOperation, PlanPoint, SceneNodes } from './types'
 
 export type ReadEnvironmentInput = {
@@ -59,12 +61,20 @@ function* regionCells(
   }
 }
 
-function samplePaint(paint: GrassPaintField, height: GrassPaintField, region: Region) {
+function samplePaint(
+  paint: GrassPaintField,
+  height: GrassPaintField,
+  region: Region,
+  terrain: TerrainField | null,
+) {
   const cellM2 = paint.spacing * paint.spacing
+  const samples = createTerrainSamples()
   let cells = 0
   let coveredM2 = 0
   let heightSum = 0
   let heightWeight = 0
+  let steepPaintM2 = 0
+  let flowerSteepPaintM2 = 0
   for (const { x, z } of regionCells(paint, region)) {
     cells += 1
     const coverage = paintAt(paint, x, z).a
@@ -72,17 +82,35 @@ function samplePaint(paint: GrassPaintField, height: GrassPaintField, region: Re
     if (coverage > 0) {
       heightSum += localGrassHeightScaleAt(height, x, z) * coverage
       heightWeight += coverage
+      const sample = samplePlantingTerrain(terrain, x, z)
+      includeTerrainSample(samples, sample)
+      if (sample.slopeDeg >= PLANTING_MAX_SLOPE_DEG.grass) steepPaintM2 += coverage * cellM2
+      if (sample.slopeDeg >= PLANTING_MAX_SLOPE_DEG.flower) flowerSteepPaintM2 += coverage * cellM2
     }
   }
   return {
     coveredM2,
     coveragePct: cells === 0 ? 0 : (coveredM2 / (cells * cellM2)) * 100,
     meanHeightScale: heightWeight === 0 ? 1 : heightSum / heightWeight,
+    steepPaintM2: roundFact(steepPaintM2),
+    flowerSteepPaintM2: roundFact(flowerSteepPaintM2),
+    terrain: terrainSampleFacts(samples, paint.spacing, 'paint-cell-centres-with-coverage'),
   }
 }
 
-function groundCoverFacts(nodes: SceneNodes, site: SiteNode, bounds: SiteBounds, region: Region) {
+function groundCoverFacts(
+  nodes: SceneNodes,
+  site: SiteNode,
+  bounds: SiteBounds,
+  region: Region,
+  terrain: TerrainField | null,
+) {
   const node = siteChildOfKind<GrassFieldNode>(nodes, String(site.id), GRASS_FIELD_KIND)
+  const coverageMeaning = 'sampled_paint_coverage_not_actual_plants'
+  const renderingSlopeLimitsDeg = {
+    grass: PLANTING_MAX_SLOPE_DEG.grass,
+    flower: PLANTING_MAX_SLOPE_DEG.flower,
+  }
   if (!node) {
     return {
       present: false,
@@ -91,11 +119,16 @@ function groundCoverFacts(nodes: SceneNodes, site: SiteNode, bounds: SiteBounds,
       meanHeightScale: 1,
       flowerDensity: 0,
       cellM: null,
+      coverageMeaning,
+      steepPaintM2: 0,
+      flowerSteepPaintM2: 0,
+      renderingSlopeLimitsDeg,
+      terrain: terrainSampleFacts(createTerrainSamples(), null, 'paint-cell-centres-with-coverage'),
     }
   }
   const paint = resolveGroundCoverPaint(node, Object.values(nodes), bounds)
   const height = resolveGroundCoverHeight(node, Object.values(nodes), bounds)
-  const stats = samplePaint(paint, height, region)
+  const stats = samplePaint(paint, height, region, terrain)
   return {
     present: true,
     coveredM2: roundFact(stats.coveredM2),
@@ -103,6 +136,11 @@ function groundCoverFacts(nodes: SceneNodes, site: SiteNode, bounds: SiteBounds,
     meanHeightScale: roundFact(stats.meanHeightScale),
     flowerDensity: node.flowerDensity,
     cellM: paint.spacing,
+    coverageMeaning,
+    steepPaintM2: stats.steepPaintM2,
+    flowerSteepPaintM2: stats.flowerSteepPaintM2,
+    renderingSlopeLimitsDeg,
+    terrain: stats.terrain,
   }
 }
 
@@ -191,7 +229,7 @@ export const readEnvironment: AgentOperation<ReadEnvironmentInput> = (nodes, inp
       siteId: String(site.id),
       areaM2: roundFact(Math.abs(polygonArea(area))),
       onLotM2: roundFact(onLotM2),
-      groundCover: groundCoverFacts(nodes, site, bounds, region),
+      groundCover: groundCoverFacts(nodes, site, bounds, region, terrain),
       surface: surfaceFacts(nodes, site, bounds, region),
       ponds: pondFacts(nodes, site, sitePolygon, terrain),
       rivers: riverFacts(nodes, site, area),
