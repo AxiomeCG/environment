@@ -391,6 +391,19 @@ export default function SurroundingsLayer({
   })
   const boundary = site?.polygon.points
   const exteriorGroundBoundary = boundary ?? null
+  // Tiled ground (core's terrain-tile nodes under the Site) changes heights without touching
+  // site.terrain, so the exterior memos also follow the tiles themselves.
+  const terrainTiles = useScene(
+    useShallow((state) => {
+      const result: unknown[] = []
+      if (!site) return result
+      for (const node of Object.values(state.nodes)) {
+        if ((node?.type as string | undefined) === 'terrain-tile' && node?.parentId === site.id)
+          result.push(node)
+      }
+      return result
+    }),
+  )
   const rivers = useScene(
     useShallow((state) => {
       const result: RiverNode[] = []
@@ -591,6 +604,7 @@ export default function SurroundingsLayer({
     seed,
     site?.id,
     site?.terrain,
+    terrainTiles,
     site?.metadata,
     rivers,
     preset,
@@ -665,6 +679,7 @@ export default function SurroundingsLayer({
     boundary,
     site?.id,
     site?.terrain,
+    terrainTiles,
     presentedLayout,
     seed,
     exteriorTerrainSections,
