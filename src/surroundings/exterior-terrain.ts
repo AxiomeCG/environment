@@ -4,6 +4,7 @@ import type { Point2 } from './frontages'
 import { createLandscapeHeight, LANDSCAPE_EXTENT } from './landscape-noise'
 import { clipConvexPolygon } from './neighborhood'
 import type { LandscapeRegion } from './landscape-region'
+import { createLotBoundary, type LotBoundary } from './lot-boundary'
 
 export const EXTERIOR_TERRAIN_SECTION_SIZE = 64
 export const EXTERIOR_TERRAIN_SECTION_SEGMENTS = 10
@@ -34,6 +35,7 @@ export type ExteriorTerrainSampler = Readonly<{
   heightAt: (x: number, z: number) => number
   normalAt: (x: number, z: number) => readonly [number, number, number]
   sectionSegments?: (address: ExteriorTerrainSectionAddress) => number
+  lotBoundary?: LotBoundary
 }>
 
 export type ExteriorTerrainSection = Readonly<{
@@ -163,8 +165,17 @@ export function createExteriorTerrainSampler({
 export function createRenderedTerrainSampler(
   source: ExteriorTerrainSampler,
   addresses: readonly ExteriorTerrainSectionAddress[],
+  lot?: Pick<ExteriorTerrainContext, 'boundary' | 'terrain'>,
 ): ExteriorTerrainSampler {
-  if (!addresses.length) return source
+  const lotBoundary = lot ? createLotBoundary(lot.boundary, lot.terrain) : source.lotBoundary
+  if (!addresses.length) {
+    if (!lotBoundary) return source
+    return {
+      ...source,
+      lotBoundary,
+      heightAt: (x, z) => lotBoundary.heightAt(x, z) ?? source.heightAt(x, z),
+    }
+  }
   type Grid = {
     address: ExteriorTerrainSectionAddress
     segments: number
@@ -198,6 +209,8 @@ export function createRenderedTerrainSampler(
     return height
   }
   const heightAt = (x: number, z: number): number => {
+    const boundaryHeight = lotBoundary?.heightAt(x, z)
+    if (boundaryHeight != null) return boundaryHeight
     const sectionX = Math.floor(x / EXTERIOR_TERRAIN_SECTION_SIZE)
     const sectionZ = Math.floor(z / EXTERIOR_TERRAIN_SECTION_SIZE)
     const grid = rows.get(sectionZ)?.get(sectionX)
@@ -235,7 +248,7 @@ export function createRenderedTerrainSampler(
       ? [dx / length, dy / length, dz / length]
       : [0, 1, 0]
   }
-  return { ...source, heightAt, normalAt }
+  return { ...source, heightAt, normalAt, lotBoundary }
 }
 
 export function createTerrainSubdivisionSampler(
@@ -287,6 +300,18 @@ export function buildExteriorTerrainSection(
   const clippedPositions: number[] = []
   const clippedNormals: number[] = []
   let exteriorTriangles: Point2[][] | undefined
+  const boundaryHeightAt = (x: number, z: number) =>
+    sampler.lotBoundary?.heightAt(x, z) ?? sampler.heightAt(x, z)
+  const refineBoundary = (polygon: readonly Point2[]): readonly Point2[] => {
+    if (!sampler.lotBoundary) return polygon
+    const refined: Point2[] = []
+    for (const [index, start] of polygon.entries()) {
+      refined.push(start)
+      const end = polygon[(index + 1) % polygon.length]
+      if (end) refined.push(...sampler.lotBoundary.subdivideEdge(start, end).slice(1, -1))
+    }
+    return refined.length > polygon.length ? refined : polygon
+  }
   const appendBoundarySkirt = (polygon: readonly Point2[]) => {
     for (let index = 0; index < polygon.length; index += 1) {
       const start = polygon[index]!,
@@ -306,8 +331,8 @@ export function buildExteriorTerrainSection(
       )
         continue
       const base = vertexCount + clippedPositions.length / 3
-      const startHeight = sampler.heightAt(...start),
-        endHeight = sampler.heightAt(...end)
+      const startHeight = boundaryHeightAt(...start),
+        endHeight = boundaryHeightAt(...end)
       // Close the deliberate road-clearance offset without covering the Site
       // or raising the terrain beneath any road.
       clippedPositions.push(
@@ -329,6 +354,39 @@ export function buildExteriorTerrainSection(
       indexValues.push(base, base + 1, base + 2, base + 1, base + 3, base + 2)
     }
   }
+  const appendPolygon = (polygon: readonly Point2[], refined: boolean) => {
+    const base = vertexCount + clippedPositions.length / 3
+    for (const [x, z] of polygon) {
+      clippedPositions.push(x, boundaryHeightAt(x, z), z)
+      clippedNormals.push(...sampler.normalAt(x, z))
+    }
+    if (refined) {
+      // A fan anchored on the boundary drops collinear inserted vertices.
+      // An interior center keeps every host-triangle break in the mesh.
+      const x = polygon.reduce((sum, point) => sum + point[0], 0) / polygon.length
+      const z = polygon.reduce((sum, point) => sum + point[1], 0) / polygon.length
+      const center: Point2 = [x, z]
+      const centerIndex = vertexCount + clippedPositions.length / 3
+      clippedPositions.push(x, boundaryHeightAt(x, z), z)
+      clippedNormals.push(...sampler.normalAt(x, z))
+      for (const [index, start] of polygon.entries()) {
+        const nextIndex = (index + 1) % polygon.length
+        const end = polygon[nextIndex]
+        if (end && Math.abs(cross2(center, start, end)) > GEOMETRY_EPSILON)
+          indexValues.push(centerIndex, base + index, base + nextIndex)
+      }
+    } else {
+      const anchor = polygon[0]
+      if (!anchor) return
+      for (let index = 1; index < polygon.length - 1; index += 1) {
+        const start = polygon[index]
+        const end = polygon[index + 1]
+        if (!start || !end || Math.abs(cross2(anchor, start, end)) <= GEOMETRY_EPSILON) continue
+        indexValues.push(base, base + index, base + index + 1)
+      }
+    }
+    appendBoundarySkirt(polygon)
+  }
   const appendTriangle = (
     triangle: readonly [Point2, Point2, Point2],
     a: number,
@@ -336,6 +394,11 @@ export function buildExteriorTerrainSection(
     c: number,
   ) => {
     if (!triangleOverlapsPolygonInterior(triangle, boundary)) {
+      const refined = refineBoundary(triangle)
+      if (refined !== triangle) {
+        appendPolygon(refined, true)
+        return
+      }
       indexValues.push(a, b, c)
       appendBoundarySkirt(triangle)
       return
@@ -363,17 +426,8 @@ export function buildExteriorTerrainSection(
     for (const exterior of exteriorTriangles) {
       const polygon = clipConvexPolygon(triangle, exterior)
       if (polygon.length < 3 || Math.abs(signedDoubleArea(polygon)) <= GEOMETRY_EPSILON) continue
-      const base = vertexCount + clippedPositions.length / 3
-      for (const [x, z] of polygon) {
-        clippedPositions.push(x, sampler.heightAt(x, z), z)
-        clippedNormals.push(...sampler.normalAt(x, z))
-      }
-      for (let index = 1; index < polygon.length - 1; index += 1) {
-        if (Math.abs(cross2(polygon[0]!, polygon[index]!, polygon[index + 1]!)) <= GEOMETRY_EPSILON)
-          continue
-        indexValues.push(base, base + index, base + index + 1)
-      }
-      appendBoundarySkirt(polygon)
+      const refined = refineBoundary(polygon)
+      appendPolygon(refined, refined !== polygon)
     }
   }
 
@@ -453,7 +507,10 @@ export function buildExteriorTerrainSections(
   const orderedAddresses = [...uniqueAddresses.values()].sort(
     (left, right) => left.z - right.z || left.x - right.x,
   )
-  const sampler = createExteriorTerrainSampler(context)
+  const sampler = {
+    ...createExteriorTerrainSampler(context),
+    lotBoundary: createLotBoundary(context.boundary, context.terrain),
+  }
   // Grid padding is sampling support, not a rendered hole outside the property.
   return orderedAddresses.map((address) =>
     buildExteriorTerrainSection(address, sampler, context.boundary),
@@ -520,6 +577,11 @@ function stitchedTerrainVertexHeight(
   column: number,
   row: number,
 ): number {
+  const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / segments
+  const x = address.x * EXTERIOR_TERRAIN_SECTION_SIZE + column * spacing
+  const z = address.z * EXTERIOR_TERRAIN_SECTION_SIZE + row * spacing
+  const boundaryHeight = sampler.lotBoundary?.heightAt(x, z)
+  if (boundaryHeight != null) return boundaryHeight
   const interpolation = coarserEdgeInterpolation(sampler, address, segments, column, row)
   if (interpolation) {
     return (
@@ -527,11 +589,7 @@ function stitchedTerrainVertexHeight(
       sampler.heightAt(interpolation.x1, interpolation.z1) * interpolation.amount
     )
   }
-  const spacing = EXTERIOR_TERRAIN_SECTION_SIZE / segments
-  return sampler.heightAt(
-    address.x * EXTERIOR_TERRAIN_SECTION_SIZE + column * spacing,
-    address.z * EXTERIOR_TERRAIN_SECTION_SIZE + row * spacing,
-  )
+  return sampler.heightAt(x, z)
 }
 
 function stitchedTerrainVertexNormal(

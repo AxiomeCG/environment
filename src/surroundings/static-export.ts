@@ -1261,6 +1261,7 @@ export async function buildStaticSurroundings(
   const renderedTerrain = createRenderedTerrainSampler(
     createTerrainSubdivisionSampler(sourceTerrain, boundary),
     sections,
+    { boundary, terrain: terrainFieldOf(site) },
   )
   const contextLandscape = layout.contextLandscape
   const waterLevelAt = (x: number, z: number) =>

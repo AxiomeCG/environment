@@ -624,6 +624,7 @@ export default function SurroundingsLayer({
         site.polygon.points,
       ),
       exteriorTerrainSections,
+      { boundary: site.polygon.points, terrain: terrainFieldOf(site) },
     )
     const bridges = presentedLayout.network
       ? createRiverBridges(presentedLayout.network, sampler, waterLevelAt)

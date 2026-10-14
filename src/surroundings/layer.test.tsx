@@ -1,15 +1,18 @@
-import { createTerrainField, SiteNode, useLiveTerrain, useScene } from '@pascal-app/core'
+import { createTerrainField, encodeTerrainField, SiteNode, surfaceHeightAt, useLiveTerrain, useScene } from '@pascal-app/core'
+import type { TerrainField } from '@pascal-app/core'
 import type { AnyNode } from '@pascal-app/core'
 import * as PascalViewer from '@pascal-app/viewer'
 import { act, create } from '@react-three/test-renderer'
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { Fragment, StrictMode } from 'react'
-import { DataTexture, Group, Mesh, MeshBasicMaterial, Raycaster, Vector3 } from 'three'
+import { CanvasTexture, DataTexture, Group, Mesh, MeshBasicMaterial, Raycaster, Vector3 } from 'three'
 import type { BufferAttribute, InstancedMesh } from 'three'
 import { useEnvironmentStore } from '../store'
 import * as SurfaceMaterials from '../surface-material/materials'
 import { createSurfaceMaterialField, encodeSurfaceMaterialField } from '../surface-material/field'
 import { SurfaceMaterialNode } from '../surface-material/schema'
+import * as MaterialBaker from '../export/material-baker'
+import { exportEnvironmentConfiguration } from '../presentation-configuration'
 
 const originalDocument = globalThis.document
 Object.defineProperty(globalThis, 'document', {
@@ -45,6 +48,32 @@ mock.module('./neighborhood-trees', () => ({
 const OBJECT3D_ADD_ERROR = 'THREE.Object3D.add: object not an instance of THREE.Object3D. undefined'
 let restoreAlbedos: () => void
 
+function loweredBoundarySite() {
+  const terrain = createTerrainField({ origin: [-16, -16], spacing: 0.5, cols: 65, rows: 65, step: 0.01 })
+  for (let row = 0; row < terrain.rows; row += 1) terrain.heights[row * terrain.cols + 62] = -200
+  const site = SiteNode.parse({
+    polygon: { type: 'polygon', points: [[-15, -15], [15, -15], [15, 15], [-15, 15]] },
+    terrain: encodeTerrainField(terrain),
+  })
+  return { site, terrain }
+}
+
+function expectEastBoundaryJoin(ground: Mesh, terrain: TerrainField): void {
+  const positions = ground.geometry.getAttribute('position')
+  const indices = ground.geometry.getIndex()
+  if (!indices) throw new Error('Expected indexed exterior geometry')
+  let boundaryVertices = 0
+  for (const index of new Set(indices.array)) {
+    const x = positions.getX(index)
+    const z = positions.getZ(index)
+    if (Math.abs(x - 15) > 1e-6 || Math.abs(z) > 15 + 1e-6) continue
+    boundaryVertices += 1
+    expect(Math.abs(positions.getY(index) + ground.position.y - surfaceHeightAt(terrain, x, z)))
+      .toBeLessThan(0.03) // The skirt spans the existing 0.02 m render offset.
+  }
+  expect(boundaryVertices).toBeGreaterThan(0)
+}
+
 beforeEach(() => {
   useLiveTerrain.getState().endAll()
   // Test the scene lifecycle with decoded textures, not browser image loading.
@@ -60,6 +89,7 @@ beforeEach(() => {
   useEnvironmentStore.setState({
     frontageContexts: {},
     surroundingsEnabled: true,
+    surroundingsPreset: 'regional',
   })
 })
 
@@ -67,10 +97,56 @@ afterEach(() => {
   useLiveTerrain.getState().endAll()
   restoreAlbedos()
   useScene.setState({ nodes: {}, rootNodeIds: [] })
-  useEnvironmentStore.setState({ frontageContexts: {}, surroundingsEnabled: true })
+  useEnvironmentStore.setState({ frontageContexts: {}, surroundingsEnabled: true, surroundingsPreset: 'regional' })
 })
 
 describe('Surroundings presentation layer', () => {
+  test('open-meadow runtime joins the lowered authoritative lot boundary', async () => {
+    const { site, terrain } = loweredBoundarySite()
+    useScene.setState({ nodes: { [site.id]: site }, rootNodeIds: [site.id] })
+    useEnvironmentStore.setState({ surroundingsPreset: 'open-meadow' })
+    const { default: SurroundingsLayer } = await import('./layer')
+    const renderer = await create(<SurroundingsLayer groundReplacementComponent={Fragment} />)
+    try {
+      const ground = renderer.scene.findByProps({ name: 'environment-exterior-ground' }).instance
+      if (!(ground instanceof Mesh)) throw new Error('Expected runtime exterior mesh')
+      expectEastBoundaryJoin(ground, terrain)
+    } finally { await renderer.unmount() }
+  })
+
+  test('open-meadow portable export joins the lowered authoritative lot boundary', async () => {
+    const { site, terrain } = loweredBoundarySite()
+    // Only GPU material baking is stubbed; the exported sampler and geometry are real.
+    const bake = spyOn(MaterialBaker, 'bakeMaterialChannels').mockImplementation(async ({ channels }) => ({
+      width: 1,
+      height: 1,
+      backend: 'webgpu',
+      channels: new Map(channels.map((channel) => [channel.name, {
+        name: channel.name,
+        texture: new CanvasTexture({ width: 1, height: 1 } as HTMLCanvasElement),
+        pixels: new Uint8ClampedArray(4),
+      }])),
+    }))
+    const { buildStaticSurroundings } = await import('./static-export')
+    const configuration = { ...exportEnvironmentConfiguration(), preset: 'open-meadow' as const }
+    let root: Group | null = null
+    try {
+      root = await buildStaticSurroundings({
+        nodes: { [site.id]: site }, configuration: null, onlyVisible: true, excludedNodeTypes: [],
+      }, configuration, false)
+      const ground = root?.getObjectByName('environment-static-exterior-ground')
+      if (!(ground instanceof Mesh)) throw new Error('Expected exported exterior mesh')
+      expectEastBoundaryJoin(ground, terrain)
+    } finally {
+      bake.mockRestore()
+      root?.traverse((object) => {
+        if (!(object instanceof Mesh)) return
+        object.geometry.dispose()
+        for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose()
+      })
+    }
+  })
+
   test('mounts the initial roadless scene slot without adding an undefined Object3D', async () => {
     const consoleError = mock(() => {})
     const originalConsoleError = console.error
