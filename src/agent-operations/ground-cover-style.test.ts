@@ -88,9 +88,9 @@ describe('set_ground_cover_style', () => {
         const style = result.style as Record<StyleKey, number>
         for (const [field] of fields) expect(style[field]).toBe(node[field])
         expect(readCover(changed).style).toEqual(style)
-        expect(readCover(changed).units).toEqual(result.units)
+        expect(readCover(changed).units).toEqual(result.units as Record<string, unknown>)
       }
-      expect(nodes[cover.id]).toEqual(cover)
+      expect(nodes[cover.id] as unknown).toBe(cover)
     })
 
     test(`${key} refuses out-of-range and non-finite values without clamping`, () => {
@@ -99,7 +99,7 @@ describe('set_ground_cover_style', () => {
         expect(z.object(setGroundCoverStyleTool.input).safeParse({ [key]: value }).success).toBe(false)
         expect(refusalOf(nodes, { [key]: value })).toBe('invalid_ground_cover_style')
       }
-      expect(nodes[cover.id]).toEqual(cover)
+      expect(nodes[cover.id] as unknown).toBe(cover)
     })
   }
 
@@ -109,6 +109,19 @@ describe('set_ground_cover_style', () => {
     const { changes } = setStyle(nodes, patch)
     expect(changes?.create).toBeUndefined()
     expect(changes?.update).toEqual([{ id: cover.id, data: patch }])
+  })
+
+  test('omitted fields keep existing non-default values on repeated calls', () => {
+    const { nodes, cover } = fixture()
+    const first = setStyle(nodes, { bladeHeight: 0.45, density: 80 })
+    const changed = applyChanges(nodes, first.changes)
+    const second = setStyle(changed, { bladeWidth: 0.05 })
+    expect(second.result.style).toMatchObject({ bladeHeight: 0.45, density: 80, bladeWidth: 0.05 })
+    const styled = applyChanges(changed, second.changes)
+    const repeated = setStyle(styled, { bladeWidth: 0.05 })
+    expect(repeated.result.created).toBe(false)
+    expect(repeated.result.style).toEqual(second.result.style)
+    expect(repeated.result.groundCoverId).toBe(cover.id)
   })
 
   test('creates an unpainted cover with unchanged defaults for omitted fields', () => {
@@ -122,7 +135,7 @@ describe('set_ground_cover_style', () => {
       expect(node[key]).toBe(key === 'bladeHeight' ? 0.4 : defaultValue)
     }
     expect(result.created).toBe(true)
-    expect(readCover(applyChanges(nodes, changes)).style).toEqual(result.style)
+    expect(readCover(applyChanges(nodes, changes)).style).toEqual(result.style as Record<StyleKey, number>)
   })
 
   test('reports nominal metres and nonlinear full-paint blade density, not actual visible counts', () => {
@@ -155,8 +168,19 @@ describe('set_ground_cover_style', () => {
     }
   })
 
+  test('names the invalid field in the coded refusal details', () => {
+    const { nodes } = fixture()
+    try {
+      setStyle(nodes, { bladeHeight: 1.1 })
+      throw new Error('Expected a style refusal')
+    } catch (error) {
+      expect(refusalCode(error)).toBe('invalid_ground_cover_style')
+      expect(error).toMatchObject({ details: { issues: [{ field: 'bladeHeight' }] } })
+    }
+  })
+
   test('refuses when there is no site', () => {
-    expect(refusalOf({}, { density: 100 })).toBe('site_not_found')
+    expect(refusalOf({}, { density: 100 })).toBe('no_site')
   })
 })
 
@@ -170,7 +194,7 @@ test('read_environment fills legacy missing style fields with node defaults with
   const legacy = { ...cover } as Partial<GrassFieldNode>
   delete legacy.bladeHeight
   delete legacy.density
-  nodes[cover.id] = legacy as AnyNode
+  nodes[cover.id] = legacy as unknown as AnyNode
   expect(readCover(nodes).style).toMatchObject({ bladeHeight: 0.3, density: 100 })
   expect(legacy.bladeHeight).toBeUndefined()
 })

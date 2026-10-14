@@ -6,18 +6,21 @@
 import { fillPond } from './fill-pond'
 import { layGround } from './lay-ground'
 import { readEnvironment } from './read-environment'
+import { setGroundCoverStyle } from './set-ground-cover-style'
 import type { AgentOperations } from './types'
 
 export const environmentAgentOperations = {
   read_environment: readEnvironment,
   lay_ground: layGround,
   fill_pond: fillPond,
+  set_ground_cover_style: setGroundCoverStyle,
 } as const satisfies AgentOperations
 
 export { EnvironmentRefusal, refusalCode } from './refuse'
 export type { FillPondInput } from './fill-pond'
 export type { LayGroundAreaInput, LayGroundInput, LayGroundKind } from './lay-ground'
 export type { ReadEnvironmentInput } from './read-environment'
+export type { SetGroundCoverStyleInput } from './set-ground-cover-style'
 export type {
   AgentContext,
   AgentOperation,

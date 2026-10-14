@@ -5,12 +5,8 @@ import { buildGrassFieldBakeGeometry, buildGrassFieldBakeGeometryAsync } from '.
 import { buildGrassFieldFloorplan } from './floorplan'
 import { buildGrassFieldGeometry } from './geometry'
 import { grassFieldParametrics } from './parametrics'
-import {
-  DEFAULT_GRASS_BLADE_HEIGHT,
-  DEFAULT_GRASS_BLADE_REST_BEND,
-  DEFAULT_GRASS_BLADE_WIDTH,
-  GrassFieldNode,
-} from './schema'
+import { GrassFieldNode } from './schema'
+import { groundCoverStyleDefaults } from './style'
 
 type GrassFieldDefinition = Omit<
   NodeDefinition<typeof GrassFieldNode>,
@@ -41,20 +37,7 @@ export const grassFieldDefinition: GrassFieldDefinition = {
     metadata: {},
     position: [0, 0, 0],
     rotation: [0, 0, 0],
-    bladeWidth: DEFAULT_GRASS_BLADE_WIDTH,
-    bladeWidthVariation: 20,
-    bladeHeight: DEFAULT_GRASS_BLADE_HEIGHT,
-    bladeHeightVariation: 20,
-    bladeRestBend: DEFAULT_GRASS_BLADE_REST_BEND,
-    bladeTintVariation: 20,
-    bladeTipBrightness: 300,
-    density: 100,
-    flowerDensity: 0,
-    windStrength: 100,
-    grassWindInfluence: 100,
-    obstacleBendRadius: 0.75,
-    obstacleBendStrength: 0.12,
-    obstacleFlattening: 60,
+    ...groundCoverStyleDefaults,
   }),
 
   capabilities: {

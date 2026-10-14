@@ -1,12 +1,13 @@
 import { BaseNode, nodeType, objectId } from '@pascal-app/core'
 import { z } from 'zod'
 import { GrassPaintFieldData } from './paint-field'
+import { groundCoverStyleDefaults as defaults } from './style'
 export const GRASS_FIELD_KIND = 'environment:ground-cover'
 
 
-export const DEFAULT_GRASS_BLADE_WIDTH = 0.035
-export const DEFAULT_GRASS_BLADE_HEIGHT = 0.3
-export const DEFAULT_GRASS_BLADE_REST_BEND = 0.22
+export const DEFAULT_GRASS_BLADE_WIDTH = defaults.bladeWidth
+export const DEFAULT_GRASS_BLADE_HEIGHT = defaults.bladeHeight
+export const DEFAULT_GRASS_BLADE_REST_BEND = defaults.bladeRestBend
 
 export const GrassFieldNode = BaseNode.extend({
   id: objectId('grass-field'),
@@ -14,19 +15,19 @@ export const GrassFieldNode = BaseNode.extend({
   position: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   rotation: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   bladeWidth: z.number().positive().default(DEFAULT_GRASS_BLADE_WIDTH),
-  bladeWidthVariation: z.number().min(0).max(100).default(20),
+  bladeWidthVariation: z.number().min(0).max(100).default(defaults.bladeWidthVariation),
   bladeHeight: z.number().positive().default(DEFAULT_GRASS_BLADE_HEIGHT),
-  bladeHeightVariation: z.number().min(0).max(100).default(20),
+  bladeHeightVariation: z.number().min(0).max(100).default(defaults.bladeHeightVariation),
   bladeRestBend: z.number().min(0).max(1).default(DEFAULT_GRASS_BLADE_REST_BEND),
-  bladeTintVariation: z.number().min(0).max(100).default(20),
-  bladeTipBrightness: z.number().min(0).max(500).default(300),
-  density: z.number().min(0).max(100).default(100),
-  flowerDensity: z.number().min(0).max(100).default(0),
-  windStrength: z.number().min(0).max(200).default(100),
-  grassWindInfluence: z.number().min(0).max(300).default(100),
-  obstacleBendRadius: z.number().min(0).max(3).default(0.75),
-  obstacleBendStrength: z.number().min(0).max(2).default(0.12),
-  obstacleFlattening: z.number().min(0).max(100).default(60),
+  bladeTintVariation: z.number().min(0).max(100).default(defaults.bladeTintVariation),
+  bladeTipBrightness: z.number().min(0).max(500).default(defaults.bladeTipBrightness),
+  density: z.number().min(0).max(100).default(defaults.density),
+  flowerDensity: z.number().min(0).max(100).default(defaults.flowerDensity),
+  windStrength: z.number().min(0).max(200).default(defaults.windStrength),
+  grassWindInfluence: z.number().min(0).max(300).default(defaults.grassWindInfluence),
+  obstacleBendRadius: z.number().min(0).max(3).default(defaults.obstacleBendRadius),
+  obstacleBendStrength: z.number().min(0).max(2).default(defaults.obstacleBendStrength),
+  obstacleFlattening: z.number().min(0).max(100).default(defaults.obstacleFlattening),
   paintMap: GrassPaintFieldData.optional(),
   heightMap: GrassPaintFieldData.optional(),
   /**

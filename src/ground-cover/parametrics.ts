@@ -1,6 +1,12 @@
 import type { ParametricDescriptor } from '@pascal-app/core'
 import { paintTilesDeletedWith } from '../paint-tiles/compose'
 import type { GrassFieldNode } from './schema'
+import { GROUND_COVER_STYLE, type GroundCoverStyleKey } from './style'
+
+function styleField(key: GroundCoverStyleKey) {
+  const { min, max, step, unit } = GROUND_COVER_STYLE[key]
+  return { key, kind: 'number' as const, min, max, step, unit }
+}
 
 export const grassFieldParametrics: ParametricDescriptor<GrassFieldNode> = {
   onDeleteCascade: paintTilesDeletedWith,
@@ -8,133 +14,35 @@ export const grassFieldParametrics: ParametricDescriptor<GrassFieldNode> = {
     {
       label: 'Ground cover appearance (global)',
       fields: [
-        {
-          key: 'density',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 1,
-        },
-        {
-          key: 'flowerDensity',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 1,
-        },
-        {
-          key: 'bladeHeight',
-          kind: 'number',
-          unit: 'm',
-          min: 0.05,
-          max: 1,
-          step: 0.01,
-        },
-        {
-          key: 'bladeRestBend',
-          kind: 'number',
-          unit: 'rad',
-          min: 0,
-          max: 1,
-          step: 0.01,
-        },
-        {
-          key: 'bladeWidth',
-          kind: 'number',
-          unit: 'm',
-          min: 0.005,
-          max: 0.2,
-          step: 0.005,
-        },
-        {
-          key: 'bladeTipBrightness',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 500,
-          step: 5,
-        },
+        styleField('density'),
+        styleField('flowerDensity'),
+        styleField('bladeHeight'),
+        styleField('bladeRestBend'),
+        styleField('bladeWidth'),
+        styleField('bladeTipBrightness'),
       ],
     },
     {
       label: 'Natural variation',
       fields: [
-        {
-          key: 'bladeHeightVariation',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 1,
-        },
-        {
-          key: 'bladeWidthVariation',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 1,
-        },
-        {
-          key: 'bladeTintVariation',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 1,
-        },
+        styleField('bladeHeightVariation'),
+        styleField('bladeWidthVariation'),
+        styleField('bladeTintVariation'),
       ],
     },
     {
       label: 'Wind',
       fields: [
-        {
-          key: 'windStrength',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 200,
-          step: 5,
-        },
-        {
-          key: 'grassWindInfluence',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 300,
-          step: 5,
-        },
+        styleField('windStrength'),
+        styleField('grassWindInfluence'),
       ],
     },
     {
       label: 'Obstacle interaction',
       fields: [
-        {
-          key: 'obstacleBendRadius',
-          kind: 'number',
-          unit: 'm',
-          min: 0,
-          max: 3,
-          step: 0.05,
-        },
-        {
-          key: 'obstacleBendStrength',
-          kind: 'number',
-          unit: 'm',
-          min: 0,
-          max: 0.5,
-          step: 0.01,
-        },
-        {
-          key: 'obstacleFlattening',
-          kind: 'number',
-          unit: '%',
-          min: 0,
-          max: 100,
-          step: 5,
-        },
+        styleField('obstacleBendRadius'),
+        styleField('obstacleBendStrength'),
+        styleField('obstacleFlattening'),
       ],
     },
     {

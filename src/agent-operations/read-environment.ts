@@ -20,6 +20,7 @@ import { surfaceMaterialWeightsAt } from '../surface-material/field'
 import { SURFACE_MATERIAL_IDS } from '../surface-material/material-types'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
 import { scanHollows } from './hollows'
+import { groundCoverStyleFacts } from './ground-cover-style-facts'
 import { refuse } from './refuse'
 import { riverFacts } from './river-facts'
 import {
@@ -114,6 +115,8 @@ function groundCoverFacts(
   if (!node) {
     return {
       present: false,
+      style: null,
+      units: null,
       coveredM2: 0,
       coverageOfAreaPct: 0,
       meanHeightScale: 1,
@@ -131,6 +134,7 @@ function groundCoverFacts(
   const stats = samplePaint(paint, height, region, terrain)
   return {
     present: true,
+    ...groundCoverStyleFacts(node),
     coveredM2: roundFact(stats.coveredM2),
     coverageOfAreaPct: roundFact(stats.coveragePct),
     meanHeightScale: roundFact(stats.meanHeightScale),
