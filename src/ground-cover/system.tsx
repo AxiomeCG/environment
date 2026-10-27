@@ -12,6 +12,7 @@ import {
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useRef } from 'react'
 import { changedPaintTileTargets } from '../paint-tiles/compose'
+import { lotGroundsEqual } from '../paint-tiles/lot-ground'
 import {
   updateGrassFieldObstacles,
   updateGrassFieldTerrain,
@@ -55,7 +56,8 @@ export function grassFieldGeometryInputsEqual(
     (!flowersEnabled || previous.density === current.density) &&
     grassPaintMapsEqual(previous.paintMap, current.paintMap) &&
     grassPaintMapsEqual(previous.heightMap, current.heightMap) &&
-    (previous.unpaintedCoverage ?? 1) === (current.unpaintedCoverage ?? 1)
+    (previous.unpaintedCoverage ?? 1) === (current.unpaintedCoverage ?? 1) &&
+    lotGroundsEqual(previous.lotGround, current.lotGround)
   )
 }
 export type GrassFieldSiteChange = {

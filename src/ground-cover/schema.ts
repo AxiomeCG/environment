@@ -1,5 +1,6 @@
 import { BaseNode, nodeType, objectId } from '@pascal-app/core'
 import { z } from 'zod'
+import { LotGround } from '../paint-tiles/lot-ground-schema'
 import { GrassPaintFieldData } from './paint-field'
 import { groundCoverStyleDefaults as defaults } from './style'
 export const GRASS_FIELD_KIND = 'environment:ground-cover'
@@ -35,6 +36,8 @@ export const GrassFieldNode = BaseNode.extend({
    * paint tiles have none, which reads as full coverage; new ones start at 0, with no grass.
    */
   unpaintedCoverage: z.number().min(0).max(1).optional(),
+  /** The ground the whole lot was laid with: land the lot grows into reads as it. */
+  lotGround: LotGround.optional(),
 })
 
 export type GrassFieldNode = z.infer<typeof GrassFieldNode>

@@ -1,4 +1,11 @@
-import { persistedTerrainFieldOf, segmentsIntersect, type AnyNode, type SiteNode, type TerrainField } from '@pascal-app/core'
+import {
+  persistedTerrainFieldOf,
+  segmentsIntersect,
+  type AnyNode,
+  type AnyNodeId,
+  type SiteNode,
+  type TerrainField,
+} from '@pascal-app/core'
 import { createGroundCoverNode } from '../ground-cover/create-node'
 import { encodeLocalHeightScale } from '../ground-cover/height-field'
 import { buildGrassObstacleField } from '../ground-cover/obstacle-adapter'
@@ -8,8 +15,8 @@ import {
   type GrassObstacleField,
 } from '../ground-cover/obstacle-field'
 import {
-  DEFAULT_GRASS_PAINT_COLOR,
   hexToRgb,
+  rgbToHex,
   siteBounds,
   type GrassPaintField,
   type RgbBytes,
@@ -23,6 +30,14 @@ import {
   resolveSurfacePaint,
 } from '../paint-tiles/layers'
 import {
+  GROUND_SURFACE,
+  grassPaintBlend,
+  heightPaintBlend,
+  paintBeyondLot,
+  surfacePaintBlend,
+} from '../paint-tiles/lot-ground'
+import type { LotGround, LotGroundKind } from '../paint-tiles/lot-ground-schema'
+import {
   mergePaintTileChanges,
   planPaintTileChanges,
   type PaintTileChanges,
@@ -30,10 +45,6 @@ import {
 import { PAINT_TILE_KIND, type PaintTileMap } from '../paint-tiles/schema'
 import { PLANTING_MAX_SLOPE_DEG, samplePlantingTerrain } from '../planting-terrain'
 import { createSurfaceMaterialNode } from '../surface-material/create-node'
-import {
-  SURFACE_MATERIAL_PAINT_COLOR,
-  type SurfaceMaterialId,
-} from '../surface-material/material-types'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
 import { refuse } from './refuse'
 import {
@@ -56,7 +67,7 @@ import {
 } from './terrain-facts'
 import type { AgentOperation, PlanPoint, SceneNodes } from './types'
 
-export type LayGroundKind = 'grass' | 'earth' | 'path' | 'paving' | 'none'
+export type LayGroundKind = LotGroundKind
 
 export type LayGroundAreaInput = {
   polygon?: ReadonlyArray<readonly number[]>
@@ -71,17 +82,11 @@ export type LayGroundAreaInput = {
 export type LayGroundInput = { areas: LayGroundAreaInput[] }
 
 const MAX_AREAS = 20
+/** The most corners the record of a lot's ground keeps (`LotGround`). */
+const MAX_LOT_POINTS = 256
 const DEFAULT_FEATHER_M = 0.3
 /** The collaboration layer's per-operation cap, stated next to the largest tile change as a fact. */
 const COLLABORATION_CAP_BYTES = 65_536
-
-const GROUND_SURFACE: Record<LayGroundKind, SurfaceMaterialId | null> = {
-  grass: 'flowered-grass',
-  earth: 'desert-ground',
-  path: 'road-path',
-  paving: 'paved-road',
-  none: null,
-}
 
 type SignedDistance = (x: number, z: number) => number
 
@@ -94,6 +99,8 @@ type ResolvedShape = {
 
 type ResolvedArea = ResolvedShape & {
   index: number
+  /** The whole lot: its ground is the lot's ground (`lotGroundOf`). */
+  site: boolean
   ground: LayGroundKind
   featherM: number
   grassHeight: number | null
@@ -236,8 +243,13 @@ function resolveAreas(input: LayGroundInput, sitePolygon: PlanPoint[]): Resolved
     }
     return {
       index,
+      site: area.site === true,
       ground: area.ground,
-      featherM: Math.min(3, Math.max(0, area.featherM ?? DEFAULT_FEATHER_M)),
+      // The whole lot has nothing outside it to blend into: a soft edge would fade its own border.
+      featherM: Math.min(
+        3,
+        Math.max(0, area.featherM ?? (area.site === true ? 0 : DEFAULT_FEATHER_M)),
+      ),
       grassHeight:
         area.grassHeight === undefined ? null : Math.min(2, Math.max(0.5, area.grassHeight)),
       tint: resolveTint(area, index),
@@ -294,37 +306,6 @@ function strengthAt(area: ResolvedArea, x: number, z: number): number {
   const distance = area.signedDistance(x, z)
   if (area.featherM <= 0) return distance >= 0 ? 1 : 0
   return Math.min(1, Math.max(0, 0.5 + distance / area.featherM))
-}
-
-/** What the brush would do to grass coverage here: paint it (with the tint) or erase it. */
-function grassBlend(area: ResolvedArea): PaintCellBlend {
-  return {
-    mode: area.ground === 'grass' ? 'paint' : 'erase',
-    color: area.tint ?? hexToRgb(DEFAULT_GRASS_PAINT_COLOR),
-    targetDensity: 1,
-    premultiplyColorByDensity: false,
-  }
-}
-
-/** What the surface brush would do here: paint the material, or erase every channel. */
-function surfaceBlend(area: ResolvedArea): PaintCellBlend {
-  const material = GROUND_SURFACE[area.ground]
-  return {
-    mode: material ? 'paint' : 'erase',
-    color: material ? SURFACE_MATERIAL_PAINT_COLOR[material] : { r: 0, g: 0, b: 0 },
-    targetDensity: 1,
-    premultiplyColorByDensity: true,
-  }
-}
-
-function heightBlend(grassHeight: number): PaintCellBlend {
-  const channel = encodeLocalHeightScale(grassHeight)
-  return {
-    mode: 'paint',
-    color: { r: channel, g: channel, b: channel },
-    targetDensity: 1,
-    premultiplyColorByDensity: false,
-  }
 }
 
 /**
@@ -423,12 +404,12 @@ function layArea(
   const slopeAllowed = (x: number, z: number) =>
     area.ground !== 'grass' ||
     samplePlantingTerrain(terrain, x, z).slopeDeg < PLANTING_MAX_SLOPE_DEG.grass
-  paintLayer(layers.paint.after, area, sitePolygon, grassBlend(area), (x, z) =>
+  paintLayer(layers.paint.after, area, sitePolygon, grassPaintBlend(area.ground, area.tint), (x, z) =>
     isGrassAllowedAt(layers.obstacles, x, z) && slopeAllowed(x, z),
   )
-  paintLayer(layers.surface.after, area, sitePolygon, surfaceBlend(area), slopeAllowed)
+  paintLayer(layers.surface.after, area, sitePolygon, surfacePaintBlend(area.ground), slopeAllowed)
   if (layers.height && area.grassHeight !== null) {
-    paintLayer(layers.height.after, area, sitePolygon, heightBlend(area.grassHeight), slopeAllowed)
+    paintLayer(layers.height.after, area, sitePolygon, heightPaintBlend(area.grassHeight), slopeAllowed)
   }
   return {
     index: area.index,
@@ -458,12 +439,14 @@ function lotGrassCoveragePct(paint: GrassPaintField, sitePolygon: PlanPoint[]): 
 
 /**
  * The painted layers as node changes: a missing Ground cover or Surface is created as the panel
- * creates it, and only the tiles of each map that changed are written.
+ * creates it, only the tiles of each map that changed are written, and the lot's ground, when this
+ * call laid the whole lot, goes on both nodes.
  */
 function groundLayerChanges(
   nodes: SceneNodes,
   site: SiteNode,
   layers: GroundLayers,
+  lotGround: LotGround | null,
 ): PaintTileChanges {
   const siteId = String(site.id)
   const sceneNodes = Object.values(nodes)
@@ -477,14 +460,57 @@ function groundLayerChanges(
         painted.after,
       ),
     )
+  const withGround = <Node extends GrassFieldNode | SurfaceMaterialNode>(node: Node): Node =>
+    lotGround ? { ...node, lotGround } : node
   const createdNodes = [
-    ...(layers.grassCreated ? [layers.grassNode] : []),
-    ...(layers.surfaceCreated ? [layers.surfaceNode] : []),
+    ...(layers.grassCreated ? [withGround(layers.grassNode)] : []),
+    ...(layers.surfaceCreated ? [withGround(layers.surfaceNode)] : []),
   ].map((node) => ({ node: node as unknown as AnyNode, parentId: site.id }))
+  const groundedNodes = lotGround
+    ? [
+        ...(layers.grassCreated ? [] : [layers.grassNode]),
+        ...(layers.surfaceCreated ? [] : [layers.surfaceNode]),
+      ].map((node) => ({ id: node.id as AnyNodeId, data: { lotGround } as Partial<AnyNode> }))
+    : []
   return mergePaintTileChanges(
-    createdNodes.length > 0 ? { create: createdNodes } : {},
+    {
+      ...(createdNodes.length > 0 ? { create: createdNodes } : {}),
+      ...(groundedNodes.length > 0 ? { update: groundedNodes } : {}),
+    },
     ...tileChanges,
   )
+}
+
+/**
+ * The lot's ground, when this call laid the whole lot: the last whole-lot area's ground, over the
+ * lot as it is now. Land the lot grows into later reads as it (`withLotGround`).
+ */
+function lotGroundOf(areas: readonly ResolvedArea[], sitePolygon: PlanPoint[]): LotGround | null {
+  const whole = [...areas].reverse().find((area) => area.site)
+  if (!whole || sitePolygon.length > MAX_LOT_POINTS) return null
+  return {
+    lot: sitePolygon.map(([x, z]) => [x, z]),
+    ground: whole.ground,
+    ...(whole.ground === 'grass' && whole.tint ? { tint: rgbToHex(whole.tint) } : {}),
+    ...(whole.ground === 'grass' && whole.grassHeight !== null
+      ? { grassHeight: whole.grassHeight }
+      : {}),
+  }
+}
+
+/** The lot's ground as the result states it: what land the lot grows into later reads as. */
+function lotGroundFacts({ ground, tint, grassHeight }: LotGround) {
+  return { ground, ...(tint ? { tint } : {}), ...(grassHeight !== undefined ? { grassHeight } : {}) }
+}
+
+/**
+ * Each map as the lot's ground leaves it outside the lot: the cells at the old edge, which the
+ * lot's own paint stops short of, hold the ground too, so no seam is left where the lot grows.
+ */
+function coverBeyondLot(layers: GroundLayers, lotGround: LotGround): void {
+  paintBeyondLot(layers.paint.after, lotGround, 'paintMap')
+  if (layers.height) paintBeyondLot(layers.height.after, lotGround, 'heightMap')
+  paintBeyondLot(layers.surface.after, lotGround, 'surface')
 }
 
 /** How large the write is, tile by tile, next to the 64 KiB a shared operation may carry. */
@@ -513,7 +539,9 @@ export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
   const layers = resolveGroundLayers(nodes, site, areas)
   const terrain = persistedTerrainFieldOf(site)
   const areaFacts = areas.map((area) => layArea(area, sitePolygon, layers, terrain))
-  const changes = groundLayerChanges(nodes, site, layers)
+  const lotGround = lotGroundOf(areas, sitePolygon)
+  if (lotGround) coverBeyondLot(layers, lotGround)
+  const changes = groundLayerChanges(nodes, site, layers, lotGround)
   return {
     result: {
       areas: areaFacts,
@@ -522,6 +550,7 @@ export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
       surfaceCellM: layers.surface.after.spacing,
       groundCoverCreated: layers.grassCreated,
       surfaceCreated: layers.surfaceCreated,
+      ...(lotGround ? { lotGround: lotGroundFacts(lotGround) } : {}),
       ...writeSizeFacts(nodes, changes),
     },
     changes,

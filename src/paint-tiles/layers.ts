@@ -11,6 +11,7 @@ import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
 import { resolveSurfaceMaterialField, type SurfaceMaterialField } from '../surface-material/field'
 import { SURFACE_MATERIAL_KIND, type SurfaceMaterialNode } from '../surface-material/schema'
 import { composePaintTiles, paintTilesOf } from './compose'
+import { withLotGround } from './lot-ground'
 import type { PaintTileMap } from './schema'
 
 /**
@@ -18,34 +19,46 @@ import type { PaintTileMap } from './schema'
  * map's tiles over it. `candidates` holds the tiles: the site's children, or every node.
  */
 export function resolveGroundCoverPaint(
-  node: Pick<GrassFieldNode, 'id' | 'paintMap' | 'unpaintedCoverage'>,
+  node: Pick<GrassFieldNode, 'id' | 'paintMap' | 'unpaintedCoverage' | 'lotGround'>,
   candidates: Iterable<unknown>,
   bounds: SiteBounds,
 ): GrassPaintField {
-  const base = resolveGrassPaintField(
-    node.paintMap,
-    bounds,
-    DEFAULT_GRASS_PAINT_COLOR,
-    node.unpaintedCoverage ?? 1,
+  const base = withLotGround(
+    resolveGrassPaintField(
+      node.paintMap,
+      bounds,
+      DEFAULT_GRASS_PAINT_COLOR,
+      node.unpaintedCoverage ?? 1,
+    ),
+    node.lotGround,
+    'paintMap',
   )
   return composePaintTiles(base, paintTilesOf(candidates, node.id, 'paintMap'))
 }
 
 export function resolveGroundCoverHeight(
-  node: Pick<GrassFieldNode, 'id' | 'heightMap'>,
+  node: Pick<GrassFieldNode, 'id' | 'heightMap' | 'lotGround'>,
   candidates: Iterable<unknown>,
   bounds: SiteBounds,
 ): GrassPaintField {
-  const base = resolveGrassHeightField(node.heightMap, bounds)
+  const base = withLotGround(
+    resolveGrassHeightField(node.heightMap, bounds),
+    node.lotGround,
+    'heightMap',
+  )
   return composePaintTiles(base, paintTilesOf(candidates, node.id, 'heightMap'))
 }
 
 export function resolveSurfacePaint(
-  node: Pick<SurfaceMaterialNode, 'id' | 'paintMap'>,
+  node: Pick<SurfaceMaterialNode, 'id' | 'paintMap' | 'lotGround'>,
   candidates: Iterable<unknown>,
   bounds: SiteBounds,
 ): SurfaceMaterialField {
-  const base = resolveSurfaceMaterialField(node.paintMap, bounds)
+  const base = withLotGround(
+    resolveSurfaceMaterialField(node.paintMap, bounds),
+    node.lotGround,
+    'surface',
+  )
   return composePaintTiles(base, paintTilesOf(candidates, node.id, 'paintMap'))
 }
 
