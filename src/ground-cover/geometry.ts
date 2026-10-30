@@ -49,7 +49,7 @@ import {
   updateGrassTileTerrain,
   visitGrassTileMeshes,
 } from './render/grass-tiles'
-import type { GrassFieldNode } from './schema'
+import { DEFAULT_GRASS_TIP_BRIGHTNESS, type GrassFieldNode } from './schema'
 import { buildDrapedGroundGeometry } from './terrain-drape'
 import { terrainPatchBounds } from './terrain-patch'
 import { samplePlantingTerrain } from '../planting-terrain'
@@ -240,7 +240,7 @@ export function buildGrassFieldGeometry(node: GrassFieldNode, context: GeometryC
   } = fields
   const density = (node.density ?? 100) / 100
   const tintVariation = (node.bladeTintVariation ?? 20) / 100
-  const tipBrightness = (node.bladeTipBrightness ?? 300) / 100
+  const tipBrightness = (node.bladeTipBrightness ?? DEFAULT_GRASS_TIP_BRIGHTNESS) / 100
   const grassFieldUniforms = {
     density: uniform(density),
     restBend: uniform(node.bladeRestBend ?? 0.22),
@@ -572,7 +572,7 @@ export function updateGrassFieldUniforms(root: Object3D, node: GrassFieldNode): 
   uniforms.restBend.value = node.bladeRestBend ?? 0.22
   uniforms.windInfluence.value = (node.grassWindInfluence ?? 100) / 100
   uniforms.tintVariation.value = (node.bladeTintVariation ?? 20) / 100
-  uniforms.tipBrightness.value = (node.bladeTipBrightness ?? 300) / 100
+  uniforms.tipBrightness.value = (node.bladeTipBrightness ?? DEFAULT_GRASS_TIP_BRIGHTNESS) / 100
   uniforms.obstacleBendRadius.value = node.obstacleBendRadius ?? 0.75
   uniforms.obstacleBendStrength.value = node.obstacleBendStrength ?? 0.12
   uniforms.obstacleFlattening.value = (node.obstacleFlattening ?? 60) / 100

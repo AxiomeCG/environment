@@ -23,6 +23,57 @@ function scene(...nodes: AnyNode[]): Record<string, AnyNode> {
 }
 
 describe('Pascal plan obstacle adapter', () => {
+  test('tall foliage clears a trunk disc while low foliage and furniture keep their boxes', () => {
+    const registryDefinitions = Array.from(nodeRegistry.entries(), ([, definition]) => definition)
+    try {
+      registerNode({
+        kind: 'item',
+        schemaVersion: 1,
+        schema: ItemNode,
+        category: 'utility',
+        defaults: () => ({}) as never,
+        capabilities: {
+          floorPlaced: {
+            collides: true,
+            footprint: (node: ItemNode) => ({
+              position: node.position,
+              dimensions: node.asset.dimensions,
+              rotation: node.rotation,
+            }),
+          },
+        },
+      } as AnyNodeDefinition)
+      const site = SiteNode.parse({ id: 'site_trees' })
+      const item = (id: string, name: string, dimensions: [number, number, number]) =>
+        ItemNode.parse({
+          id: `item_${id}`, parentId: site.id, position: [2, 0, 3],
+          asset: { id: `asset_${id}`, category: 'outdoor', name, thumbnail: '', src: 'asset://test', dimensions },
+        })
+      const palm = item('palm', 'Palm', [4.05, 5.62, 4.05])
+      const tree = item('tree', 'Tree', [0.525, 4.5, 0.496])
+      const bush = item('bush', 'Bush shrub', [3, 1.04, 1.01])
+      const chair = item('chair', 'Chair', [1, 3, 1])
+      const scripted = {
+        ...item('scripted', 'Palm', [4, 5, 4]),
+        source: { manifest: { shape: { bands: [
+          { y0: 0, y1: 1, polygons: [{ outer: [[-0.1, -0.2], [0.1, -0.2], [0.1, 0.2], [-0.1, 0.2]] }] },
+          { y0: 1, y1: 5, polygons: [{ outer: [[-2, -2], [2, -2], [2, 2], [-2, 2]] }] },
+        ] } } },
+      } as AnyNode
+      const shapes = collectGrassObstacleShapes(site, scene(site, palm, tree, bush, chair, scripted))
+      expect(shapes[0]).toEqual({ kind: 'capsule', start: [2, 3], end: [2, 3], radius: 5.62 * 0.04 })
+      expect(shapes[1]).toEqual({ kind: 'capsule', start: [2, 3], end: [2, 3], radius: 4.5 * 0.04 })
+      expect(shapes[2]?.kind).toBe('box')
+      expect(shapes[3]?.kind).toBe('box')
+      expect(shapes[4]).toEqual({
+        kind: 'polygon', points: [[1.9, 2.8], [2.1, 2.8], [2.1, 3.2], [1.9, 3.2]], holes: [],
+      })
+    } finally {
+      nodeRegistry._reset()
+      for (const definition of registryDefinitions) registerNode(definition)
+    }
+  })
+
   test('projects ground-level slabs and walls from building-local into site-local space', () => {
     const site = SiteNode.parse({
       id: 'site_test',

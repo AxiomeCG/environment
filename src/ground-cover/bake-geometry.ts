@@ -31,7 +31,7 @@ import {
 } from './render/blade-shape'
 import { createBakedFlowerBatches } from './render/flower-geometry'
 import { visitGrassCandidates } from './scatter'
-import type { GrassFieldNode } from './schema'
+import { DEFAULT_GRASS_TIP_BRIGHTNESS, type GrassFieldNode } from './schema'
 
 const MAX_CHUNK_VERTEX_COUNT = 65_535
 const MAX_TINT_ROTATION = Math.PI / 6
@@ -425,7 +425,7 @@ function resolveBladeIntrinsicColors(
   )
 
   const peripheralBaseMix = (1 - output.paintAlpha) * PERIPHERAL_TIP_BASE_MIX
-  const tipScale = mix((node.bladeTipBrightness ?? 300) / 100, 1, peripheralBaseMix)
+  const tipScale = mix((node.bladeTipBrightness ?? DEFAULT_GRASS_TIP_BRIGHTNESS) / 100, 1, peripheralBaseMix)
   output.tipRed = output.variedRed * tipScale
   output.tipGreen = output.variedGreen * tipScale
   output.tipBlue = output.variedBlue * tipScale

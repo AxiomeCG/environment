@@ -7,7 +7,7 @@ export const GROUND_COVER_STYLE = {
   bladeHeight: { min: 0.05, max: 1, step: 0.01, unit: 'm', default: 0.3 },
   bladeRestBend: { min: 0, max: 1, step: 0.01, unit: 'rad', default: 0.22 },
   bladeWidth: { min: 0.005, max: 0.2, step: 0.005, unit: 'm', default: 0.035 },
-  bladeTipBrightness: { min: 0, max: 500, step: 5, unit: '%', default: 300 },
+  bladeTipBrightness: { min: 0, max: 500, step: 5, unit: '%', default: 130 },
   bladeHeightVariation: { min: 0, max: 100, step: 1, unit: '%', default: 20 },
   bladeWidthVariation: { min: 0, max: 100, step: 1, unit: '%', default: 20 },
   bladeTintVariation: { min: 0, max: 100, step: 1, unit: '%', default: 20 },

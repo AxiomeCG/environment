@@ -15,7 +15,7 @@ const fields = [
   ['bladeHeight', 0.05, 1, 0.3],
   ['bladeWidth', 0.005, 0.2, 0.035],
   ['bladeRestBend', 0, 1, 0.22],
-  ['bladeTipBrightness', 0, 500, 300],
+  ['bladeTipBrightness', 0, 500, 130],
   ['bladeHeightVariation', 0, 100, 20],
   ['bladeWidthVariation', 0, 100, 20],
   ['bladeTintVariation', 0, 100, 20],

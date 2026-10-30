@@ -26,6 +26,7 @@ import {
 } from './obstacle-field'
 
 const CURVED_WALL_SEGMENTS = 24
+const FOLIAGE_NAME = /plant|palm|foliage|tree|shrub|hedge|grass|fern|flower|bouquet|vase of|landscape/i
 
 type SiteTransform = {
   readonly x: number
@@ -227,6 +228,25 @@ function collectFloorPlacedShapes(
       const halfX = Math.abs(footprint.dimensions[0]) / 2
       const halfZ = Math.abs(footprint.dimensions[2]) / 2
       if (halfX <= 0 || halfZ <= 0) continue
+      if (
+        node.type === 'item' &&
+        footprint.dimensions[1] >= 2 &&
+        FOLIAGE_NAME.test([node.name, node.asset.name, node.asset.category].join(' '))
+      ) {
+        const outline = groundOutline(node, transform)
+        if (outline.length) {
+          output.push(...outline)
+          continue
+        }
+        const center = transformPoint([position[0], position[2]], transform)
+        output.push({
+          kind: 'capsule',
+          start: center,
+          end: center,
+          radius: Math.min(halfX, halfZ, Math.max(0.15, Math.min(0.5, footprint.dimensions[1] * 0.04))),
+        })
+        continue
+      }
       output.push({
         kind: 'box',
         center: transformPoint([position[0], position[2]], transform),
@@ -235,6 +255,38 @@ function collectFloorPlacedShapes(
       })
     }
   }
+}
+
+type OutlineBand = {
+  y0: number
+  polygons: { outer: [number, number][]; holes?: [number, number][][] }[]
+}
+
+function groundOutline(node: Extract<AnyNode, { type: 'item' }>, transform: SiteTransform): GrassObstacleShape[] {
+  const source = (node as unknown as { source?: { manifest?: { shape?: { bands?: OutlineBand[] } } } }).source
+  const bands = source?.manifest?.shape?.bands
+  if (!bands?.length) return []
+  const lowest = Math.min(...bands.map((band) => band.y0))
+  const turn = (x: number, z: number, angle: number): [number, number] => [
+    x * Math.cos(angle) + z * Math.sin(angle),
+    -x * Math.sin(angle) + z * Math.cos(angle),
+  ]
+  const point = ([x, z]: [number, number]): [number, number] => {
+    const [ax, az] = turn(x * node.asset.scale[0], z * node.asset.scale[2], node.asset.rotation[1])
+    const [px, pz] = turn(
+      (ax + node.asset.offset[0]) * node.scale[0],
+      (az + node.asset.offset[2]) * node.scale[2],
+      node.rotation[1],
+    )
+    return transformPoint([px + node.position[0], pz + node.position[2]], transform)
+  }
+  return bands.filter((band) => band.y0 === lowest).flatMap((band) =>
+    band.polygons.filter((polygon) => polygon.outer.length >= 3).map((polygon) => ({
+      kind: 'polygon' as const,
+      points: polygon.outer.map(point),
+      holes: (polygon.holes ?? []).map((hole) => hole.map(point)),
+    })),
+  )
 }
 
 function directChildren(parent: AnyNode, nodes: Readonly<Record<string, AnyNode>>): AnyNode[] {

@@ -8,7 +8,7 @@ import {
   createGrassObstacleTopology,
   sampleGrassObstacle,
 } from './obstacle-field'
-import { createGrassPaintField, type SiteBounds } from './paint-field'
+import { createGrassPaintField, DEFAULT_GRASS_PAINT_COLOR, type SiteBounds } from './paint-field'
 import { GrassFieldNode } from './schema'
 
 const BOUNDS: SiteBounds = { minX: 0, maxX: 4, minZ: 0, maxZ: 4 }
@@ -20,6 +20,12 @@ const BOUNDARY = [
 ] as const
 
 describe('flower scatter', () => {
+  test('new grass defaults to a muted green and restrained tip brightness', () => {
+    expect(DEFAULT_GRASS_PAINT_COLOR).toBe('#405a35')
+    expect(GrassFieldNode.parse({}).bladeTipBrightness).toBe(130)
+    expect(GrassFieldNode.parse({ bladeTipBrightness: 300 }).bladeTipBrightness).toBe(300)
+  })
+
   test('defaults to no flowers and preserves legacy ground cover', () => {
     const node = GrassFieldNode.parse({ id: 'grass-field_legacy' })
 

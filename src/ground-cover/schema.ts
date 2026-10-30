@@ -9,6 +9,7 @@ export const GRASS_FIELD_KIND = 'environment:ground-cover'
 export const DEFAULT_GRASS_BLADE_WIDTH = defaults.bladeWidth
 export const DEFAULT_GRASS_BLADE_HEIGHT = defaults.bladeHeight
 export const DEFAULT_GRASS_BLADE_REST_BEND = defaults.bladeRestBend
+export const DEFAULT_GRASS_TIP_BRIGHTNESS = defaults.bladeTipBrightness
 
 export const GrassFieldNode = BaseNode.extend({
   id: objectId('grass-field'),
