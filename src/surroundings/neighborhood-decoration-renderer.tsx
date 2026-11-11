@@ -1,7 +1,6 @@
 'use client'
 
 import { type MaterialSchema } from '@pascal-app/core'
-import { CATALOG_ITEMS } from '@pascal-app/editor'
 import {
   createMaterial,
   useGLTFKTX2,
@@ -37,6 +36,7 @@ import type {
   PavingPlan,
   StreetLightPlan,
 } from './neighborhood-decoration'
+import { HYDRANT_CATALOG_ASSET } from './catalog-assets'
 import { createContextInstances } from './primitive-instances'
 import { SURROUNDINGS_NIGHT_FACTOR } from './night-lighting'
 import { PresentationMaterial } from './presentation-material'
@@ -54,7 +54,6 @@ const NO_RAYCAST = () => undefined
 const UNIT_SCALE = new Vector3(1, 1, 1)
 const UP = new Vector3(0, 1, 0)
 const FORWARD = new Vector3(0, 0, 1)
-const REQUIRED_CATALOG_ASSET_IDS = ['hydrant'] as const
 // Paving sits just above the lot lawn (0.03) and below the sidewalk (0.055).
 const PAVING_SURFACE: Readonly<Record<PavingKind, { color: string; elevation: number; thickness: number }>> = {
   driveway: { color: '#8d8b86', elevation: 0.045, thickness: 0.04 },
@@ -62,17 +61,7 @@ const PAVING_SURFACE: Readonly<Record<PavingKind, { color: string; elevation: nu
   patio: { color: '#a19a90', elevation: 0.05, thickness: 0.045 },
 }
 
-const CATALOG_ASSETS = REQUIRED_CATALOG_ASSET_IDS.map((id) => {
-  const asset = CATALOG_ITEMS.find((candidate) => candidate.id === id)
-  if (!asset) throw new Error(`Missing Pascal catalog asset: ${id}`)
-  return {
-    id,
-    src: asset.src,
-    offset: asset.offset ?? [0, 0, 0],
-    rotation: asset.rotation ?? [0, 0, 0],
-    scale: asset.scale ?? [1, 1, 1],
-  }
-})
+const CATALOG_ASSETS = [{ id: 'hydrant' as const, ...HYDRANT_CATALOG_ASSET }]
 
 function customMaterial(
   color: string,

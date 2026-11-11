@@ -93,7 +93,7 @@ Acceptance checks:
 | Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
 | Required Pascal version | First published Pascal release containing `floorplanScope: 'site'`, even-odd floorplan fills, and inline PDF image support; version not assigned |
-| Plugin evidence | `src/ground-cover/definition.ts`, `src/ground-cover/floorplan.ts`, `src/ground-cover/floorplan.test.ts` |
+| Plugin evidence | `src/ground-cover/definition.render.ts`, `src/ground-cover/floorplan.ts`, `src/ground-cover/floorplan.test.ts` |
 | Host evidence | `packages/core/src/registry/types.ts`, `packages/core/src/registry/registry.ts`, `packages/core/src/registry/registry.test.ts`, `packages/editor/src/components/editor-2d/renderers/floorplan-registry-layer.tsx`, `packages/editor/src/components/editor-2d/renderers/floorplan-registry-layer.test.ts`, `packages/editor/src/components/editor-2d/renderers/floorplan-geometry-renderer.tsx`, `packages/editor/src/lib/floorplan/floorplan-pdfkit-renderer.ts` |
 
 The published `@pascal-app/core@1.0.0-beta.5` package used by Environment accepts only `'level' | 'building'` in `floorplanScope`, so a Site child remains unreachable through an installed release. The local Pascal Editor source now adds `'site'` to the public type and registry query.
@@ -163,7 +163,7 @@ Acceptance checks:
 | Local implementation | Current local checkout (unreleased) |
 | Host issue / PR | TBD |
 | Required Pascal version | First published Pascal release containing `capabilities.selectionHighlight`; version not assigned |
-| Plugin evidence | `src/ground-cover/definition.ts`, `src/surface-material/definition.ts` |
+| Plugin evidence | `src/ground-cover/definition.render.ts`, `src/surface-material/definition.render.ts` |
 | Host evidence | `packages/core/src/registry/types.ts`, `packages/core/src/registry/registry.ts`, `packages/core/src/registry/registry.test.ts`, `packages/editor/src/components/editor/selection-manager.tsx` |
 
 The published beta.5 Editor highlights selection and hover by replacing materials in a registered node's rendered subtree. That is unsafe for Environment paint layers: Ground Cover and Surface use authored NodeMaterial graphs, textures, masks and opacity whose meaning is lost when the host substitutes a generic selection material. The node must remain selected so its panel and tool lifecycle work, but its rendered material must remain owned by the plugin.

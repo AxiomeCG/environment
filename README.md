@@ -62,10 +62,10 @@ Read the module for your current question, not the whole repository.
 | Question | Entry point |
 |---|---|
 | What does the plugin expose without loading presentation runtime? | [`src/index.ts`](./src/index.ts), [`presentation.ts`](./src/presentation.ts), and [`presentation-configuration.ts`](./src/presentation-configuration.ts) |
-| What grass data is saved, and how does it reach each representation? | [`ground-cover/schema.ts`](./src/ground-cover/schema.ts), then [`definition.ts`](./src/ground-cover/definition.ts) |
+| What grass data is saved, and how does it reach each representation? | [`ground-cover/schema.ts`](./src/ground-cover/schema.ts), then [`definition.render.ts`](./src/ground-cover/definition.render.ts) |
 | Where does a grass root get its height? | [`field-context.ts`](./src/ground-cover/field-context.ts) → [`scatter.ts`](./src/ground-cover/scatter.ts) → `buildGrassFieldGeometry` in [`geometry.ts`](./src/ground-cover/geometry.ts) |
 | What updates grass after a scene or Terrain change? | [`ground-cover/system.tsx`](./src/ground-cover/system.tsx) |
-| How is Surface connected to rendering, tools, and export? | [`surface-material/definition.ts`](./src/surface-material/definition.ts) |
+| How is Surface connected to rendering, tools, and export? | [`surface-material/definition.render.ts`](./src/surface-material/definition.render.ts), then [`definition.edit.ts`](./src/surface-material/definition.edit.ts) for tools |
 | How do ponds follow terrain and animate koi? | [`pond/basin.ts`](./src/pond/basin.ts), [`geometry.ts`](./src/pond/geometry.ts), and [`koi-motion.ts`](./src/pond/koi-motion.ts) |
 | How do rivers preview, commit, and restore terrain? | [`river/tool.tsx`](./src/river/tool.tsx), [`actions.ts`](./src/river/actions.ts), and [`terrain.ts`](./src/river/terrain.ts) |
 | Where are the exterior world and sky composed? | [`surroundings/layer.tsx`](./src/surroundings/layer.tsx), [`atmosphere/layer.tsx`](./src/atmosphere/layer.tsx) |
@@ -102,6 +102,28 @@ publication readiness from a local demo or typecheck.
 Presentation configuration remains versioned and project-local in browser storage.
 Cloud/share synchronization remains out of scope.
 
+## Read-only viewers
+
+A host that only displays scenes can load the render-only entry instead of the
+package root. It registers the same plugin id, contract version, kinds, schemas,
+schema versions, defaults and bake policy, with geometry, materials, systems,
+baked-scene replacement renderers, read-only plan symbols and the atmosphere and
+surroundings presentation, but no paint or drawing tools, parameters, floor-plan
+editing extensions or Environment panel, and nothing from `@pascal-app/editor`:
+
+```ts
+import { environmentPresentation, environmentRenderPlugin } from '@pascal-app/plugin-environment/render'
+// viewer host:
+registerViewerPresentation(environmentPresentation)
+setPluginDiscovery(async () => [environmentRenderPlugin])
+```
+
+Each kind's definition is split into a render half (`definition.render.ts`) and
+an edit half (`definition.edit.ts`); `environmentPlugin` composes both, so
+editing hosts are unchanged. Load one or the other, not both.
+`bun run check:render` bundles `./render` and fails if anything in it reaches
+`@pascal-app/editor` or `next`, after checking that the root entry does.
+
 ## External assets and network requests
 
 Environment has no analytics, telemetry endpoint, cloud account, or implicit
@@ -123,13 +145,14 @@ The following requests can occur:
   images load when their panel, live material, live surroundings, or an
   applicable export first needs them. The selector's raster artwork is embedded
   as `data:` images inside the bundled SVG, so it adds no image origins.
-- Live Surroundings loads the Pascal catalog's current `hydrant` GLB from
+- Live Surroundings loads the Pascal catalog's `hydrant` GLB (its catalog
+  entry is mirrored in `src/surroundings/catalog-assets.ts`) from
   `https://byrpxoiotywskoojsrzd.supabase.co/storage/v1/object/public/items/system/hydrant/model.glb`.
   The static surroundings builder requests the same GLB only when an opted-in
   regional export contains a hydrant. The host `resolveAssetUrl` contract
   preserves absolute HTTP(S) URLs, resolves `asset://` values from browser
   IndexedDB, and prefixes relative paths with `NEXT_PUBLIC_ASSETS_CDN_URL`
-  (falling back to `https://editor.pascal.app`); the current hydrant entry is
+  (falling back to `https://editor.pascal.app`); the hydrant entry is
   already absolute and is therefore preserved unchanged.
 - Both the live GLTF hook and the static export configure Draco decoder version
   1.5.5 at
