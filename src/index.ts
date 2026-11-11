@@ -5,13 +5,19 @@ import { grassFieldDefinition } from './ground-cover/definition'
 import { pondDefinition } from './pond/definition'
 import { riverDefinition } from './river/definition'
 import { surfaceMaterialDefinition } from './surface-material/definition'
+import { environmentRenderPlugin } from './render'
 
 export const groundCoverDefinition = grassFieldDefinition
 export { pondDefinition, riverDefinition, surfaceMaterialDefinition }
 
+/**
+ * The environment plugin for editing hosts: each kind's render half
+ * (`./render`) composed with its edit half. Read-only viewers load
+ * `environmentRenderPlugin` from `@pascal-app/plugin-environment/render`
+ * instead.
+ */
 export const environmentPlugin: Plugin = {
-  id: 'pascal:environment',
-  apiVersion: 1,
+  ...environmentRenderPlugin,
   nodes: [
     groundCoverDefinition as unknown as AnyNodeDefinition,
     surfaceMaterialDefinition as unknown as AnyNodeDefinition,

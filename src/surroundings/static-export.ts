@@ -1,5 +1,4 @@
 import { terrainFieldOf, type AnyNode, type SiteNode } from '@pascal-app/core'
-import { CATALOG_ITEMS } from '@pascal-app/editor'
 import { resolveAssetUrl } from '@pascal-app/viewer'
 import type { ViewerPresentationExportContext } from '@pascal-app/viewer'
 import {
@@ -40,6 +39,7 @@ import { riverTerrainBaseline } from '../river/terrain'
 import { loadPresentationAlbedos } from '../surface-material/materials'
 import type { PresentationAlbedos } from '../surface-material/materials'
 import { buildBoulderInstances } from './boulders'
+import { HYDRANT_CATALOG_ASSET } from './catalog-assets'
 import { buildSeaGeometry } from './coastal-sea-geometry'
 import type { SeaGeometryBuffers } from './coastal-sea-geometry'
 import {
@@ -858,9 +858,7 @@ async function buildCatalogProps(
   root.name = 'environment-static-catalog-props'
   const hydrants = plans.filter(({ assetId }) => assetId === 'hydrant')
   if (hydrants.length === 0) return root
-  const asset = CATALOG_ITEMS.find(({ id }) => id === 'hydrant')
-  if (!asset)
-    throw new Error('[Environment] Static surroundings catalog asset "hydrant" is unavailable')
+  const asset = HYDRANT_CATALOG_ASSET
   const url = await resolveAssetUrl(asset.src)
   if (!url)
     throw new Error('[Environment] Static surroundings could not resolve catalog asset "hydrant"')
@@ -873,9 +871,9 @@ async function buildCatalogProps(
     const gltf = await loader.loadAsync(url)
     gltf.scene.updateMatrixWorld(true)
     const assetTransform = new Matrix4().compose(
-      new Vector3(...(asset.offset ?? [0, 0, 0])),
-      new Quaternion().setFromEuler(new Euler(...(asset.rotation ?? [0, 0, 0]))),
-      new Vector3(...(asset.scale ?? [1, 1, 1])),
+      new Vector3(...asset.offset),
+      new Quaternion().setFromEuler(new Euler(...asset.rotation)),
+      new Vector3(...asset.scale),
     )
     const placement = new Matrix4()
     const combined = new Matrix4()

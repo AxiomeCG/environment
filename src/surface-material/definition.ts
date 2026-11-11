@@ -1,82 +1,8 @@
-import type { NodeDefinition } from '@pascal-app/core'
-import type { FloorplanNodeExtension } from '@pascal-app/editor'
-import {
-  buildSurfaceMaterialBakeGeometry,
-  buildSurfaceMaterialBakeGeometryAsync,
-} from './bake-geometry'
-import { buildSurfaceMaterialFloorplan } from './floorplan'
-import { buildSurfaceMaterialGeometry } from './geometry'
-import { SurfaceMaterialNode, SURFACE_MATERIAL_KIND } from './schema'
+import { surfaceMaterialEditContribution } from './definition.edit'
+import { surfaceMaterialRenderDefinition } from './definition.render'
 
-type SurfaceMaterialDefinition = Omit<
-  NodeDefinition<typeof SurfaceMaterialNode>,
-  'capabilities' | 'floorplanScope'
-> &
-  Record<string, unknown> & {
-    bakeGeometry: typeof buildSurfaceMaterialBakeGeometry
-    bakeGeometryAsync: typeof buildSurfaceMaterialBakeGeometryAsync
-    capabilities: NodeDefinition<typeof SurfaceMaterialNode>['capabilities'] & {
-      selectionHighlight?: boolean
-    }
-    floorplanScope: 'site'
-    extensions: {
-      'pascal:editor/floorplan': FloorplanNodeExtension
-    }
-  }
-
-export const surfaceMaterialDefinition: SurfaceMaterialDefinition = {
-  kind: SURFACE_MATERIAL_KIND,
-  schemaVersion: 1,
-  schema: SurfaceMaterialNode,
-  category: 'furnish',
-
-  defaults: () => ({
-    object: 'node',
-    parentId: null,
-    visible: true,
-    metadata: {},
-    name: 'Surface',
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
-    textureSize: 100,
-  }),
-
-  capabilities: {
-    selectable: { hitVolume: 'bbox' },
-    selectionHighlight: false,
-    duplicable: false,
-    deletable: false,
-  },
-
-  geometry: buildSurfaceMaterialGeometry,
-  bake: 'replace',
-  bakeGeometry: buildSurfaceMaterialBakeGeometry,
-  bakeGeometryAsync: buildSurfaceMaterialBakeGeometryAsync,
-  bakeReplaceRenderer: { module: () => import('./static-renderer') },
-  floorplan: buildSurfaceMaterialFloorplan,
-  floorplanScope: 'site',
-  system: { module: () => import('./system'), priority: 1 },
-  tool: () => import('./tool'),
-  extensions: {
-    'pascal:editor/floorplan': {
-      tool: () => import('./floorplan-tool'),
-      availableModes: ['default', 'expert'],
-    },
-  },
-  toolHints: [
-    { key: 'Drag', label: 'Paint surface material' },
-    { key: 'Esc', label: 'Cancel stroke or stop' },
-  ],
-
-  presentation: {
-    label: 'Surface',
-    description: 'Terrain-conforming painted PBR surface materials.',
-    icon: { kind: 'iconify', name: 'lucide:paintbrush' },
-    paletteSection: 'furnish',
-    hidden: true,
-  },
-
-  mcp: {
-    description: 'Persistent terrain surface painted as a four-material blend.',
-  },
+/** The full painted-surface definition for editing hosts: render half + edit half. */
+export const surfaceMaterialDefinition = {
+  ...surfaceMaterialRenderDefinition,
+  ...surfaceMaterialEditContribution,
 }
