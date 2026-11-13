@@ -67,10 +67,15 @@ export type ResolvedRiver = Readonly<{
   surface: RiverSurface
 }>
 
-export function resolveRiver(node: RiverNode, context: GeometryContext): ResolvedRiver | null {
+/** `ground`, as for `resolvePond`: the terrain a caller already holds, else the live field. */
+export function resolveRiver(
+  node: RiverNode,
+  context: GeometryContext,
+  ground?: TerrainField | null,
+): ResolvedRiver | null {
   const parent = context.parent
   if (!parent || parent.type !== 'site') return null
-  const terrain = terrainFieldOf(parent)
+  const terrain = ground === undefined ? terrainFieldOf(parent) : ground
   if (!terrain) return null
   const baseline = riverTerrainBaseline(parent) ?? terrain
   const surface = buildRiverSurface(node, parent, terrain, baseline)

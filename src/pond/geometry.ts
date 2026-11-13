@@ -45,10 +45,18 @@ export type ResolvedPond = {
   props: readonly PondProp[]
 }
 
-export function resolvePond(node: PondNode, context: GeometryContext): ResolvedPond | null {
+/**
+ * `ground` is the terrain to stand the water on, for a caller that already holds it (an agent
+ * operation reads the snapshot it was given, not the live scene); omitted, the Site's live field.
+ */
+export function resolvePond(
+  node: PondNode,
+  context: GeometryContext,
+  ground?: TerrainField | null,
+): ResolvedPond | null {
   const parent = context.parent
   if (!parent || parent.type !== 'site') return null
-  const terrain = terrainFieldOf(parent)
+  const terrain = ground === undefined ? terrainFieldOf(parent) : ground
   if (!terrain) return null
   const basin = analyzePondBasin(terrain, parent.polygon.points, node.seed)
   if (!basin) return null

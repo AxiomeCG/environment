@@ -198,6 +198,20 @@ describe('ground the host keeps in nodes', () => {
     expect(filled.result.maxDepthM as number).toBeCloseTo(0.9, 2)
   })
 
+  test('lay_ground keeps grass out of the pond filled in the basin', () => {
+    const nodes = basinLot()
+    const filled = run('fill_pond', nodes, { at: [12, 12], level: 'spill' })
+    const pondM2 = filled.result.areaM2 as number
+    const laid = run('lay_ground', applyChanges(nodes, filled.changes), {
+      areas: [{ site: true, ground: 'grass', featherM: 0 }],
+    })
+    const area = (laid.result.areas as (AreaFacts & { blockedM2: number })[])[0]
+    // The water's 52.75 m2, as the grass mask's lattice bounds it.
+    expect(area?.blockedM2).toBeGreaterThan(pondM2 - 3)
+    expect(area?.blockedM2).toBeLessThan(pondM2 + 6)
+    expect(area?.grassM2).toBeLessThan(16 * 16 + 4 - pondM2 + 3)
+  })
+
   test('a tile of level ground still holds no water', () => {
     let code: string | null = null
     try {

@@ -263,6 +263,7 @@ function resolveGroundLayers(
   nodes: SceneNodes,
   site: SiteNode,
   areas: readonly ResolvedArea[],
+  terrain: TerrainField | null,
 ): GroundLayers {
   const bounds = siteBounds(site.polygon.points)
   const existingGrass = siteChildOfKind<GrassFieldNode>(nodes, String(site.id), GRASS_FIELD_KIND)
@@ -298,7 +299,8 @@ function resolveGroundLayers(
       'paintMap',
       resolveSurfacePaint(surfaceNode, sceneNodes, bounds),
     ),
-    obstacles: buildGrassObstacleField(site, nodes, createGrassObstacleTopology(bounds)),
+    // Water stands on the snapshot's ground, not on whatever scene is live where this runs.
+    obstacles: buildGrassObstacleField(site, nodes, createGrassObstacleTopology(bounds), terrain),
   }
 }
 
@@ -536,8 +538,8 @@ export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
   const site = requireSite(nodes)
   const sitePolygon = requireSitePolygon(site)
   const areas = resolveAreas(input, sitePolygon)
-  const layers = resolveGroundLayers(nodes, site, areas)
   const terrain = siteTerrainOf(site, nodes)
+  const layers = resolveGroundLayers(nodes, site, areas, terrain)
   const areaFacts = areas.map((area) => layArea(area, sitePolygon, layers, terrain))
   const lotGround = lotGroundOf(areas, sitePolygon)
   if (lotGround) coverBeyondLot(layers, lotGround)

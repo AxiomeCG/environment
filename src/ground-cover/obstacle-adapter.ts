@@ -11,6 +11,7 @@ import {
   type LevelNode,
   type SiteNode,
   type SlabNode,
+  type TerrainField,
   type WallNode,
   type ZoneNode,
 } from '@pascal-app/core'
@@ -44,17 +45,23 @@ type SiteTransform = {
 
 const IDENTITY_TRANSFORM: SiteTransform = { x: 0, z: 0, rotation: 0 }
 
+/**
+ * `ground` is the terrain the site's water stands on, for a caller that reads a node snapshot
+ * (an agent operation); omitted, water is resolved on the Site's live field, as it is drawn.
+ */
 export function buildGrassObstacleField(
   site: SiteNode,
   nodes: Readonly<Record<string, AnyNode>>,
   topology: Pick<GrassPaintField, 'origin' | 'spacing' | 'cols' | 'rows'>,
+  ground?: TerrainField | null,
 ): GrassObstacleField {
-  return createGrassObstacleField(topology, collectGrassObstacleShapes(site, nodes))
+  return createGrassObstacleField(topology, collectGrassObstacleShapes(site, nodes, ground))
 }
 
 export function collectGrassObstacleShapes(
   site: SiteNode,
   nodes: Readonly<Record<string, AnyNode>>,
+  ground?: TerrainField | null,
 ): GrassObstacleShape[] {
   const shapes: GrassObstacleShape[] = []
   // Core uses branded ID keys; the runtime scene map is the same complete record.
@@ -118,9 +125,9 @@ export function collectGrassObstacleShapes(
     if (child.parentId !== site.id) continue
     const surface =
       (child.type as string) === POND_KIND
-        ? resolvePond(child as unknown as PondNode, context)?.surface
+        ? resolvePond(child as unknown as PondNode, context, ground)?.surface
         : (child.type as string) === RIVER_KIND
-          ? resolveRiver(child as unknown as RiverNode, context)?.surface
+          ? resolveRiver(child as unknown as RiverNode, context, ground)?.surface
           : null
     if (surface?.positions.length) {
       shapes.push({ kind: 'triangles', positions: surface.positions })
