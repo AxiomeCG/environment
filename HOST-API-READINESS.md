@@ -358,6 +358,54 @@ Acceptance checks:
 - Export creates no semantic nodes and leaves live scene resources unchanged.
 - Success and failure release export-owned resources without disposing borrowed textures.
 
+### ENV-HOST-009 — Ground kept in nodes: the terrain reads a tiled host offers
+
+| Field | Value |
+|---|---|
+| Status | **Host change required — in the R&D host (core 1.1.x), not in a published core; Environment's agent tools are correct only against it** |
+| Observed | 2026-11-13 |
+| Host repository | `pascalorg/editor` (R&D line) |
+| Required Pascal version | First published core whose `persistedTerrainFieldOf(site, nodes)` reads terrain tiles, breaks and graded ramps from the node snapshot |
+| Plugin evidence | `src/agent-operations/scene.ts` (`siteTerrainOf`, `terrainReliefOver`), `src/terrain-nodes.ts`, `src/planting-terrain.ts` |
+| Host evidence | `packages/core/src/lib/terrain-source-persisted.ts`, `terrain-authority.ts`, `terrain-tiles.ts`, `hooks/spatial-grid/spatial-grid-sync.ts` |
+
+A tiled host keeps authored ground in `terrain-tile` and `terrain-break` nodes under the Site; its terrain tools write nothing else and leave `site.terrain` alone. Three consequences for a plugin that reads the ground:
+
+1. **The read needs the nodes.** `persistedTerrainFieldOf(site)` without the snapshot is the legacy field alone: flat on a lot the tools shaped. Every agent operation reads through `siteTerrainOf(site, nodes)`. The seam is typed as the host declares the read and assigned from the core export, so it compiles against a core that takes the site alone, without a cast; there the nodes are ignored.
+2. **The field is virtual.** With a tile present the field has no dense `heights` buffer and a box as wide as every tile; reads go through core's `surfaceHeightAt`, `normalAt`, `heightAtSample`. Nothing in Environment's agent, render or mask paths indexes the buffer; the river carve still does (it copies and re-encodes the dense legacy field), so **a river on tiled ground is not supported**: it carves `site.terrain`, which the tiles cover.
+3. **A tile edit does not touch the Site node.** The host re-marks only its own dependents. Environment's grass, surface and pond systems take a changed `terrain-tile` or `terrain-break` under the Site as a terrain change (`sitesWithChangedTerrainNodes`).
+
+Accepted workaround, owner Environment, to remove when the host no longer throws: `normalAt` refuses (`unsupported_geometry`, "no same-region source triangle for keep-ground") within half a metre of a keep-ground break that lies on a tile seam (measured on core at `b0eed5bde`: 200 of 10,000 lot samples for a retaining break along z = 0). `samplePlantingTerrain` reads such a point as its height with an upright normal, so one point the host will not answer does not take the lawn away or refuse `lay_ground`.
+
+Acceptance checks (run against the host core source, see the fixes report for the harness):
+
+- After `shape_site_terrain` lowers a basin, `read_environment` lists the hollow and `fill_pond` fills it.
+- On a lot tilted by the tools, `lay_ground` reports the real height range and slope.
+- A lawn laid before `grade_around_house` follows the new ground without a reload.
+
+### ENV-HOST-010 — Who owns the ground: a footprint is not an outline
+
+| Field | Value |
+|---|---|
+| Status | **Accepted workaround — owner Environment; a host capability would replace the reading of other plugins' fields** |
+| Observed | 2026-11-13 |
+| Plugin evidence | `src/ground-cover/obstacle-adapter.ts`, `src/ground-cover/ground-owners.test.ts` |
+| Host evidence | `packages/core/src/registry/types.ts` (`FloorPlacedConfig.collides`: "Default off", a rule for placing furniture) |
+
+The lawn must keep off ground another node owns, and must know whether the node replaces the ground (a pool, paving) or only stands on it (a hedge, a rock). The host offers `capabilities.floorPlaced`: a box, and a collision flag that pools, steps and trees leave off. Environment therefore reads, from the public registry and the node itself: the collision flag or predicate; the footprint box; a `polygon` the node carries about its position, grown to that box (a pool and its coping); a scripted object's `source.manifest.shape.bands`; a `rock`'s polygon and a `ramp`'s centreline and width by kind; and, for catalogue models and other plugins' plants, the words core's own usage field files foliage under. It cannot see: the real outline of a catalogue model (core bakes one per asset but does not export it), a plugin node with neither a footprint nor a polygon, or what a plugin node draws below ground.
+
+Smallest host evolution: a `capabilities.groundOutline(node) -> { rings, owns: 'surface' | 'stands' }` in the node's parent frame, declared by the kind that knows its shape, and the baked catalogue outline exported. Until then the rule above stands, with every value bounded (see `hostile-nodes.test.ts`).
+
+### ENV-HOST-011 — The generic placement refuses lot-wide kinds with the wrong advice
+
+| Field | Value |
+|---|---|
+| Status | **Host change required — private host (`apps/community/features/community/lib/ai/plugin-tools.ts`, the `defaults.position` check)** |
+| Observed | 2026-11-13 |
+| Plugin evidence | `src/ground-cover/definition.render.ts`, `src/surface-material/definition.render.ts`, `src/render.test.ts` |
+
+`place_plugin_nodes` creates any kind whose defaults carry a position under the active level. The lot's ground cover and surface are Site children drawn from paint: placed that way they were empty nodes answered as "Placed". Their defaults now declare no position, so that host refuses them as it refuses the pond, the river and the paint tile, and their agent-facing description names `lay_ground`. The refusal text is the host's: "It must be created from its own editor panel; tell the user where to find it instead." For a kind whose plugin hosts agent tools, the host should name those tools instead (it holds `HOSTED_PLUGIN_TOOL_CATALOG`).
+
 ## Deployment gate
 
 Before publishing or deploying Environment:
