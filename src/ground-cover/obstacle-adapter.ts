@@ -67,10 +67,49 @@ export function buildGrassObstacleField(
   return createGrassObstacleField(topology, collectGrassObstacleShapes(site, nodes, ground))
 }
 
+/**
+ * The ground other nodes own, without Environment's own water: where the painted Surface is not
+ * drawn either (it would lie as a lid over a pool cut into the lot), while a pond keeps its bed.
+ */
+export function buildGroundOwnerField(
+  site: SiteNode,
+  nodes: Readonly<Record<string, AnyNode>>,
+  topology: Pick<GrassPaintField, 'origin' | 'spacing' | 'cols' | 'rows'>,
+): GrassObstacleField {
+  return createGrassObstacleField(topology, collectGroundOwnerShapes(site, nodes))
+}
+
 export function collectGrassObstacleShapes(
   site: SiteNode,
   nodes: Readonly<Record<string, AnyNode>>,
   ground?: TerrainField | null,
+): GrassObstacleShape[] {
+  const shapes = collectGroundOwnerShapes(site, nodes)
+  const context: GeometryContext = {
+    parent: site,
+    children: [],
+    siblings: directChildren(site, nodes),
+    resolve: <N = AnyNode>(id: AnyNodeId) => nodes[id] as N | undefined,
+  }
+  for (const child of context.siblings) {
+    if (child.parentId !== site.id) continue
+    const surface =
+      (child.type as string) === POND_KIND
+        ? resolvePond(child as unknown as PondNode, context, ground)?.surface
+        : (child.type as string) === RIVER_KIND
+          ? resolveRiver(child as unknown as RiverNode, context, ground)?.surface
+          : null
+    if (surface?.positions.length) {
+      shapes.push({ kind: 'triangles', positions: surface.positions })
+    }
+  }
+  return shapes
+}
+
+/** Everything built or standing on the Site's ground: slabs, rooms, walls and ground owners. */
+export function collectGroundOwnerShapes(
+  site: SiteNode,
+  nodes: Readonly<Record<string, AnyNode>>,
 ): GrassObstacleShape[] {
   const shapes: GrassObstacleShape[] = []
   // Core uses branded ID keys; the runtime scene map is the same complete record.
@@ -122,26 +161,7 @@ export function collectGrassObstacleShapes(
     collectLevelShapes(node, coreNodes, IDENTITY_TRANSFORM, shapes)
   }
 
-  const children = directChildren(site, nodes)
-  collectFloorPlacedShapes(children, coreNodes, IDENTITY_TRANSFORM, shapes)
-  const context: GeometryContext = {
-    parent: site,
-    children: [],
-    siblings: children,
-    resolve: <N = AnyNode>(id: AnyNodeId) => nodes[id] as N | undefined,
-  }
-  for (const child of children) {
-    if (child.parentId !== site.id) continue
-    const surface =
-      (child.type as string) === POND_KIND
-        ? resolvePond(child as unknown as PondNode, context, ground)?.surface
-        : (child.type as string) === RIVER_KIND
-          ? resolveRiver(child as unknown as RiverNode, context, ground)?.surface
-          : null
-    if (surface?.positions.length) {
-      shapes.push({ kind: 'triangles', positions: surface.positions })
-    }
-  }
+  collectFloorPlacedShapes(directChildren(site, nodes), coreNodes, IDENTITY_TRANSFORM, shapes)
   return shapes
 }
 

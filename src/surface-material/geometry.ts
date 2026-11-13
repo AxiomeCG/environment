@@ -2,13 +2,23 @@ import {
   normalAt,
   surfaceHeightAt,
   terrainFieldOf,
+  type AnyNode,
   type GeometryContext,
   type SiteNode,
   type TerrainField,
 } from '@pascal-app/core'
 import { DoubleSide, Group, Mesh, type Object3D } from 'three'
-import { positionGeometry } from 'three/tsl'
+import { positionGeometry, step, texture, vec2 } from 'three/tsl'
 import { MeshStandardNodeMaterial } from 'three/webgpu'
+import { buildGroundOwnerField, collectSiteNodes } from '../ground-cover/obstacle-adapter'
+import { createGrassObstacleTopology } from '../ground-cover/obstacle-field'
+import {
+  createGrassObstacleTexture,
+  disposeGrassObstacleTexture,
+  getGrassObstacleRuntime,
+  updateGrassObstacleTexture,
+} from '../ground-cover/obstacle-texture'
+import { siteBounds } from '../ground-cover/paint-field'
 import { buildDrapedGroundGeometry } from '../ground-cover/terrain-drape'
 import { resolveSurfaceMaterial } from './field-context'
 import { buildSurfaceMaterialNodes } from './materials'
@@ -45,9 +55,24 @@ export function buildSurfaceMaterialGeometry(
   material.normalNode = materialNodes.normal
   material.roughnessNode = materialNodes.roughness
   material.aoNode = materialNodes.ao
-  material.opacityNode = materialNodes.coverage
+  // The sheet lies 5 mm over the whole lot: where another node owns the ground (a pool cut into
+  // it, a paved slab, a house) it is not drawn, or it would lie over a pool's water as a lid.
+  // Environment's own water is no owner here: a pond keeps the surface as its bed.
+  const { field: owners, texture: ownerTexture } = createSurfaceOwnerMask(
+    node,
+    resolved.site,
+    collectSiteNodes(resolved.site, context.resolve),
+  )
+  const ownerUv = positionGeometry.xz.sub(vec2(owners.origin[0], owners.origin[1])).div(
+    vec2(
+      Math.max((owners.cols - 1) * owners.spacing, owners.spacing),
+      Math.max((owners.rows - 1) * owners.spacing, owners.spacing),
+    ),
+  )
+  material.opacityNode = materialNodes.coverage.mul(step(0.5, texture(ownerTexture, ownerUv).a))
   material.addEventListener('dispose', () => {
     disposeSurfacePaintTexture(node.id, paintTexture)
+    disposeGrassObstacleTexture(node.id, ownerTexture)
   })
 
   const mesh = new Mesh(geometry, material)
@@ -56,6 +81,34 @@ export function buildSurfaceMaterialGeometry(
   mesh.userData[SURFACE_TOPOLOGY_KEY] = terrainTopologyKey(resolved.terrain)
   group.add(mesh)
   return group
+}
+
+/** Where the surface is cut out for what owns the ground, as the texture its material samples. */
+export function createSurfaceOwnerMask(
+  node: { id: string },
+  site: SiteNode,
+  nodes: Readonly<Record<string, AnyNode>>,
+) {
+  const field = buildGroundOwnerField(
+    site,
+    nodes,
+    createGrassObstacleTopology(siteBounds(site.polygon.points)),
+  )
+  return { field, texture: createGrassObstacleTexture(node.id, field) }
+}
+
+/**
+ * Redraw where the mounted surface is cut out for what owns the ground, after a node was placed,
+ * moved or removed. False when the surface is not mounted or the lot changed size: rebuild then.
+ */
+export function updateSurfaceMaterialObstacles(
+  node: { id: string },
+  site: SiteNode,
+  nodes: Readonly<Record<string, AnyNode>>,
+): boolean {
+  const runtime = getGrassObstacleRuntime(node.id)
+  if (!runtime) return false
+  return updateGrassObstacleTexture(node.id, buildGroundOwnerField(site, nodes, runtime.field))
 }
 
 export function updateSurfaceMaterialTerrain(root: Object3D, site: SiteNode): boolean {

@@ -10,7 +10,8 @@ import {
 import { useEffect } from 'react'
 import type { Object3D } from 'three'
 import { sitesWithChangedTerrainNodes } from '../terrain-nodes'
-import { updateSurfaceMaterialTerrain } from './geometry'
+import { changedGrassObstacleSiteIds } from '../ground-cover/obstacle-adapter'
+import { updateSurfaceMaterialObstacles, updateSurfaceMaterialTerrain } from './geometry'
 import { SURFACE_MATERIAL_KIND } from './schema'
 import { groundCoversOf, surfaceTileChangesRedraw } from './tile-refresh'
 
@@ -65,6 +66,25 @@ export default function SurfaceMaterialSystem({ sceneApi }: { sceneApi: SceneApi
         ...groundCoversOf(currentNodes, redraw.rebuildGroundCoverOf),
       ]) {
         sceneApi.markDirty(id as AnyNodeId)
+      }
+      // What owns the ground cuts the sheet out: a pool placed on it, a slab, a rock.
+      const ownerSites = changedGrassObstacleSiteIds(currentNodes, previousNodes)
+      if (ownerSites.size > 0) {
+        for (const candidate of Object.values(currentNodes)) {
+          if (
+            (candidate.type as string) !== SURFACE_MATERIAL_KIND ||
+            !ownerSites.has(candidate.parentId as string)
+          ) {
+            continue
+          }
+          const site = currentNodes[candidate.parentId as AnyNodeId]
+          if (
+            site?.type !== 'site' ||
+            !updateSurfaceMaterialObstacles(candidate, site, currentNodes)
+          ) {
+            sceneApi.markDirty(candidate.id as AnyNodeId)
+          }
+        }
       }
       for (const change of surfaceSiteChanges(currentNodes, previousNodes, changedIds)) {
         const node = currentNodes[change.id as AnyNodeId]
