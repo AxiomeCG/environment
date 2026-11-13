@@ -58,6 +58,7 @@ import {
   signedDistanceToPolygon,
   siteChildOfKind,
   siteTerrainOf,
+  type GroundReadingOperation,
 } from './scene'
 import {
   createTerrainSamples,
@@ -65,7 +66,7 @@ import {
   terrainSampleFacts,
   type TerrainSamples,
 } from './terrain-facts'
-import type { AgentOperation, PlanPoint, SceneNodes } from './types'
+import type { PlanPoint, SceneNodes } from './types'
 
 export type LayGroundKind = LotGroundKind
 
@@ -535,11 +536,16 @@ function writeSizeFacts(nodes: SceneNodes, changes: PaintTileChanges) {
   }
 }
 
-export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
+export const layGround: GroundReadingOperation<LayGroundInput> = (
+  nodes,
+  input,
+  _context,
+  terrainOf = siteTerrainOf,
+) => {
   const site = requireSite(nodes)
   const sitePolygon = requireSitePolygon(site)
   const areas = resolveAreas(input, sitePolygon)
-  const terrain = siteTerrainOf(site, nodes)
+  const terrain = terrainOf(site, nodes)
   const layers = resolveGroundLayers(nodes, site, areas, terrain)
   const areaFacts = areas.map((area) => layArea(area, sitePolygon, layers, terrain))
   const lotGround = lotGroundOf(areas, sitePolygon)

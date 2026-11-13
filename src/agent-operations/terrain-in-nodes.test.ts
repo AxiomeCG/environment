@@ -1,18 +1,32 @@
-import * as core from '@pascal-app/core'
-import type { AnyNode, SiteNode, TerrainField } from '@pascal-app/core'
-import { afterAll, describe, expect, mock, test } from 'bun:test'
+import {
+  createTerrainField,
+  decodeTerrainField,
+  encodeTerrainField,
+  persistedTerrainFieldOf,
+  quantize,
+  SiteNode,
+  type AnyNode,
+  type TerrainField,
+} from '@pascal-app/core'
+import { describe, expect, test } from 'bun:test'
 import { paintAt, siteBounds } from '../ground-cover/paint-field'
 import { GRASS_FIELD_KIND, type GrassFieldNode } from '../ground-cover/schema'
 import { resolveGroundCoverPaint } from '../paint-tiles/layers'
-import type { SceneChanges, SceneNodes } from './types'
+import { fillPond } from './fill-pond'
+import { environmentAgentOperations, refusalCode } from './index'
+import { layGround } from './lay-ground'
+import { readEnvironment } from './read-environment'
+import type { SiteTerrainRead } from './scene'
+import type { AgentOperationOutcome, SceneChanges, SceneNodes } from './types'
 
 /**
  * The host keeps authored ground in nodes under the site (32 m terrain tiles of 65 x 65 samples
  * at 0.5 m; `shape_site_terrain` and the other terrain tools write nothing else), and its
  * `persistedTerrainFieldOf(site, nodes)` reads them only from the node snapshot it is given.
- * The core this package installs for its own tests predates tiles, so this stands in for that one
- * read: a site's tile, decoded as the host decodes it, seen only when `nodes` is passed. Without
- * tiles, or without `nodes`, it is the installed read, so every other test file is unaffected.
+ * The core this package installs for its own tests predates tiles, so `hostRead` stands in for
+ * that one read: a site's tile, decoded as the host decodes it, from the snapshot. It is handed
+ * to each operation as its ground read, the argument the operations take for it: no module is
+ * mocked and nothing global is touched, so this file reads the same alone or after any other.
  */
 const TILE_SIZE_M = 32
 const TILE_SAMPLES = 65
@@ -20,20 +34,17 @@ const TILE_SPACING_M = 0.5
 
 type Tile = { id: string; type: 'terrain-tile'; parentId: string; ix: number; iz: number; step: number; heights: string }
 
-const installed = { ...core }
 const tileFields = new WeakMap<object, TerrainField | null>()
 
-function hostPersistedTerrain(site: SiteNode | null | undefined, nodes?: SceneNodes): TerrainField | null {
-  const tiles = site && nodes
-    ? (Object.values(nodes) as unknown as Tile[]).filter(
-        (node) => node.type === 'terrain-tile' && node.parentId === site.id,
-      )
-    : []
+const hostRead: SiteTerrainRead = (site, nodes) => {
+  const tiles = (Object.values(nodes) as unknown as Tile[]).filter(
+    (node) => node.type === 'terrain-tile' && node.parentId === site.id,
+  )
   const tile = tiles[0]
-  if (!tile) return installed.persistedTerrainFieldOf(site)
+  if (!tile) return persistedTerrainFieldOf(site)
   if (tiles.length > 1) throw new Error('The stand-in reads one tile.')
   if (!tileFields.has(tile)) {
-    tileFields.set(tile, installed.decodeTerrainField({
+    tileFields.set(tile, decodeTerrainField({
       type: 'heightfield',
       origin: [tile.ix * TILE_SIZE_M, tile.iz * TILE_SIZE_M],
       spacing: TILE_SPACING_M,
@@ -46,33 +57,33 @@ function hostPersistedTerrain(site: SiteNode | null | undefined, nodes?: SceneNo
   return tileFields.get(tile) ?? null
 }
 
-mock.module('@pascal-app/core', () => ({ ...installed, persistedTerrainFieldOf: hostPersistedTerrain }))
-afterAll(() => {
-  mock.module('@pascal-app/core', () => installed)
-})
-
-const { environmentAgentOperations, refusalCode } = await import('./index')
+/** The operations as a host with tiled terrain runs them: its ground read in place of core's. */
+const onTiledHost = {
+  read_environment: readEnvironment,
+  lay_ground: layGround,
+  fill_pond: fillPond,
+} as const
 
 type Nodes = Record<string, AnyNode>
 const context = { activeLevelId: null }
 
 /** A site whose only ground is a terrain tile under it: `site.terrain` stays absent. */
 function tiledSite(lot: [number, number][], height: (x: number, z: number) => number): Nodes {
-  const field = installed.createTerrainField({
+  const field = createTerrainField({
     origin: [0, 0], spacing: TILE_SPACING_M, cols: TILE_SAMPLES, rows: TILE_SAMPLES, step: 0.01,
   })
   for (let row = 0; row < field.rows; row += 1) {
     for (let col = 0; col < field.cols; col += 1) {
-      field.heights[row * field.cols + col] = installed.quantize(
+      field.heights[row * field.cols + col] = quantize(
         field, height(col * TILE_SPACING_M, row * TILE_SPACING_M),
       )
     }
   }
   const tile: Tile = {
     id: 'terrain-tile_0_0', type: 'terrain-tile', parentId: 'site_tiled', ix: 0, iz: 0,
-    step: field.step, heights: installed.encodeTerrainField(field).heights,
+    step: field.step, heights: encodeTerrainField(field).heights,
   }
-  const site = installed.SiteNode.parse({
+  const site = SiteNode.parse({
     id: 'site_tiled',
     polygon: { type: 'polygon', points: lot },
     children: [tile.id],
@@ -83,8 +94,8 @@ function tiledSite(lot: [number, number][], height: (x: number, z: number) => nu
 
 const square = (min: number, max: number): [number, number][] => [[min, min], [max, min], [max, max], [min, max]]
 
-function run(name: keyof typeof environmentAgentOperations, nodes: Nodes, input: unknown) {
-  return environmentAgentOperations[name](nodes, input as never, context)
+function run(name: keyof typeof onTiledHost, nodes: Nodes, input: unknown): AgentOperationOutcome {
+  return onTiledHost[name](nodes, input as never, context, hostRead)
 }
 
 function applyChanges(nodes: Nodes, changes: SceneChanges | undefined): Nodes {
@@ -211,6 +222,22 @@ describe('ground the host keeps in nodes', () => {
     expect(area?.blockedM2).toBeGreaterThan(40)
     expect(area?.blockedM2).toBeLessThan(pondM2)
     expect(area?.grassM2).toBeGreaterThan(16 * 16 - pondM2)
+  })
+
+  test('called as a host calls them, with three arguments, they read through core', () => {
+    // The installed core predates tiles: through it this lot has no ground to read. On a tiled
+    // host the same three-argument call reads the tiles (run against its core, see the report).
+    const nodes = basinLot()
+    let code: string | null = null
+    try {
+      environmentAgentOperations.fill_pond(nodes, { at: [12, 12] }, context)
+    } catch (error) {
+      code = refusalCode(error)
+    }
+    expect(code).toBe('no_terrain')
+    expect(environmentAgentOperations.read_environment(nodes, { hollowsLimit: 5 }, context).result.hollows).toEqual([])
+    // And the same operations, handed the tiled read, find the basin.
+    expect((run('read_environment', nodes, { hollowsLimit: 5 }).result.hollows as unknown[]).length).toBe(1)
   })
 
   test('a tile of level ground still holds no water', () => {

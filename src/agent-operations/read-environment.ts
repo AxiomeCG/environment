@@ -34,9 +34,10 @@ import {
   siteChildOfKind,
   siteChildrenOfKind,
   siteTerrainOf,
+  type GroundReadingOperation,
 } from './scene'
 import { createTerrainSamples, includeTerrainSample, terrainSampleFacts } from './terrain-facts'
-import type { AgentOperation, PlanPoint, SceneNodes } from './types'
+import type { PlanPoint, SceneNodes } from './types'
 
 export type ReadEnvironmentInput = {
   area?: ReadonlyArray<readonly number[]>
@@ -220,13 +221,18 @@ function requireArea(
   return { area, onLotM2 }
 }
 
-export const readEnvironment: AgentOperation<ReadEnvironmentInput> = (nodes, input) => {
+export const readEnvironment: GroundReadingOperation<ReadEnvironmentInput> = (
+  nodes,
+  input,
+  _context,
+  terrainOf = siteTerrainOf,
+) => {
   const site = requireSite(nodes)
   const sitePolygon = requireSitePolygon(site)
   const { area, onLotM2 } = requireArea(input, sitePolygon)
   const region: Region = (x, z) => pointInPolygon(x, z, area) && pointInPolygon(x, z, sitePolygon)
   const bounds = siteBounds(sitePolygon)
-  const terrain = siteTerrainOf(site, nodes)
+  const terrain = terrainOf(site, nodes)
   const hollowsLimit = Math.min(20, Math.max(0, Math.floor(input.hollowsLimit ?? 5)))
   const hollowScan = scanHollows(terrain, sitePolygon, region, hollowsLimit)
   return {

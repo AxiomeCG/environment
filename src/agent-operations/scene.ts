@@ -8,7 +8,7 @@ import {
 } from '@pascal-app/core'
 import { ShapeUtils, Vector2 } from 'three'
 import { refuse } from './refuse'
-import type { PlanPoint, SceneNodes } from './types'
+import type { AgentContext, AgentOperationOutcome, PlanPoint, SceneNodes } from './types'
 
 /** A contract point (`[x, z]` as a plain array) as a tuple, or null when malformed. */
 export function asPoint(value: readonly number[] | undefined): PlanPoint | null {
@@ -63,6 +63,22 @@ const readPersistedTerrain: (site: SiteNode, nodes?: SceneNodes) => TerrainField
 export function siteTerrainOf(site: SiteNode, nodes: SceneNodes): TerrainField | null {
   return readPersistedTerrain(site, nodes)
 }
+
+/** How an operation reads the site's persisted ground from the node snapshot it was given. */
+export type SiteTerrainRead = (site: SiteNode, nodes: SceneNodes) => TerrainField | null
+
+/**
+ * An operation that reads the ground: the host's shape, plus the ground read as a last, optional
+ * argument. A host calls it with three and gets core's read (`siteTerrainOf`); a caller that
+ * holds another reading of the same snapshot passes it. The read is an argument, never module
+ * state, so nothing a caller does can change what another caller reads.
+ */
+export type GroundReadingOperation<Input> = (
+  nodes: SceneNodes,
+  input: Input,
+  context: AgentContext,
+  terrainOf?: SiteTerrainRead,
+) => AgentOperationOutcome
 
 const MAX_RELIEF_SAMPLES = 1_000_000
 

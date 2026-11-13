@@ -20,8 +20,10 @@ import {
   roundFact,
   siteTerrainOf,
   terrainReliefOver,
+  type GroundReadingOperation,
+  type SiteTerrainRead,
 } from './scene'
-import type { AgentOperation, PlanPoint, SceneChanges, SceneNodes } from './types'
+import type { PlanPoint, SceneChanges, SceneNodes } from './types'
 
 export type FillPondInput = {
   at: readonly number[]
@@ -53,8 +55,13 @@ function requirePointOnLot(value: FillPondInput['at'], sitePolygon: PlanPoint[])
  * the lot, through the field: tiled ground has no dense buffer to scan, and ground the lot does
  * not own holds no pond.
  */
-function requireTerrain(site: SiteNode, nodes: SceneNodes, sitePolygon: PlanPoint[]): TerrainField {
-  const terrain = siteTerrainOf(site, nodes)
+function requireTerrain(
+  site: SiteNode,
+  nodes: SceneNodes,
+  sitePolygon: PlanPoint[],
+  terrainOf: SiteTerrainRead,
+): TerrainField {
+  const terrain = terrainOf(site, nodes)
   if (!terrain) {
     refuse('no_terrain', 'This site has no persisted terrain, so nothing can hold water.')
   }
@@ -288,11 +295,16 @@ function surfacePerimeterM(surface: PondSurface): number {
   return perimeter
 }
 
-export const fillPond: AgentOperation<FillPondInput> = (nodes, input) => {
+export const fillPond: GroundReadingOperation<FillPondInput> = (
+  nodes,
+  input,
+  _context,
+  terrainOf = siteTerrainOf,
+) => {
   const site = requireSite(nodes)
   const sitePolygon = requireSitePolygon(site)
   const at = requirePointOnLot(input.at, sitePolygon)
-  const basin = requireBasin(requireTerrain(site, nodes, sitePolygon), sitePolygon, at)
+  const basin = requireBasin(requireTerrain(site, nodes, sitePolygon, terrainOf), sitePolygon, at)
   const level = resolveLevel(basin, input.level)
   refuseImpossibleStocking(basin, level, input)
   const water = targetWater(nodes, String(site.id), basin, level)
