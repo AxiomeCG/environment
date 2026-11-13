@@ -18,6 +18,7 @@ import { resolvePond } from '../pond/geometry'
 import { POND_KIND, type PondNode } from '../pond/schema'
 import { resolveRiver } from '../river/geometry'
 import { RIVER_KIND, type RiverNode } from '../river/schema'
+import { sitesWithChangedTerrainNodes } from '../terrain-nodes'
 import type { GrassPaintField } from './paint-field'
 import {
   createGrassObstacleField,
@@ -346,6 +347,10 @@ export function changedGrassObstacleSiteIds(
 ): Set<string> {
   const changedSiteIds = new Set<string>()
   const ids = new Set([...Object.keys(currentNodes), ...Object.keys(previousNodes)])
+  // A water's edge moves with the ground, and the host keeps ground in nodes under the Site too.
+  for (const siteId of sitesWithChangedTerrainNodes(currentNodes, previousNodes)) {
+    if (siteHasWaterObstacles(siteId, currentNodes)) changedSiteIds.add(siteId)
+  }
 
   for (const id of ids) {
     const current = currentNodes[id]

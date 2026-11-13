@@ -18,6 +18,7 @@ import {
   updateGrassFieldTerrain,
   updateGrassFieldUniforms,
 } from './geometry'
+import { sitesWithChangedTerrainNodes } from '../terrain-nodes'
 import { changedGrassObstacleSiteIds, siteHasWaterObstacles } from './obstacle-adapter'
 import { updateGrassTileLod } from './render/grass-tiles'
 import type { GrassFieldNode } from './schema'
@@ -69,8 +70,11 @@ export type GrassFieldSiteChange = {
 export function grassFieldSiteChanges(
   currentNodes: Readonly<Record<string, AnyNode>>,
   previousNodes: Readonly<Record<string, AnyNode>>,
+  changedIds?: Iterable<string>,
 ): GrassFieldSiteChange[] {
   const changes: GrassFieldSiteChange[] = []
+  // Ground the host keeps in nodes (terrain tiles, breaks) moves without touching the Site.
+  const reshaped = sitesWithChangedTerrainNodes(currentNodes, previousNodes, changedIds)
 
   for (const node of Object.values(currentNodes)) {
     if ((node.type as string) !== GRASS_FIELD_KIND) continue
@@ -96,7 +100,8 @@ export function grassFieldSiteChanges(
     }
 
     const boundaryChanged = currentSite.polygon !== previousSite.polygon
-    const terrainChanged = currentSite.terrain !== previousSite.terrain
+    const terrainChanged =
+      currentSite.terrain !== previousSite.terrain || reshaped.has(currentSite.id)
     if (boundaryChanged || terrainChanged) {
       changes.push({ id: node.id, boundaryChanged, terrainChanged })
     }
@@ -117,7 +122,7 @@ export default function GrassFieldSystem({ sceneApi }: { sceneApi: SceneApi }) {
           sceneApi.markDirty(targetId as AnyNodeId)
         }
       }
-      const changes = grassFieldSiteChanges(currentNodes, previousNodes)
+      const changes = grassFieldSiteChanges(currentNodes, previousNodes, changedIds)
       for (const change of changes) {
         const node = currentNodes[change.id as AnyNodeId]
         const site = node?.parentId ? currentNodes[node.parentId as AnyNodeId] : undefined

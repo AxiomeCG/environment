@@ -12,6 +12,7 @@ import { useViewer } from '@pascal-app/viewer'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useRef } from 'react'
 import type { Object3D } from 'three'
+import { sitesWithChangedTerrainNodes } from '../terrain-nodes'
 import { disposePondKoiMotion, updatePondKoiMotion } from './koi-motion'
 import { POND_KIND } from './schema'
 
@@ -29,8 +30,11 @@ export type PondSiteChange = {
 export function pondSiteChanges(
   currentNodes: Readonly<Record<string, AnyNode>>,
   previousNodes: Readonly<Record<string, AnyNode>>,
+  changedIds?: Iterable<string>,
 ): PondSiteChange[] {
   const changes: PondSiteChange[] = []
+  // Ground the host keeps in nodes (terrain tiles, breaks) moves without touching the Site.
+  const reshaped = sitesWithChangedTerrainNodes(currentNodes, previousNodes, changedIds)
   for (const node of Object.values(currentNodes)) {
     if ((node.type as string) !== POND_KIND) continue
     const previousNode = previousNodes[node.id]
@@ -48,7 +52,8 @@ export function pondSiteChanges(
       continue
     }
     const boundaryChanged = currentSite.polygon !== previousSite.polygon
-    const terrainChanged = currentSite.terrain !== previousSite.terrain
+    const terrainChanged =
+      currentSite.terrain !== previousSite.terrain || reshaped.has(currentSite.id)
     if (boundaryChanged || terrainChanged) {
       changes.push({ id: node.id, boundaryChanged, terrainChanged })
     }
@@ -64,8 +69,8 @@ export default function PondSystem({ sceneApi }: { sceneApi: SceneApi }) {
   const getThree = useThree((state) => state.get)
   useEffect(() => {
     const unsubscribeScene =
-      sceneApi.subscribeNodes?.((currentNodes, previousNodes) => {
-        for (const change of pondSiteChanges(currentNodes, previousNodes)) {
+      sceneApi.subscribeNodes?.((currentNodes, previousNodes, changedIds) => {
+        for (const change of pondSiteChanges(currentNodes, previousNodes, changedIds)) {
           sceneApi.markDirty(change.id as AnyNodeId)
         }
 
