@@ -17,7 +17,14 @@ import {
 import { act, create } from '@react-three/test-renderer'
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { createElement } from 'react'
-import { type BufferAttribute, Group, InstancedMesh, type Material, Mesh } from 'three'
+import {
+  type BufferAttribute,
+  Group,
+  InstancedMesh,
+  type InterleavedBufferAttribute,
+  type Material,
+  Mesh,
+} from 'three'
 import { PondNode } from '../pond/schema'
 import { buildGrassFieldGeometry } from './geometry'
 import * as obstacles from './obstacle-adapter'
@@ -169,8 +176,12 @@ function versions(host: Group): number[] {
   host.traverse((object) => {
     if (!(object instanceof Mesh)) return
     for (const name of ['position', 'normal', 'grassRoot', 'flowerRoot']) {
-      const attribute = object.geometry.getAttribute(name) as BufferAttribute | undefined
-      if (attribute) result.push(attribute.version)
+      const attribute = object.geometry.getAttribute(name) as
+        | BufferAttribute
+        | InterleavedBufferAttribute
+        | undefined
+      // A blade's root is a view of its tile's one per-instance buffer, which carries the version.
+      if (attribute) result.push('data' in attribute ? attribute.data.version : attribute.version)
     }
     if (object instanceof InstancedMesh) result.push(object.instanceMatrix.version)
   })
@@ -186,7 +197,7 @@ function farTileVersions(host: Group) {
       .every((x) => x >= 8),
   )
   expect(far.length).toBeGreaterThan(0)
-  return far.flatMap((tile) => [tile.attributes.root.version, tile.full.instanceMatrix.version])
+  return far.flatMap((tile) => [tile.attributes.instances.version, tile.full.instanceMatrix.version])
 }
 
 function counted(terrain: TerrainField) {

@@ -10,6 +10,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   type BufferAttribute,
   Group,
+  type InterleavedBuffer,
   InstancedMesh,
   type Material,
   Mesh,
@@ -53,7 +54,10 @@ function countedTerrain(terrain: TerrainField) {
   return { terrain: { ...terrain, heights }, reads }
 }
 
-function covers(attribute: BufferAttribute, component: number): boolean {
+/** A blade's values share one per-instance buffer of this many floats (root y is the second). */
+const INSTANCE_STRIDE = 10
+
+function covers(attribute: BufferAttribute | InterleavedBuffer, component: number): boolean {
   return attribute.updateRanges.some(({ start, count }) => component >= start && component < start + count)
 }
 
@@ -121,12 +125,13 @@ describe('terrain patch acceptance: grass tiles', () => {
       const near = fixture.rootAt(0.75)
       const far = fixture.rootAt(12.25)
       const roots = near.tile.attributes.root
+      const instances = near.tile.attributes.instances
       const matrices = near.tile.full.instanceMatrix
       const oldGeometry = near.tile.full.geometry
       const oldMaterial = near.tile.full.material
       const rootBuffer = roots.array
       const matrixBuffer = matrices.array
-      const farRootVersion = far.tile.attributes.root.version
+      const farRootVersion = far.tile.attributes.instances.version
       const farMatrixVersion = far.tile.full.instanceMatrix.version
       const change = patch(1, 1, 4)
       const observed = countedTerrain(applyHeightPatch(field(), change))
@@ -138,11 +143,11 @@ describe('terrain patch acceptance: grass tiles', () => {
       expect(near.tile.full.material).toBe(oldMaterial)
       expect(roots.array).toBe(rootBuffer)
       expect(matrices.array).toBe(matrixBuffer)
-      expect(far.tile.attributes.root.version).toBe(farRootVersion)
+      expect(far.tile.attributes.instances.version).toBe(farRootVersion)
       expect(far.tile.full.instanceMatrix.version).toBe(farMatrixVersion)
       expect(observed.reads.length).toBeGreaterThan(0)
       expect(observed.reads.every((index) => index % observed.terrain.cols < 3)).toBe(true)
-      expect(covers(roots, near.index * 3 + 1)).toBe(true)
+      expect(covers(instances, near.index * INSTANCE_STRIDE + 1)).toBe(true)
       expect(covers(matrices, near.index * 16 + 13)).toBe(true)
     } finally { dispose(fixture.root) }
   })
@@ -153,22 +158,23 @@ describe('terrain patch acceptance: grass tiles', () => {
       const first = fixture.rootAt(0.75)
       const second = fixture.rootAt(4.75)
       const roots = first.tile.attributes.root
+      const instances = first.tile.attributes.instances
       const matrices = first.tile.full.instanceMatrix
       const a = patch(1, 1, 4)
       const afterA = applyHeightPatch(field(), a)
       updateGrassTileTerrain(fixture.root, afterA, a)
-      const versions = [roots.version, matrices.version]
-      const ranges = roots.updateRanges.map((range) => ({ ...range }))
+      const versions = [instances.version, matrices.version]
+      const ranges = instances.updateRanges.map((range) => ({ ...range }))
       updateGrassTileTerrain(fixture.root, afterA, a)
-      expect([roots.version, matrices.version]).toEqual(versions)
-      expect(roots.updateRanges).toEqual(ranges)
+      expect([instances.version, matrices.version]).toEqual(versions)
+      expect(instances.updateRanges).toEqual(ranges)
 
       const b = patch(5, 1, 6)
       updateGrassTileTerrain(fixture.root, applyHeightPatch(afterA, b), b)
       expect(roots.getY(first.index)).toBeCloseTo(2, 6)
       expect(roots.getY(second.index)).toBeCloseTo(3, 6)
       for (const index of [first.index, second.index]) {
-        expect(covers(roots, index * 3 + 1)).toBe(true)
+        expect(covers(instances, index * INSTANCE_STRIDE + 1)).toBe(true)
         expect(covers(matrices, index * 16 + 13)).toBe(true)
       }
     } finally { dispose(fixture.root) }
@@ -199,12 +205,12 @@ describe('terrain patch acceptance: grass tiles', () => {
       const a = patch(1, 1, 20)
       updateGrassTileTerrain(fixture.root, applyHeightPatch(field(), a), a)
       const high = near.tile.bounds.max.y
-      const versions = fixture.runtime.tiles.map((tile) => tile.attributes.root.version)
+      const versions = fixture.runtime.tiles.map((tile) => tile.attributes.instances.version)
       const outside = patch(-4, -4, 99)
       const observed = countedTerrain(applyHeightPatch(applyHeightPatch(field(), a), outside))
       updateGrassTileTerrain(fixture.root, observed.terrain, outside)
       expect(observed.reads).toHaveLength(0)
-      expect(fixture.runtime.tiles.map((tile) => tile.attributes.root.version)).toEqual(versions)
+      expect(fixture.runtime.tiles.map((tile) => tile.attributes.instances.version)).toEqual(versions)
       updateGrassTileTerrain(fixture.root, field())
       expect(near.tile.attributes.root.getY(near.index)).toBe(0)
       expect(near.tile.bounds.max.y).toBeLessThan(high)

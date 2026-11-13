@@ -9,8 +9,9 @@ import {
 import { expect, test } from 'bun:test'
 import {
   FrontSide,
-  InstancedBufferAttribute,
+  InstancedInterleavedBuffer,
   InstancedMesh,
+  InterleavedBufferAttribute,
   Matrix4,
   Mesh,
   Quaternion,
@@ -284,20 +285,20 @@ test('full density scatters one candidate per site cell', () => {
   const thresholds = blade.geometry.getAttribute('grassDensityThreshold')
   const tints = blade.geometry.getAttribute('grassTintVariation')
   const surfaceSampleBases = blade.geometry.getAttribute('grassSurfaceSampleBasis')
-  expect(roots).toBeInstanceOf(InstancedBufferAttribute)
-  expect(thresholds).toBeInstanceOf(InstancedBufferAttribute)
-  expect(tints).toBeInstanceOf(InstancedBufferAttribute)
-  expect(surfaceSampleBases).toBeInstanceOf(InstancedBufferAttribute)
+  // The five per-instance values are views of one buffer, stepped once per blade.
+  for (const attribute of [roots, thresholds, tints, surfaceSampleBases]) {
+    expect(attribute).toBeInstanceOf(InterleavedBufferAttribute)
+    expect((attribute as InterleavedBufferAttribute).data).toBeInstanceOf(InstancedInterleavedBuffer)
+    expect((attribute as InterleavedBufferAttribute).data).toBe((roots as InterleavedBufferAttribute).data)
+  }
   expect(roots.count).toBe(blade.count)
   expect(thresholds.count).toBe(blade.count)
   expect(tints.count).toBe(blade.count)
   expect(surfaceSampleBases.count).toBe(blade.count)
-  expect(
-    Array.from(thresholds.array as ArrayLike<number>).every((value) => value >= 0 && value < 1),
-  ).toBe(true)
-  expect(
-    Array.from(tints.array as ArrayLike<number>).every((value) => value >= -1 && value < 1),
-  ).toBe(true)
+  const valuesOf = (attribute: typeof roots) =>
+    Array.from({ length: attribute.count }, (_, index) => attribute.getX(index))
+  expect(valuesOf(thresholds).every((value) => value >= 0 && value < 1)).toBe(true)
+  expect(valuesOf(tints).every((value) => value >= -1 && value < 1)).toBe(true)
 
   const matrix = new Matrix4()
   const scale = new Vector3()
@@ -456,13 +457,11 @@ test('density is GPU-gated without changing candidate instances', () => {
   expect(emptyBlade.instanceMatrix.count).toBe(9)
   expect(emptyBlade.count).toBe(9)
   expect(fullBlade.count).toBe(emptyBlade.count)
-  expect(
-    Array.from(
-      emptyBlade.geometry.getAttribute('grassDensityThreshold').array as ArrayLike<number>,
-    ),
-  ).toEqual(
-    Array.from(fullBlade.geometry.getAttribute('grassDensityThreshold').array as ArrayLike<number>),
-  )
+  const thresholdsOf = (blade: InstancedMesh) => {
+    const thresholds = blade.geometry.getAttribute('grassDensityThreshold')
+    return Array.from({ length: thresholds.count }, (_, index) => thresholds.getX(index))
+  }
+  expect(thresholdsOf(emptyBlade)).toEqual(thresholdsOf(fullBlade))
 })
 
 test('uses painted RGB and density alpha for the ground material', () => {

@@ -1,5 +1,5 @@
 import type { HeightPatch, TerrainField } from '@pascal-app/core'
-import type { BufferAttribute } from 'three'
+import type { BufferAttribute, InterleavedBuffer } from 'three'
 
 export type TerrainPatchBounds = {
   minX: number
@@ -44,7 +44,7 @@ export function terrainPatchBounds(
 }
 
 export function queueTerrainAttributeUpdate(
-  attribute: BufferAttribute,
+  attribute: BufferAttribute | InterleavedBuffer,
   start: number,
   count: number,
 ): void {

@@ -7,7 +7,9 @@ import {
   Float32BufferAttribute,
   Group,
   InstancedBufferAttribute,
+  InstancedInterleavedBuffer,
   InstancedMesh,
+  InterleavedBufferAttribute,
   Material,
   type Object3D,
   Matrix4,
@@ -33,6 +35,19 @@ const FULL_LOD_EXIT_PIXELS = GRASS_LOD_FULL_PIXELS * (5 / 6)
 const MID_LOD_ENTER_PIXELS = GRASS_LOD_MID_PIXELS * 1.25
 const MID_LOD_EXIT_PIXELS = GRASS_LOD_MID_PIXELS * 0.75
 const CANDIDATE_STRIDE = 8
+/**
+ * A blade's per-instance values share one vertex buffer: root (3), terrain normal (3), density
+ * threshold, tint, surface sample basis (2). As five buffers they made the blade pipeline bind
+ * nine with its position, normal, instance matrices and, under a velocity target, last frame's
+ * matrices: one over the eight a WebGPU adapter must offer (and all Apple's Metal ones do), so
+ * the pipeline was refused and no blade was drawn. The shader reads the same named attributes.
+ */
+const INSTANCE_STRIDE = 10
+const ROOT_OFFSET = 0
+const NORMAL_OFFSET = 3
+const THRESHOLD_OFFSET = 6
+const TINT_OFFSET = 7
+const BASIS_OFFSET = 8
 const MAX_OBSTACLE_BEND_STRENGTH = 2
 const scratchScale = new Vector3()
 const runtimes = new WeakMap<Object3D, InternalGrassTilesRuntime>()
@@ -50,11 +65,13 @@ export type GrassTileOptions = {
 export type GrassTileLod = 'full' | 'mid' | 'far'
 
 export type GrassTileAttributes = {
-  readonly root: InstancedBufferAttribute
-  readonly terrainNormal: InstancedBufferAttribute
-  readonly densityThreshold: InstancedBufferAttribute
-  readonly tintVariation: InstancedBufferAttribute
-  readonly surfaceSampleBasis: InstancedBufferAttribute
+  /** The one per-instance buffer the five views below read; its version is theirs. */
+  readonly instances: InstancedInterleavedBuffer
+  readonly root: InterleavedBufferAttribute
+  readonly terrainNormal: InterleavedBufferAttribute
+  readonly densityThreshold: InterleavedBufferAttribute
+  readonly tintVariation: InterleavedBufferAttribute
+  readonly surfaceSampleBasis: InterleavedBufferAttribute
 }
 
 export type GrassTileRuntime = {
@@ -238,23 +255,24 @@ function updateGrassTile(
     rootBounds.max.x < patchBounds.minX || rootBounds.min.x > patchBounds.maxX ||
     rootBounds.max.z < patchBounds.minZ || rootBounds.min.z > patchBounds.maxZ
   )) return
-  const roots = tile.attributes.root.array as Float32Array
+  const instances = tile.attributes.instances.array as Float32Array
   const matrix = new Matrix4()
   let minY = patchBounds ? rootBounds.min.y : Infinity
   let maxY = patchBounds ? rootBounds.max.y : -Infinity
   const changes = createTerrainChangeRanges()
   for (let index = 0; index < tile.candidateCount; index += 1) {
-    const rootOffset = index * 3
-    const x = roots[rootOffset] ?? 0
-    const z = roots[rootOffset + 2] ?? 0
+    const offset = index * INSTANCE_STRIDE
+    const rootOffset = offset + ROOT_OFFSET
+    const x = instances[rootOffset] ?? 0
+    const z = instances[rootOffset + 2] ?? 0
     if (!isInPatch(x, z, patchBounds)) continue
     const sample = samplePlantingTerrain(terrain, x, z)
     const y = Math.fround(sample.heightM)
     if (updateGrassTerrainNormal(tile.attributes.terrainNormal, index, sample.normal)) {
-      includeRange(changes.normal, rootOffset, rootOffset + 2)
+      includeRange(changes.normal, offset + NORMAL_OFFSET, offset + NORMAL_OFFSET + 2)
     }
-    if (roots[rootOffset + 1] !== y) {
-      roots[rootOffset + 1] = y
+    if (instances[rootOffset + 1] !== y) {
+      instances[rootOffset + 1] = y
       includeRange(changes.root, rootOffset + 1, rootOffset + 1)
     }
     updateGrassDensityThreshold(tile, index, sample, changes)
@@ -272,6 +290,7 @@ function updateGrassTile(
 }
 
 type TerrainChangeRange = [number, number]
+/** First and last changed element: of the per-instance buffer for root, threshold and normal. */
 type TerrainChangeRanges = {
   root: TerrainChangeRange
   matrix: TerrainChangeRange
@@ -313,7 +332,8 @@ function updateGrassDensityThreshold(
   const threshold = Math.fround(terrainDensityThreshold(tile.baseTransforms[index * 4 + 3] ?? 0, sample))
   if (tile.attributes.densityThreshold.getX(index) === threshold) return
   tile.attributes.densityThreshold.setX(index, threshold)
-  includeRange(changes.threshold, index, index)
+  const offset = index * INSTANCE_STRIDE + THRESHOLD_OFFSET
+  includeRange(changes.threshold, offset, offset)
 }
 
 function flushGrassTileChanges(
@@ -321,10 +341,11 @@ function flushGrassTileChanges(
   changes: TerrainChangeRanges,
 ): void {
   const { root, matrix, threshold, normal } = changes
-  if (root[0] <= root[1]) queueTerrainAttributeUpdate(tile.attributes.root, root[0], root[1] - root[0] + 1)
+  // Root, threshold and normal are one buffer: one range from the first to the last changed.
+  const first = Math.min(root[0], threshold[0], normal[0])
+  const last = Math.max(root[1], threshold[1], normal[1])
+  if (first <= last) queueTerrainAttributeUpdate(tile.attributes.instances, first, last - first + 1)
   if (matrix[0] <= matrix[1]) queueTerrainAttributeUpdate(tile.full.instanceMatrix, matrix[0], matrix[1] - matrix[0] + 1)
-  if (threshold[0] <= threshold[1]) queueTerrainAttributeUpdate(tile.attributes.densityThreshold, threshold[0], threshold[1] - threshold[0] + 1)
-  if (normal[0] <= normal[1]) queueTerrainAttributeUpdate(tile.attributes.terrainNormal, normal[0], normal[1] - normal[0] + 1)
 }
 
 function terrainDensityThreshold(threshold: number, sample: PlantingTerrainSample): number {
@@ -333,7 +354,7 @@ function terrainDensityThreshold(threshold: number, sample: PlantingTerrainSampl
 }
 
 function updateGrassTerrainNormal(
-  attribute: InstancedBufferAttribute,
+  attribute: InterleavedBufferAttribute,
   index: number,
   normal: readonly [number, number, number],
 ): boolean {
@@ -525,11 +546,8 @@ function buildTile(
 }
 
 type TileBuffers = {
-  roots: Float32Array
-  terrainNormals: Float32Array
-  thresholds: Float32Array
-  tints: Float32Array
-  surfaceSampleBases: Float32Array
+  /** `INSTANCE_STRIDE` floats per blade. */
+  instances: Float32Array
   matrices: Float32Array
   baseTransforms: Float64Array
   min: Vector3
@@ -544,11 +562,7 @@ function buildTileBuffers(
   candidatesApplyTerrainDensity: boolean,
 ): TileBuffers {
   const buffers: TileBuffers = {
-    roots: new Float32Array(count * 3),
-    terrainNormals: new Float32Array(count * 3),
-    thresholds: new Float32Array(count),
-    tints: new Float32Array(count),
-    surfaceSampleBases: new Float32Array(count * 2),
+    instances: new Float32Array(count * INSTANCE_STRIDE),
     matrices: new Float32Array(count * 16),
     baseTransforms: new Float64Array(count * 4),
     min: new Vector3(Infinity, Infinity, Infinity),
@@ -583,17 +597,18 @@ function fillTileInstance(
   const scaledWidth = node.bladeWidth * widthFactor
   const height = node.bladeHeight * heightFactor
   const sample = sampleTerrain(x, z)
-  const rootOffset = index * 3
-  buffers.roots[rootOffset] = x
-  buffers.roots[rootOffset + 1] = sample.heightM
-  buffers.roots[rootOffset + 2] = z
-  buffers.terrainNormals.set(sample.normal, rootOffset)
+  const offset = index * INSTANCE_STRIDE
+  const instances = buffers.instances
+  instances[offset + ROOT_OFFSET] = x
+  instances[offset + ROOT_OFFSET + 1] = sample.heightM
+  instances[offset + ROOT_OFFSET + 2] = z
+  instances.set(sample.normal, offset + NORMAL_OFFSET)
   const threshold = data.values[sourceOffset + 6] ?? 0
-  buffers.thresholds[index] = candidatesApplyTerrainDensity
+  instances[offset + THRESHOLD_OFFSET] = candidatesApplyTerrainDensity
     ? threshold : terrainDensityThreshold(threshold, sample)
-  buffers.tints[index] = data.values[sourceOffset + 7] ?? 0
-  buffers.surfaceSampleBases[index * 2] = Math.cos(yaw) * scaledWidth
-  buffers.surfaceSampleBases[index * 2 + 1] = Math.sin(yaw) * scaledWidth
+  instances[offset + TINT_OFFSET] = data.values[sourceOffset + 7] ?? 0
+  instances[offset + BASIS_OFFSET] = Math.cos(yaw) * scaledWidth
+  instances[offset + BASIS_OFFSET + 1] = Math.sin(yaw) * scaledWidth
   buffers.baseTransforms.set([yaw, scaledWidth, height, threshold], index * 4)
   position.set(x, sample.heightM, z)
   scale.set(scaledWidth, height, scaledWidth)
@@ -606,12 +621,16 @@ function fillTileInstance(
 }
 
 function buildTileAttributes(buffers: TileBuffers): GrassTileAttributes {
+  // Roots, normals and thresholds follow the terrain under a sculpt stroke.
+  const instances = new InstancedInterleavedBuffer(buffers.instances, INSTANCE_STRIDE)
+    .setUsage(DynamicDrawUsage)
   return {
-    root: new InstancedBufferAttribute(buffers.roots, 3).setUsage(DynamicDrawUsage),
-    terrainNormal: new InstancedBufferAttribute(buffers.terrainNormals, 3).setUsage(DynamicDrawUsage),
-    densityThreshold: new InstancedBufferAttribute(buffers.thresholds, 1).setUsage(DynamicDrawUsage),
-    tintVariation: new InstancedBufferAttribute(buffers.tints, 1),
-    surfaceSampleBasis: new InstancedBufferAttribute(buffers.surfaceSampleBases, 2),
+    instances,
+    root: new InterleavedBufferAttribute(instances, 3, ROOT_OFFSET),
+    terrainNormal: new InterleavedBufferAttribute(instances, 3, NORMAL_OFFSET),
+    densityThreshold: new InterleavedBufferAttribute(instances, 1, THRESHOLD_OFFSET),
+    tintVariation: new InterleavedBufferAttribute(instances, 1, TINT_OFFSET),
+    surfaceSampleBasis: new InterleavedBufferAttribute(instances, 2, BASIS_OFFSET),
   }
 }
 
