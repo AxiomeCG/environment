@@ -47,3 +47,44 @@ describe('planting terrain seam', () => {
     }
   })
 })
+
+describe('a ground read the host refuses', () => {
+  /**
+   * The host can refuse a read beside a terrain break (measured on its core: `normalAt` throws
+   * `unsupported_geometry` within half a metre of a keep-ground break that lies on a tile seam).
+   * Stood in for here by a field whose samples two columns away from the point cannot be read:
+   * the height reads its own cell, the normal reaches a cell further.
+   */
+  function refusingBeside(column: number) {
+    const terrain = plane(0.5)
+    const heights = new Proxy(terrain.heights, {
+      get(target, key) {
+        const index = typeof key === 'string' ? Number(key) : Number.NaN
+        if (Number.isInteger(index) && index % terrain.cols === column) {
+          throw Object.assign(new Error('no same-region source triangle'), { code: 'unsupported_geometry' })
+        }
+        const value = Reflect.get(target, key)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    return { ...terrain, heights }
+  }
+
+  test('the planting sample keeps the height and stands upright instead of throwing', () => {
+    // The point is in the cell of columns 4..5; the normal also reads columns 3 and 6.
+    const terrain = refusingBeside(6)
+    expect(() => normalAt(terrain, 0.4, 0)).toThrow()
+    const sample = samplePlantingTerrain(terrain, 0.4, 0)
+    expect(sample.heightM).toBe(surfaceHeightAt(terrain, 0.4, 0))
+    expect(sample.normal).toEqual([0, 1, 0])
+    expect(sample.slopeDeg).toBe(0)
+  })
+
+  test('a height the host refuses reads as the datum', () => {
+    const terrain = refusingBeside(4)
+    expect(() => surfaceHeightAt(terrain, 0.4, 0)).toThrow()
+    expect(samplePlantingTerrain(terrain, 0.4, 0)).toEqual({
+      heightM: 0, normal: [0, 1, 0], slopeDeg: 0, southExposure: 0,
+    })
+  })
+})

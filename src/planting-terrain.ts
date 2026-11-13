@@ -22,9 +22,27 @@ export function samplePlantingTerrain(
   x: number,
   z: number,
 ): PlantingTerrainSample {
-  if (!terrain) return { heightM: 0, normal: [0, 1, 0], slopeDeg: 0, southExposure: 0 }
-  return plantingTerrainSample(surfaceHeightAt(terrain, x, z), normalAt(terrain, x, z))
+  if (!terrain) return FLAT_AT_DATUM
+  // The host may refuse a read (beside a terrain break it cannot resolve, it throws). This is
+  // read for every blade and every paint cell, where the lawn is drawn and where an agent lays
+  // it: one point the host will not answer must not take the lawn away. Such a point reads as
+  // its height with an upright normal, or as the datum when even the height is refused.
+  let heightM: number
+  try {
+    heightM = surfaceHeightAt(terrain, x, z)
+  } catch {
+    return FLAT_AT_DATUM
+  }
+  if (!Number.isFinite(heightM)) return FLAT_AT_DATUM
+  try {
+    return plantingTerrainSample(heightM, normalAt(terrain, x, z))
+  } catch {
+    return plantingTerrainSample(heightM, UP)
+  }
 }
+
+const UP: readonly [number, number, number] = [0, 1, 0]
+const FLAT_AT_DATUM: PlantingTerrainSample = { heightM: 0, normal: UP, slopeDeg: 0, southExposure: 0 }
 
 /** Adapts the existing surroundings sampler without extending or writing the lot's field. */
 export function plantingTerrainSample(
