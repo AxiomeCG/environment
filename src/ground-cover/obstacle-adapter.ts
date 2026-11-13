@@ -54,10 +54,15 @@ const RAMP_ARC_STEP = Math.PI / 18
  */
 const MAX_COORDINATE = 1e6
 const MAX_RADIUS = 100
+/** Points in one ring: an outline read from a node or a hole; a slab's or a room's own outline. */
 const MAX_OUTLINE_POINTS = 512
-const MAX_SLAB_POINTS = 4096
-const MAX_HOLES = 256
-const MAX_SHAPES_PER_NODE = 1024
+const MAX_SLAB_POINTS = 2048
+const MAX_HOLES = 64
+/** What one node may add, and what a whole mask may hold: past either, shapes are left out. */
+const MAX_SHAPES_PER_NODE = 256
+const MAX_VERTICES_PER_NODE = 4096
+const MAX_SHAPES_PER_MASK = 16_384
+const MAX_VERTICES_PER_MASK = 131_072
 const MAX_FOOTPRINTS = 64
 const MAX_BANDS = 64
 const MAX_BAND_POLYGONS = 64
@@ -131,7 +136,7 @@ export function collectGroundOwnerShapes(
   site: SiteNode,
   nodes: Readonly<Record<string, AnyNode>>,
 ): GrassObstacleShape[] {
-  const shapes: GrassObstacleShape[] = []
+  const shapes: ShapeSink = { list: [], vertices: 0 }
   // Core uses branded ID keys; the runtime scene map is the same complete record.
   const coreNodes = nodes as Record<AnyNodeId, AnyNode>
   const elevations = getLevelElevations(coreNodes)
@@ -182,7 +187,7 @@ export function collectGroundOwnerShapes(
   }
 
   collectFloorPlacedShapes(directChildren(site, nodes), coreNodes, IDENTITY_TRANSFORM, shapes)
-  return shapes
+  return shapes.list
 }
 
 export function collectSiteNodes(
@@ -222,7 +227,7 @@ function collectLevelShapes(
   level: AnyNode & { type: 'level' },
   nodes: Record<AnyNodeId, AnyNode>,
   transform: SiteTransform,
-  output: GrassObstacleShape[],
+  output: ShapeSink,
 ): void {
   const children = directChildren(level, nodes)
 
@@ -236,9 +241,9 @@ function collectLevelShapes(
               {
                 kind: 'polygon',
                 points: slab.polygon.map((point) => transformPoint(point, transform)),
-                holes: slab.holes
-                  .filter((hole) => hole.length <= MAX_SLAB_POINTS)
-                  .map((hole) => hole.map((point) => transformPoint(point, transform))),
+                holes: slab.holes.map((hole) =>
+                  hole.slice(0, MAX_OUTLINE_POINTS + 1).map((point) => transformPoint(point, transform)),
+                ),
               },
             ],
       )
@@ -307,7 +312,7 @@ function collectFloorPlacedShapes(
   children: readonly AnyNode[],
   nodes: Record<AnyNodeId, AnyNode>,
   transform: SiteTransform,
-  output: GrassObstacleShape[],
+  output: ShapeSink,
 ): void {
   for (const node of children) {
     if (node.type === 'slab' || node.type === 'zone' || node.type === 'wall') continue
@@ -368,14 +373,30 @@ function groundOwnerShapes(
   return shapes
 }
 
+/** The shapes of one mask and the vertices they hold so far. */
+type ShapeSink = { list: GrassObstacleShape[]; vertices: number }
+
+/** What a shape costs to keep: its outline and hole points; a capsule is two, a box four. */
+function vertexCount(shape: GrassObstacleShape): number {
+  if (shape.kind === 'capsule') return 2
+  if (shape.kind === 'box') return 4
+  if (shape.kind === 'triangles') return 0
+  let count = shape.points.length
+  for (const hole of shape.holes ?? []) count += hole.length
+  return count
+}
+
 /**
  * One node's shapes into the mask: derived inside a guard, so a kind's footprint that throws or a
- * malformed node leaves the lawn drawn, then kept only where every number is finite and bounded.
+ * malformed node leaves the lawn drawn, then kept only where every number is finite and bounded,
+ * within what a node may add and what the mask may hold. The mask's cost follows its vertices
+ * and its shapes, so both are counted across the node and across the mask, holes included.
  */
 function admitNodeShapes(
-  output: GrassObstacleShape[],
+  output: ShapeSink,
   derive: () => readonly GrassObstacleShape[] | null,
 ): void {
+  if (output.list.length >= MAX_SHAPES_PER_MASK) return
   let shapes: readonly GrassObstacleShape[] | null
   try {
     shapes = derive()
@@ -384,10 +405,16 @@ function admitNodeShapes(
   }
   if (!shapes) return
   let admitted = 0
+  let vertices = 0
   for (const shape of shapes) {
-    if (admitted >= MAX_SHAPES_PER_NODE) return
+    if (admitted >= MAX_SHAPES_PER_NODE || output.list.length >= MAX_SHAPES_PER_MASK) return
     if (!isBoundedShape(shape)) continue
-    output.push(shape)
+    const count = vertexCount(shape)
+    if (vertices + count > MAX_VERTICES_PER_NODE) continue
+    if (output.vertices + count > MAX_VERTICES_PER_MASK) continue
+    output.list.push(shape)
+    output.vertices += count
+    vertices += count
     admitted += 1
   }
 }
@@ -408,7 +435,7 @@ function isBoundedShape(shape: GrassObstacleShape): boolean {
     return (
       boundedRing(shape.points, MAX_SLAB_POINTS) &&
       holes.length <= MAX_HOLES &&
-      holes.every((hole) => boundedRing(hole, MAX_SLAB_POINTS))
+      holes.every((hole) => boundedRing(hole, MAX_OUTLINE_POINTS))
     )
   }
   if (shape.kind === 'capsule') {

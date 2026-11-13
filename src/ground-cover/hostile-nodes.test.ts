@@ -133,9 +133,9 @@ describe('a node holding bad numbers cannot stall or break the lawn', () => {
       const elapsedMs = performance.now() - started
 
       // Bounded work: at most a node's capped shapes, each with finite, bounded numbers.
-      expect(shapes.length).toBeLessThanOrEqual(1025)
+      expect(shapes.length).toBeLessThanOrEqual(257)
       for (const shape of shapes) {
-        expect(pointsOf(shape).length).toBeLessThanOrEqual(4096 * 257)
+        expect(pointsOf(shape).length).toBeLessThanOrEqual(4096)
         expect(pointsOf(shape).every(([x, z]) => finite(x) && finite(z))).toBe(true)
         if (shape.kind === 'capsule') expect(shape.radius >= 0 && shape.radius <= 100).toBe(true)
         if (shape.kind === 'box') expect(Number.isFinite(shape.rotation)).toBe(true)
@@ -144,6 +144,100 @@ describe('a node holding bad numbers cannot stall or break the lawn', () => {
       // The sound slab beside it still clears its ground, and the far lawn is still lawn.
       expect(isGrassAllowedAt(mask, 2, 2)).toBe(false)
       expect(isGrassAllowedAt(mask, 14, 14)).toBe(true)
+    })
+  })
+})
+
+/** What a shape costs the mask: the points of its outline and holes; a capsule two, a box four. */
+const verticesOf = (shapes: readonly GrassObstacleShape[]) =>
+  shapes.reduce(
+    (total, shape) =>
+      total +
+      (shape.kind === 'polygon'
+        ? shape.points.length + (shape.holes ?? []).reduce((sum, hole) => sum + hole.length, 0)
+        : shape.kind === 'capsule'
+          ? 2
+          : shape.kind === 'box'
+            ? 4
+            : 0),
+    0,
+  )
+
+describe('the mask is bounded as a whole, not only ring by ring', () => {
+  // A lot the size of a full mask: 513 x 513 cells at 0.1 m.
+  const bigSite = SiteNode.parse({
+    id: 'site_hostile', children: ['building_hostile'],
+    polygon: { type: 'polygon', points: [[0, 0], [51.2, 0], [51.2, 51.2], [0, 51.2]] },
+  })
+  const topology = createGrassObstacleTopology({ minX: 0, maxX: 51.2, minZ: 0, maxZ: 51.2 })
+  const over = (count: number, radius: number): [number, number][] =>
+    Array.from({ length: count }, (_, index) => {
+      const angle = (index / count) * Math.PI * 2
+      return [25.6 + Math.cos(angle) * radius, 25.6 + Math.sin(angle) * radius]
+    })
+  const scene = (...nodes: AnyNode[]) =>
+    Object.fromEntries(
+      [bigSite, building, { ...level, children: nodes.filter((node) => node.parentId === level.id).map((node) => node.id) }, ...nodes]
+        .map((entry) => [entry.id, entry]),
+    ) as Record<string, AnyNode>
+  const rock = (id: string, polygon: [number, number][]) =>
+    ({ id, type: 'rock', object: 'node', parentId: bigSite.id, visible: true, metadata: {}, polygon }) as unknown as AnyNode
+
+  test('a scene at every cap is masked within a small time budget', () => {
+    withKinds(() => {
+      // 400 rocks of 512 points, each as wide as the lot: 204,800 vertices asked, 131,072 kept.
+      const rocks = Array.from({ length: 400 }, (_, index) => rock(`rock_${index}`, over(512, 25)))
+      const nodes = scene(patio, ...rocks)
+      const started = performance.now()
+      const shapes = collectGrassObstacleShapes(bigSite, nodes)
+      const mask = buildGrassObstacleField(bigSite, nodes, topology)
+      const elapsedMs = performance.now() - started
+      expect(topology.cols * topology.rows).toBe(513 * 513)
+      expect(shapes.length).toBeLessThanOrEqual(16_384)
+      expect(verticesOf(shapes)).toBeLessThanOrEqual(131_072)
+      expect(verticesOf(shapes)).toBeGreaterThan(120_000)
+      expect(elapsedMs).toBeLessThan(3000)
+      expect(isGrassAllowedAt(mask, 2, 2)).toBe(false)
+      expect(isGrassAllowedAt(mask, 25.6, 25.6)).toBe(false)
+      expect(isGrassAllowedAt(mask, 0.5, 50.5)).toBe(true)
+    })
+  })
+
+  test('more nodes than a mask holds: the rest are left out', () => {
+    withKinds(() => {
+      const posts = Array.from({ length: 17_000 }, (_, index) =>
+        ({
+          ...onLevel('pool:pool', { polygon: undefined, size: [0.2, 1, 0.2], position: [1 + (index % 500) * 0.1, 0, 10 + Math.floor(index / 500)] }),
+          id: `post_${index}`,
+        }) as unknown as AnyNode,
+      )
+      const started = performance.now()
+      const shapes = collectGrassObstacleShapes(bigSite, scene(patio, ...posts))
+      expect(performance.now() - started).toBeLessThan(3000)
+      expect(shapes.length).toBe(16_384)
+    })
+  })
+
+  const justOver: [string, AnyNode, number][] = [
+    ['a rock of 513 points is no outline', rock('rock_over', over(513, 5)), 0],
+    ['a rock of 512 points is one', rock('rock_at', over(512, 5)), 512],
+    ['a slab of 2,049 points is no outline',
+      { ...SlabNode.parse({ id: 'slab_over', parentId: level.id, polygon: [[0, 0], [1, 0], [1, 1]] }), polygon: over(2049, 5) } as AnyNode, 0],
+    ['a slab of 2,048 points is one',
+      { ...SlabNode.parse({ id: 'slab_at', parentId: level.id, polygon: [[0, 0], [1, 0], [1, 1]] }), polygon: over(2048, 5) } as AnyNode, 2048],
+    ['a slab with a hole of 513 points is left out whole: a dropped hole would bare the lawn in it',
+      { ...SlabNode.parse({ id: 'slab_hole', parentId: level.id, polygon: [[0, 0], [1, 0], [1, 1]] }), polygon: over(64, 10), holes: [over(513, 5)] } as AnyNode, 0],
+    ['a slab with 65 holes is left out whole',
+      { ...SlabNode.parse({ id: 'slab_holes', parentId: level.id, polygon: [[0, 0], [1, 0], [1, 1]] }), polygon: over(64, 10), holes: Array.from({ length: 65 }, () => over(8, 1)) } as AnyNode, 0],
+    ['a scripted object of 320 outlines keeps 256',
+      scripted(Array.from({ length: 64 }, () => ({ y0: 0, y1: 0.2, polygons: Array.from({ length: 5 }, () => ({ outer: square })) }))), 256 * 4],
+    ['a scripted object of 9 outlines of 512 points keeps the 8 that fit a node',
+      scripted([{ y0: 0, y1: 0.2, polygons: Array.from({ length: 9 }, () => ({ outer: over(512, 3) })) }]), 4096],
+  ]
+  test.each(justOver)('%s', (_name, node, vertices) => {
+    withKinds(() => {
+      const shapes = collectGrassObstacleShapes(bigSite, scene(node))
+      expect(verticesOf(shapes)).toBe(vertices)
     })
   })
 })

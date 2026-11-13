@@ -1,9 +1,19 @@
-import { pointInPolygon2D } from '@pascal-app/core'
+import { pointOnSegment } from '@pascal-app/core'
 import type { SiteBounds } from './paint-field'
 
 export const MAX_GRASS_OBSTACLE_DISTANCE = 3
 export const DEFAULT_GRASS_OBSTACLE_SPACING = 0.1
 export const MAX_GRASS_OBSTACLE_FIELD_SIDE = 513
+/**
+ * The most a mask may cost to draw, in cell and edge visits per cell of the field: a full-size
+ * field (513 x 513) stops at about 17 million visits, whatever the scene holds. A shape that
+ * would take the mask over it is left out (grass grows there); the mask is still drawn.
+ */
+export const GRASS_OBSTACLE_WORK_PER_CELL = 64
+/** Core's `pointOnSegment` tolerance: a lattice point this near an edge is on the outline. */
+const ON_EDGE_TOLERANCE = 1e-6
+/** How far past an edge's own box a point core calls "on" it can lie. */
+const ON_EDGE_REACH = 2e-3
 
 export type GrassObstacleField = {
   readonly origin: readonly [number, number]
@@ -68,7 +78,9 @@ export function createGrassObstacleField(
   shapes: readonly GrassObstacleShape[],
 ): GrassObstacleField {
   const occupied = new Uint8Array(topology.cols * topology.rows)
+  const budget = { left: GRASS_OBSTACLE_WORK_PER_CELL * topology.cols * topology.rows }
   for (const shape of shapes) {
+    if (budget.left <= 0) break
     if (shape.kind === 'triangles') {
       // Reuse one polygon rather than allocating a shape for every water triangle.
       const points: [[number, number], [number, number], [number, number]] = [
@@ -82,10 +94,11 @@ export function createGrassObstacleField(
           points[vertex]![0] = shape.positions[offset + vertex * 3]!
           points[vertex]![1] = shape.positions[offset + vertex * 3 + 2]!
         }
-        rasterizeShape(topology, occupied, triangle)
+        rasterizeShape(topology, occupied, triangle, budget)
+        if (budget.left <= 0) break
       }
     } else {
-      rasterizeShape(topology, occupied, shape)
+      rasterizeShape(topology, occupied, shape, budget)
     }
   }
 
@@ -149,10 +162,13 @@ function bilinearObstacleChannel(
   return top + (bottom - top) * tz
 }
 
+type WorkBudget = { left: number }
+
 function rasterizeShape(
   topology: GrassObstacleTopology,
   occupied: Uint8Array,
   shape: PlanObstacleShape,
+  budget: WorkBudget,
 ): void {
   const padding = topology.spacing * Math.SQRT1_2
   const bounds = shapeBounds(shape)
@@ -172,8 +188,33 @@ function rasterizeShape(
     Math.ceil((bounds.maxZ + padding - topology.origin[1]) / topology.spacing),
     topology.rows,
   )
-  if (col1 < col0 || row1 < row0) return
+  // Bounds that are not numbers (a shape holding NaN) cover no cell.
+  if (!(col1 >= col0) || !(row1 >= row0)) return
 
+  const rows = row1 - row0 + 1
+  const cols = col1 - col0 + 1
+  if (shape.kind === 'polygon') {
+    if (shape.points.length < 3) return
+    const box: CellBox = { col0, row0, col1, row1 }
+    // A hole is read inside its own box, clipped to the outline's.
+    const holes: { ring: Ring; box: CellBox }[] = []
+    let work = ringWork(box, shape.points.length)
+    for (const ring of shape.holes ?? []) {
+      if (ring.length < 3) continue
+      const holeBox = clipBox(ringBox(topology, ring), box)
+      if (!holeBox) continue
+      holes.push({ ring, box: holeBox })
+      work += ringWork(holeBox, ring.length)
+    }
+    if (work > budget.left) return
+    budget.left -= work
+    rasterizePolygon(topology, occupied, shape.points, holes, box)
+    return
+  }
+
+  const work = rows * cols
+  if (work > budget.left) return
+  budget.left -= work
   for (let row = row0; row <= row1; row += 1) {
     const z = topology.origin[1] + row * topology.spacing
     for (let col = col0; col <= col1; col += 1) {
@@ -182,6 +223,157 @@ function rasterizeShape(
     }
   }
 }
+
+type Ring = ReadonlyArray<readonly [number, number]>
+type CellBox = { col0: number; row0: number; col1: number; row1: number }
+
+/** The cells a ring can reach (a cell beyond it on each side, for points on its outline). */
+function ringBox(topology: GrassObstacleTopology, ring: Ring): CellBox | null {
+  let minX = Number.POSITIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  for (const [x, z] of ring) {
+    minX = Math.min(minX, x)
+    minZ = Math.min(minZ, z)
+    maxX = Math.max(maxX, x)
+    maxZ = Math.max(maxZ, z)
+  }
+  const box = {
+    col0: Math.floor((minX - topology.origin[0]) / topology.spacing) - 1,
+    row0: Math.floor((minZ - topology.origin[1]) / topology.spacing) - 1,
+    col1: Math.ceil((maxX - topology.origin[0]) / topology.spacing) + 1,
+    row1: Math.ceil((maxZ - topology.origin[1]) / topology.spacing) + 1,
+  }
+  return box.col1 >= box.col0 && box.row1 >= box.row0 ? box : null
+}
+
+function clipBox(box: CellBox | null, within: CellBox): CellBox | null {
+  if (!box) return null
+  const clipped = {
+    col0: Math.max(box.col0, within.col0),
+    row0: Math.max(box.row0, within.row0),
+    col1: Math.min(box.col1, within.col1),
+    row1: Math.min(box.row1, within.row1),
+  }
+  return clipped.col1 >= clipped.col0 && clipped.row1 >= clipped.row0 ? clipped : null
+}
+
+/** Each row reads every edge and every cell once; each edge then walks its own rows and columns. */
+function ringWork(box: CellBox, edges: number): number {
+  const rows = box.row1 - box.row0 + 1
+  const cols = box.col1 - box.col0 + 1
+  return rows * (edges + cols) + edges * (rows + cols)
+}
+
+/**
+ * The lattice points of the box inside `outer` and in no hole, an outline counting as inside its
+ * ring: exactly what core's `pointInPolygon2D` (boundary included) answers point by point, read
+ * row by row instead. A row costs its ring's edges plus its cells, not their product, so a ring
+ * of thousands of points over the whole field stays a matter of milliseconds.
+ */
+function rasterizePolygon(
+  topology: GrassObstacleTopology,
+  occupied: Uint8Array,
+  outer: Ring,
+  holes: ReadonlyArray<{ ring: Ring; box: CellBox }>,
+  box: CellBox,
+): void {
+  const cols = box.col1 - box.col0 + 1
+  const rows = box.row1 - box.row0 + 1
+  const inside = new Uint8Array(cols * rows)
+  markRing(topology, inside, box, outer, box, 1)
+  // A hole takes its outline with it, as it did point by point.
+  for (const hole of holes) markRing(topology, inside, box, hole.ring, hole.box, 0)
+  for (let row = 0; row < rows; row += 1) {
+    const target = (box.row0 + row) * topology.cols + box.col0
+    const source = row * cols
+    for (let col = 0; col < cols; col += 1) {
+      if (inside[source + col]) occupied[target + col] = 1
+    }
+  }
+}
+
+/** Write `value` at every lattice point of the box that core's test puts inside `ring`. */
+function markRing(
+  topology: GrassObstacleTopology,
+  inside: Uint8Array,
+  /** The box `inside` covers. */
+  frame: CellBox,
+  ring: Ring,
+  /** The part of it this ring can reach. */
+  { col0, row0, col1, row1 }: CellBox,
+  value: 0 | 1,
+): void {
+  const cols = frame.col1 - frame.col0 + 1
+  const [originX, originZ] = topology.origin
+  const spacing = topology.spacing
+  const count = ring.length
+  const crossings: number[] = []
+
+  // Interior, by the parity of the edges a ray toward +x crosses: core's own comparison.
+  for (let row = row0; row <= row1; row += 1) {
+    const z = originZ + row * spacing
+    crossings.length = 0
+    for (let i = 0, j = count - 1; i < count; j = i, i += 1) {
+      const current = ring[i] as readonly [number, number]
+      const previous = ring[j] as readonly [number, number]
+      if (current[1] > z !== previous[1] > z) {
+        crossings.push(
+          ((previous[0] - current[0]) * (z - current[1])) / (previous[1] - current[1]) + current[0],
+        )
+      }
+    }
+    if (crossings.length === 0) continue
+    crossings.sort(ascending)
+    const offset = (row - frame.row0) * cols
+    let passed = 0
+    for (let col = col0; col <= col1; col += 1) {
+      const x = originX + col * spacing
+      // A crossing counts while the point is strictly left of it.
+      while (passed < crossings.length && !(x < (crossings[passed] as number))) passed += 1
+      if ((crossings.length - passed) % 2 === 1) inside[offset + col - frame.col0] = value
+    }
+  }
+
+  // The outline itself: the lattice points core's `pointOnSegment` finds on an edge.
+  const point: [number, number] = [0, 0]
+  for (let i = 0; i < count; i += 1) {
+    const start = ring[i] as readonly [number, number]
+    const end = ring[(i + 1) % count] as readonly [number, number]
+    const minX = Math.min(start[0], end[0]) - ON_EDGE_REACH
+    const maxX = Math.max(start[0], end[0]) + ON_EDGE_REACH
+    const minZ = Math.min(start[1], end[1]) - ON_EDGE_REACH
+    const maxZ = Math.max(start[1], end[1]) + ON_EDGE_REACH
+    const firstRow = Math.max(row0, Math.ceil((minZ - originZ) / spacing))
+    const lastRow = Math.min(row1, Math.floor((maxZ - originZ) / spacing))
+    const dx = end[0] - start[0]
+    const dz = end[1] - start[1]
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      const z = originZ + row * spacing
+      let fromX = minX
+      let toX = maxX
+      if (Math.abs(dz) >= ON_EDGE_REACH) {
+        // Off a near-level edge, only the points beside where the edge meets this row can be on it.
+        const onLine = start[0] + ((z - start[1]) * dx) / dz
+        const slack = ON_EDGE_TOLERANCE / Math.abs(dz) + 1e-7 + Math.abs(onLine) * 1e-12
+        fromX = Math.max(fromX, onLine - slack)
+        toX = Math.min(toX, onLine + slack)
+      }
+      const firstCol = Math.max(col0, Math.ceil((fromX - originX) / spacing))
+      const lastCol = Math.min(col1, Math.floor((toX - originX) / spacing))
+      for (let col = firstCol; col <= lastCol; col += 1) {
+        point[0] = originX + col * spacing
+        point[1] = z
+        if (pointOnSegment(point, start as [number, number], end as [number, number])) {
+          inside[(row - frame.row0) * cols + col - frame.col0] = value
+        }
+      }
+    }
+  }
+}
+
+const ascending = (left: number, right: number) => left - right
 
 function shapeBounds(shape: PlanObstacleShape): {
   minX: number
@@ -223,12 +415,12 @@ function shapeBounds(shape: PlanObstacleShape): {
   return { minX, minZ, maxX, maxZ }
 }
 
-function shapeContains(shape: PlanObstacleShape, x: number, z: number, padding: number): boolean {
-  if (shape.kind === 'polygon') {
-    if (shape.points.length < 3) return false
-    if (!pointInsidePolygon(x, z, shape.points)) return false
-    return !shape.holes?.some((hole) => pointInsidePolygon(x, z, hole))
-  }
+function shapeContains(
+  shape: Exclude<PlanObstacleShape, { kind: 'polygon' }>,
+  x: number,
+  z: number,
+  padding: number,
+): boolean {
   if (shape.kind === 'capsule') {
     const radius = shape.radius + padding
     return squaredDistanceToSegment(x, z, shape.start, shape.end) <= radius * radius
@@ -244,15 +436,6 @@ function shapeContains(shape: PlanObstacleShape, x: number, z: number, padding: 
     Math.abs(localX) <= shape.halfSize[0] + padding &&
     Math.abs(localZ) <= shape.halfSize[1] + padding
   )
-}
-function pointInsidePolygon(
-  x: number,
-  z: number,
-  points: ReadonlyArray<readonly [number, number]>,
-): boolean {
-  // Core's implementation is read-only although its public parameter is mutable.
-  const corePoints = points as Array<[number, number]>
-  return pointInPolygon2D([x, z], corePoints, { includeBoundary: true })
 }
 
 function squaredDistanceToSegment(
