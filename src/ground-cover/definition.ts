@@ -1,83 +1,8 @@
-import type { NodeDefinition } from '@pascal-app/core'
-import type { FloorplanNodeExtension } from '@pascal-app/editor'
-import { paintTileFloorplanDependencies } from '../paint-tiles/compose'
-import { buildGrassFieldBakeGeometry, buildGrassFieldBakeGeometryAsync } from './bake-geometry'
-import { buildGrassFieldFloorplan } from './floorplan'
-import { buildGrassFieldGeometry } from './geometry'
-import { grassFieldParametrics } from './parametrics'
-import { GrassFieldNode } from './schema'
-import { groundCoverStyleDefaults } from './style'
+import { grassFieldEditContribution } from './definition.edit'
+import { grassFieldRenderDefinition } from './definition.render'
 
-type GrassFieldDefinition = Omit<
-  NodeDefinition<typeof GrassFieldNode>,
-  'capabilities' | 'floorplanScope'
-> &
-  Record<string, unknown> & {
-    bakeGeometry: typeof buildGrassFieldBakeGeometry
-    bakeGeometryAsync: typeof buildGrassFieldBakeGeometryAsync
-    capabilities: NodeDefinition<typeof GrassFieldNode>['capabilities'] & {
-      selectionHighlight?: boolean
-    }
-    floorplanScope: 'site'
-    extensions: {
-      'pascal:editor/floorplan': FloorplanNodeExtension
-    }
-  }
-
-export const grassFieldDefinition: GrassFieldDefinition = {
-  kind: 'environment:ground-cover',
-  schemaVersion: 4,
-  schema: GrassFieldNode,
-  category: 'furnish',
-
-  defaults: () => ({
-    object: 'node',
-    parentId: null,
-    visible: true,
-    metadata: {},
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
-    ...groundCoverStyleDefaults,
-  }),
-
-  capabilities: {
-    selectable: { hitVolume: 'bbox' },
-    selectionHighlight: false,
-    duplicable: false,
-    deletable: false,
-  },
-
-  parametrics: grassFieldParametrics,
-  geometry: buildGrassFieldGeometry,
-  bake: 'replace',
-  bakeGeometry: buildGrassFieldBakeGeometry,
-  bakeGeometryAsync: buildGrassFieldBakeGeometryAsync,
-  bakeReplaceRenderer: { module: () => import('./static-renderer') },
-  floorplan: buildGrassFieldFloorplan,
-  floorplanDependencies: paintTileFloorplanDependencies,
-  floorplanScope: 'site',
-  system: { module: () => import('./system'), priority: 1 },
-  tool: () => import('./tool'),
-  extensions: {
-    'pascal:editor/floorplan': {
-      tool: () => import('./floorplan-tool'),
-      availableModes: ['default', 'expert'],
-    },
-  },
-  toolHints: [
-    { key: 'Drag', label: 'Paint grass' },
-    { key: 'Esc', label: 'Cancel stroke or stop' },
-  ],
-
-  presentation: {
-    label: 'Ground Cover',
-    description: 'Prototype GPU ground cover transferred from the Pascal Nature plugin.',
-    icon: { kind: 'iconify', name: 'lucide:wheat' },
-    paletteSection: 'furnish',
-    hidden: true,
-  },
-
-  mcp: {
-    description: 'Prototype GPU ground cover painted as a persistent RGBA density field.',
-  },
+/** The full ground-cover definition for editing hosts: render half + edit half. */
+export const grassFieldDefinition = {
+  ...grassFieldRenderDefinition,
+  ...grassFieldEditContribution,
 }
