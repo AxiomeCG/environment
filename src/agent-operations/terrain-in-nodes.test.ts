@@ -206,10 +206,11 @@ describe('ground the host keeps in nodes', () => {
       areas: [{ site: true, ground: 'grass', featherM: 0 }],
     })
     const area = (laid.result.areas as (AreaFacts & { blockedM2: number })[])[0]
-    // The water's 52.75 m2, as the grass mask's lattice bounds it.
-    expect(area?.blockedM2).toBeGreaterThan(pondM2 - 3)
-    expect(area?.blockedM2).toBeLessThan(pondM2 + 6)
-    expect(area?.grassM2).toBeLessThan(16 * 16 + 4 - pondM2 + 3)
+    // The lawn stops where the water is deep enough to see (3 cm), inside the wet outline: the
+    // bowl is 50.3 m2 at its rim and the film on the rim is the lawn's.
+    expect(area?.blockedM2).toBeGreaterThan(40)
+    expect(area?.blockedM2).toBeLessThan(pondM2)
+    expect(area?.grassM2).toBeGreaterThan(16 * 16 - pondM2)
   })
 
   test('a tile of level ground still holds no water', () => {

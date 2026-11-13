@@ -37,6 +37,11 @@ const TALL_FOLIAGE_HEIGHT = 2
 const GRASS_REACH = 0.5
 /** A pose turned about a horizontal axis has no plan outline to read (core reads its box too). */
 const TILT_EPSILON = 1e-9
+/** A footprint no wider than this is a trunk already; a blade keeps this far from it. */
+const MAX_TRUNK_HALF_WIDTH = 0.5
+const TRUNK_MARGIN = 0.05
+/** Water shallower than this (m) is a film the lawn stands in, not water that owns the ground. */
+const WATER_EDGE_DEPTH = 0.03
 /**
  * Core kinds that are built on the ground yet leave floor collision off (it is about furniture
  * placement): steps declare a footprint, a rock and a ramp carry their outline in the Site's frame.
@@ -92,24 +97,12 @@ export function buildGrassObstacleField(
   return createGrassObstacleField(topology, collectGrassObstacleShapes(site, nodes, ground))
 }
 
-/**
- * The ground other nodes own, without Environment's own water: where the painted Surface is not
- * drawn either (it would lie as a lid over a pool cut into the lot), while a pond keeps its bed.
- */
-export function buildGroundOwnerField(
-  site: SiteNode,
-  nodes: Readonly<Record<string, AnyNode>>,
-  topology: Pick<GrassPaintField, 'origin' | 'spacing' | 'cols' | 'rows'>,
-): GrassObstacleField {
-  return createGrassObstacleField(topology, collectGroundOwnerShapes(site, nodes))
-}
-
 export function collectGrassObstacleShapes(
   site: SiteNode,
   nodes: Readonly<Record<string, AnyNode>>,
   ground?: TerrainField | null,
 ): GrassObstacleShape[] {
-  const shapes = collectGroundOwnerShapes(site, nodes)
+  const shapes = collectGroundShapes(site, nodes, 'all')
   const context: GeometryContext = {
     parent: site,
     children: [],
@@ -124,19 +117,45 @@ export function collectGrassObstacleShapes(
         : (child.type as string) === RIVER_KIND
           ? resolveRiver(child as unknown as RiverNode, context, ground)?.surface
           : null
-    if (surface?.positions.length) {
-      shapes.push({ kind: 'triangles', positions: surface.positions })
-    }
+    if (!surface?.positions.length) continue
+    // The lawn stops where the water is deep enough to see, not at the last wet terrain cell:
+    // a pond filled to the brim of a hollow in level ground is a film of nothing on its rim.
+    const deep = waterDeeperThan(surface.positions, surface.depths, WATER_EDGE_DEPTH)
+    if (deep.length > 0) shapes.push({ kind: 'triangles', positions: deep })
   }
   return shapes
 }
 
-/** Everything built or standing on the Site's ground: slabs, rooms, walls and ground owners. */
-export function collectGroundOwnerShapes(
+/**
+ * Where another node opens the ground under the lot's sheets: a pool, the outline it carries
+ * grown to its footprint. The painted Surface is cut out there (it would lie over the pool's
+ * water as a lid); elsewhere what stands on the lot hides the sheet or stands on it.
+ */
+export function collectGroundOpeningShapes(
   site: SiteNode,
   nodes: Readonly<Record<string, AnyNode>>,
 ): GrassObstacleShape[] {
-  const shapes: ShapeSink = { list: [], vertices: 0 }
+  return collectGroundShapes(site, nodes, 'openings')
+}
+
+/** Whether a node change can open or close the ground: only then is the Surface's cut redrawn. */
+export function isGroundOpeningNode(node: AnyNode | undefined): boolean {
+  if (!node || !isBuiltWithoutCollision(node) || hasFoliageHint(node)) return false
+  return (
+    Boolean(nodeRegistry.get(node.type)?.capabilities?.floorPlaced) &&
+    Array.isArray((node as { polygon?: unknown }).polygon)
+  )
+}
+
+type ShapePick = 'all' | 'openings'
+
+/** Everything built or standing on the Site's ground: slabs, rooms, walls and what stands on it. */
+function collectGroundShapes(
+  site: SiteNode,
+  nodes: Readonly<Record<string, AnyNode>>,
+  pick: ShapePick,
+): GrassObstacleShape[] {
+  const shapes: ShapeSink = { list: [], vertices: 0, pick }
   // Core uses branded ID keys; the runtime scene map is the same complete record.
   const coreNodes = nodes as Record<AnyNodeId, AnyNode>
   const elevations = getLevelElevations(coreNodes)
@@ -231,7 +250,7 @@ function collectLevelShapes(
 ): void {
   const children = directChildren(level, nodes)
 
-  for (const child of children) {
+  for (const child of output.pick === 'all' ? children : []) {
     if (child.type === 'slab') {
       const slab = child
       admitNodeShapes(output, () =>
@@ -317,7 +336,7 @@ function collectFloorPlacedShapes(
   for (const node of children) {
     if (node.type === 'slab' || node.type === 'zone' || node.type === 'wall') continue
     // The footprint is another kind's code and the node is scene data: neither may stop the lawn.
-    admitNodeShapes(output, () => groundOwnerShapes(node, nodes, transform))
+    admitNodeShapes(output, () => groundOwnerShapes(node, nodes, transform, output.pick))
   }
 }
 
@@ -325,9 +344,10 @@ function groundOwnerShapes(
   node: AnyNode,
   nodes: Record<AnyNodeId, AnyNode>,
   transform: SiteTransform,
+  pick: ShapePick,
 ): GrassObstacleShape[] | null {
   const outline = ownOutline(node, transform)
-  if (outline) return outline
+  if (outline) return pick === 'all' ? outline : null
   const floorPlaced = nodeRegistry.get(node.type)?.capabilities?.floorPlaced
   if (!floorPlaced || floorPlaced.applies?.(node) === false) return null
   const collides = floorPlacedCollides(floorPlaced, node)
@@ -336,11 +356,14 @@ function groundOwnerShapes(
   const footprints = getFloorPlacedFootprints(floorPlaced, node, { nodes }).slice(0, MAX_FOOTPRINTS)
   if (footprints.length === 0) return null
   const foliage = hasFoliageHint(node)
-  // What the object really has on the ground, when it says so: no name is read.
-  const standing =
-    standingOutline(node, transform) ??
-    (foliage ? null : footprintOutline(node, footprints, transform))
+  // A node that carries its own outline about its position (a pool) owns that ground outright.
+  const opening = foliage ? null : footprintOutline(node, footprints, transform)
+  if (pick === 'openings') return opening
+  // What an object really has on the ground, when it says so (no name is read). It stands in the
+  // lawn: blades keep off it, the lawn's ground stays drawn under it.
+  const standing = standingOutline(node, transform)
   if (standing) return standing
+  if (opening) return opening
 
   const shapes: GrassObstacleShape[] = []
   for (const footprint of footprints) {
@@ -353,18 +376,14 @@ function groundOwnerShapes(
     const height = footprint.dimensions[1]
     if (foliage && height >= TALL_FOLIAGE_HEIGHT) {
       // A tall plant stands on a trunk: its box is the crown overhead, a square in the lawn.
-      shapes.push({
-        kind: 'capsule',
-        start: center,
-        end: center,
-        radius: Math.min(halfX, halfZ, Math.max(0.15, Math.min(0.5, height * 0.04))),
-      })
+      shapes.push({ kind: 'capsule', keepsGround: true, start: center, end: center, radius: trunkRadius(halfX, halfZ, height) })
       continue
     }
     // A low plant that blocks no placement stands in the lawn, not on a bare patch.
     if (foliage && !collides) continue
     shapes.push({
       kind: 'box',
+      keepsGround: true,
       center,
       halfSize: [halfX, halfZ],
       rotation: transform.rotation + (footprint.rotation[1] ?? 0),
@@ -373,8 +392,19 @@ function groundOwnerShapes(
   return shapes
 }
 
-/** The shapes of one mask and the vertices they hold so far. */
-type ShapeSink = { list: GrassObstacleShape[]; vertices: number }
+/**
+ * The disc a tall plant clears. A footprint that is already a trunk (another plugin's tree
+ * declares one) is cleared with a hand's width round it, so no blade stands in the bark; the box
+ * of a catalogue tree is its crown, so its trunk is taken from its height: 0.15 to 0.5 m.
+ */
+function trunkRadius(halfX: number, halfZ: number, height: number): number {
+  const widest = Math.max(halfX, halfZ)
+  if (widest <= MAX_TRUNK_HALF_WIDTH) return widest + TRUNK_MARGIN
+  return Math.min(halfX, halfZ, Math.max(0.15, Math.min(0.5, height * 0.04)))
+}
+
+/** The shapes of one mask, the vertices they hold so far, and which of a scene's shapes it takes. */
+type ShapeSink = { list: GrassObstacleShape[]; vertices: number; pick: ShapePick }
 
 /** What a shape costs to keep: its outline and hole points; a capsule is two, a box four. */
 function vertexCount(shape: GrassObstacleShape): number {
@@ -498,8 +528,9 @@ function ownOutline(node: AnyNode, transform: SiteTransform): GrassObstacleShape
   const kind = String(node.type)
   if (kind === ROCK_KIND) {
     const polygon = planPoints((node as { polygon?: unknown }).polygon)
+    // A rock stands on the lawn's ground: no blade in it, the ground drawn up to it.
     return polygon
-      ? [{ kind: 'polygon', points: polygon.map((point) => transformPoint(point, transform)) }]
+      ? [{ kind: 'polygon', keepsGround: true, points: polygon.map((point) => transformPoint(point, transform)) }]
       : []
   }
   if (kind !== RAMP_KIND) return null
@@ -651,12 +682,61 @@ function standingOutline(node: AnyNode, transform: SiteTransform): GrassObstacle
       if (!holes.every((hole) => boundedRing(hole, MAX_OUTLINE_POINTS))) return null
       shapes.push({
         kind: 'polygon',
+        keepsGround: true,
         points: polygon.outer.map(point),
         holes: holes.map((hole) => hole.map(point)),
       })
     }
   }
   return shapes.length > 0 ? shapes : null
+}
+
+/**
+ * The part of a water surface (triangles, three positions each, with the depth under each vertex)
+ * that is at least `depth` deep, as triangles. Depth is linear across a triangle, so the edge
+ * follows the bed's contour instead of the terrain's cells.
+ */
+function waterDeeperThan(
+  positions: ArrayLike<number>,
+  depths: ArrayLike<number>,
+  depth: number,
+): Float32Array {
+  const kept: number[] = []
+  type Wet = [x: number, y: number, z: number, d: number]
+  for (let offset = 0; offset + 8 < positions.length; offset += 9) {
+    const corners: Wet[] = []
+    for (let vertex = 0; vertex < 3; vertex += 1) {
+      corners.push([
+        positions[offset + vertex * 3] ?? 0,
+        positions[offset + vertex * 3 + 1] ?? 0,
+        positions[offset + vertex * 3 + 2] ?? 0,
+        depths[offset / 3 + vertex] ?? 0,
+      ])
+    }
+    if (!corners.every((corner) => corner.every(Number.isFinite))) continue
+    // Clip the triangle to the half where depth >= `depth`: three or four corners remain.
+    const deep: Wet[] = []
+    for (let index = 0; index < 3; index += 1) {
+      const from = corners[index] as Wet
+      const to = corners[(index + 1) % 3] as Wet
+      if (from[3] >= depth) deep.push(from)
+      if (from[3] >= depth !== to[3] >= depth) {
+        const t = (depth - from[3]) / (to[3] - from[3])
+        deep.push([
+          from[0] + (to[0] - from[0]) * t,
+          from[1] + (to[1] - from[1]) * t,
+          from[2] + (to[2] - from[2]) * t,
+          depth,
+        ])
+      }
+    }
+    for (let index = 1; index + 1 < deep.length; index += 1) {
+      for (const corner of [deep[0] as Wet, deep[index] as Wet, deep[index + 1] as Wet]) {
+        kept.push(corner[0], corner[1], corner[2])
+      }
+    }
+  }
+  return new Float32Array(kept)
 }
 
 function directChildren(parent: AnyNode, nodes: Readonly<Record<string, AnyNode>>): AnyNode[] {

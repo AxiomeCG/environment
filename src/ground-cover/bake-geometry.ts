@@ -20,7 +20,7 @@ import {
 import { resolveGroundCoverFields, type GroundCoverFields } from './field-context'
 import { collectFlowerPlacements } from './flower-scatter'
 import { localGrassHeightScaleAt } from './height-field'
-import { sampleGrassObstacle } from './obstacle-field'
+import { GRASS_BLADES_FROM, sampleGrassObstacle } from './obstacle-field'
 import { sampleGrassPaintTexture, type GrassPaintTextureSample } from './paint-texture'
 import { buildBladeGeometry } from './render/blade-geometry'
 import {
@@ -360,7 +360,7 @@ function evaluateCandidate(
   if (density <= 0 || terrainDensity <= 0 || threshold > density * terrainDensity) return false
 
   const obstacle = sampleGrassObstacle(fields.obstacles, x, z)
-  if (obstacle.allowed < 0.5) return false
+  if (obstacle.allowed < GRASS_BLADES_FROM) return false
 
   const bendRadius = node.obstacleBendRadius ?? 0.75
   output.density = density

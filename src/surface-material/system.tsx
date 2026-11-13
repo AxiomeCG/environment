@@ -10,8 +10,8 @@ import {
 import { useEffect } from 'react'
 import type { Object3D } from 'three'
 import { sitesWithChangedTerrainNodes } from '../terrain-nodes'
-import { changedGrassObstacleSiteIds } from '../ground-cover/obstacle-adapter'
-import { updateSurfaceMaterialObstacles, updateSurfaceMaterialTerrain } from './geometry'
+import { isGroundOpeningNode } from '../ground-cover/obstacle-adapter'
+import { updateSurfaceMaterialTerrain, updateSurfaceSheetCut } from './geometry'
 import { SURFACE_MATERIAL_KIND } from './schema'
 import { groundCoversOf, surfaceTileChangesRedraw } from './tile-refresh'
 
@@ -67,23 +67,21 @@ export default function SurfaceMaterialSystem({ sceneApi }: { sceneApi: SceneApi
       ]) {
         sceneApi.markDirty(id as AnyNodeId)
       }
-      // What owns the ground cuts the sheet out: a pool placed on it, a slab, a rock.
-      const ownerSites = changedGrassObstacleSiteIds(currentNodes, previousNodes)
-      if (ownerSites.size > 0) {
+      // A node that opens the ground (a pool) cuts the sheet out where it lies, and gives it back.
+      let openingChanged = false
+      for (const id of changedIds) {
+        const now = currentNodes[id]
+        const then = previousNodes[id]
+        if (now !== then && (isGroundOpeningNode(now) || isGroundOpeningNode(then))) {
+          openingChanged = true
+          break
+        }
+      }
+      if (openingChanged) {
         for (const candidate of Object.values(currentNodes)) {
-          if (
-            (candidate.type as string) !== SURFACE_MATERIAL_KIND ||
-            !ownerSites.has(candidate.parentId as string)
-          ) {
-            continue
-          }
+          if ((candidate.type as string) !== SURFACE_MATERIAL_KIND) continue
           const site = currentNodes[candidate.parentId as AnyNodeId]
-          if (
-            site?.type !== 'site' ||
-            !updateSurfaceMaterialObstacles(candidate, site, currentNodes)
-          ) {
-            sceneApi.markDirty(candidate.id as AnyNodeId)
-          }
+          if (site?.type === 'site') updateSurfaceSheetCut(candidate, site, currentNodes)
         }
       }
       for (const change of surfaceSiteChanges(currentNodes, previousNodes, changedIds)) {

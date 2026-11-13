@@ -2,7 +2,7 @@ import { pointInPolygon2D } from '@pascal-app/core'
 import { plantingDensityAt, samplePlantingTerrain } from '../planting-terrain'
 import type { GroundCoverFields } from './field-context'
 import { localGrassHeightScaleAt } from './height-field'
-import { sampleGrassObstacle } from './obstacle-field'
+import { GRASS_BLADES_FROM, sampleGrassObstacle } from './obstacle-field'
 import { paintAt } from './paint-field'
 import { shapeGrassCoverageValue } from './render/blade-shape'
 import type { GrassFieldNode } from './schema'
@@ -52,7 +52,7 @@ export function collectFlowerPlacements(
       const effectiveGrassDensity = shapeGrassCoverageValue(paintedDensity * grassDensity)
       if (hash01(column, row, 0x13198a2e) > effectiveGrassDensity) continue
       if (hash01(column, row, 0x03707344) > flowerDensity) continue
-      if (sampleGrassObstacle(fields.obstacles, x, z).allowed < 0.5) continue
+      if (sampleGrassObstacle(fields.obstacles, x, z).allowed < GRASS_BLADES_FROM) continue
 
       const localHeightScale = localGrassHeightScaleAt(fields.height, x, z)
       if (localHeightScale <= 0) continue

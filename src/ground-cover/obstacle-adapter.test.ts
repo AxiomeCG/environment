@@ -115,11 +115,12 @@ function expectShape(actual: unknown, expected: unknown, path = 'shape'): void {
 describe('what a plant clears in the grass', () => {
   const site = SiteNode.parse({ id: 'site_plants' })
   const at: [number, number, number] = [2, 0, 3]
-  const disc = (radius: number) => ({ kind: 'capsule', start: [2, 3], end: [2, 3], radius })
+  // Everything here stands in the lawn: it takes the blades, never the lawn's ground under it.
+  const disc = (radius: number) => ({ kind: 'capsule', keepsGround: true, start: [2, 3], end: [2, 3], radius })
   const box = (halfX: number, halfZ: number) => ({
-    kind: 'box', center: [2, 3], halfSize: [halfX, halfZ], rotation: 0,
+    kind: 'box', keepsGround: true, center: [2, 3], halfSize: [halfX, halfZ], rotation: 0,
   })
-  const polygon = (points: Ring) => ({ kind: 'polygon', points, holes: [] })
+  const polygon = (points: Ring) => ({ kind: 'polygon', keepsGround: true, points, holes: [] })
 
   type ItemOptions = {
     category?: string
@@ -156,7 +157,7 @@ describe('what a plant clears in the grass', () => {
   const cases: [string, AnyNode, unknown[]][] = [
     // Other plugins' plants. plugin-trees declares a trunk footprint that does not collide:
     // a tree clears that trunk, a flower and a tuft stand in the lawn.
-    ['a plugin-trees tree clears its trunk', plugin('trees:tree', { height: 7 }), [disc((7 * 0.07) / 2)]],
+    ['a plugin-trees tree clears its trunk and a hand\'s width', plugin('trees:tree', { height: 7 }), [disc((7 * 0.07) / 2 + 0.05)]],
     ['a plugin-trees flower clears nothing', plugin('trees:flower', { height: 0.6 }), []],
     ['a plugin-trees grass tuft clears nothing', plugin('trees:grass', { height: 0.5 }), []],
     ['a colliding plant kind clears a trunk disc, by its kind',
@@ -194,6 +195,7 @@ describe('what a plant clears in the grass', () => {
       }),
       [{
         kind: 'polygon',
+        keepsGround: true,
         points: [[1, 2], [3, 2], [3, 4], [1, 4]],
         holes: [[[1.5, 2.5], [2.5, 2.5], [2.5, 3.5], [1.5, 3.5]]],
       }]],
@@ -207,8 +209,8 @@ describe('what a plant clears in the grass', () => {
     ['a tall catalogue plant known by its category clears a trunk disc',
       item('Kentia', [3, 4, 3], { category: 'plants' }), [disc(0.16)]],
     ['a tall catalogue model that is no plant keeps its box', item('Wardrobe', [1.2, 2.2, 0.6]), [box(0.6, 0.3)]],
-    ['a slender tall plant never clears more than its own footprint',
-      item('Bamboo plant', [0.2, 3, 0.24]), [disc(0.1)]],
+    ['a slender tall plant clears its own footprint and a hand\'s width',
+      item('Bamboo plant', [0.2, 3, 0.24]), [disc(0.12 + 0.05)]],
   ]
 
   test.each(cases)('%s', (_name, node, expected) => {
@@ -259,12 +261,15 @@ describe('Pascal plan obstacle adapter', () => {
         ] } } },
       } as AnyNode
       const shapes = collectGrassObstacleShapes(site, scene(site, palm, tree, bush, chair, scripted))
-      expect(shapes[0]).toEqual({ kind: 'capsule', start: [2, 3], end: [2, 3], radius: 5.62 * 0.04 })
-      expect(shapes[1]).toEqual({ kind: 'capsule', start: [2, 3], end: [2, 3], radius: 4.5 * 0.04 })
+      // Each stands in the lawn: no blade there, the lawn's ground kept under it.
+      // The palm's box is its crown: a trunk from its height. The tree's box is already a trunk:
+      // that trunk and a hand's width (R&D line; a11c385 took 4 % of the height for both).
+      expect(shapes[0]).toEqual({ kind: 'capsule', keepsGround: true, start: [2, 3], end: [2, 3], radius: 5.62 * 0.04 })
+      expect(shapes[1]).toEqual({ kind: 'capsule', keepsGround: true, start: [2, 3], end: [2, 3], radius: 0.525 / 2 + 0.05 })
       expect(shapes[2]?.kind).toBe('box')
       expect(shapes[3]?.kind).toBe('box')
       expect(shapes[4]).toEqual({
-        kind: 'polygon', points: [[1.9, 2.8], [2.1, 2.8], [2.1, 3.2], [1.9, 3.2]], holes: [],
+        kind: 'polygon', keepsGround: true, points: [[1.9, 2.8], [2.1, 2.8], [2.1, 3.2], [1.9, 3.2]], holes: [],
       })
     } finally {
       nodeRegistry._reset()
@@ -442,6 +447,7 @@ describe('Pascal plan obstacle adapter', () => {
       )
 
       expect(shapes).toContainEqual({
+        keepsGround: true,
         kind: 'box',
         center: [4, -2],
         halfSize: [1, 2],

@@ -10,6 +10,16 @@ export const MAX_GRASS_OBSTACLE_FIELD_SIDE = 513
  * would take the mask over it is left out (grass grows there); the mask is still drawn.
  */
 export const GRASS_OBSTACLE_WORK_PER_CELL = 64
+/**
+ * The mask's fourth channel says who has the ground at a cell: the lawn (255), something standing
+ * in it (128: a plant, a piece of furniture, a rock; no blade or flower there, but the lawn's
+ * ground is still drawn under it), or another surface (0: paving, a house, water; nothing of the
+ * lawn). Read as 0..1, blades and flowers need more than `GRASS_BLADES_FROM`, the lawn's ground
+ * more than `GRASS_GROUND_FROM`.
+ */
+export const GRASS_BLADES_FROM = 0.75
+export const GRASS_GROUND_FROM = 0.25
+const STANDING = 128
 /** Core's `pointOnSegment` tolerance: a lattice point this near an edge is on the outline. */
 const ON_EDGE_TOLERANCE = 1e-6
 /** How far past an edge's own box a point core calls "on" it can lie. */
@@ -40,15 +50,19 @@ export type GrassObstacleShape =
       kind: 'polygon'
       points: ReadonlyArray<readonly [number, number]>
       holes?: ReadonlyArray<ReadonlyArray<readonly [number, number]>>
+      /** Something standing in the lawn: no blade here, the lawn's ground kept under it. */
+      keepsGround?: boolean
     }
   | {
       kind: 'capsule'
       start: readonly [number, number]
       end: readonly [number, number]
       radius: number
+      keepsGround?: boolean
     }
   | {
       kind: 'box'
+      keepsGround?: boolean
       center: readonly [number, number]
       halfSize: readonly [number, number]
       rotation: number
@@ -77,6 +91,25 @@ export function createGrassObstacleField(
   topology: GrassObstacleTopology,
   shapes: readonly GrassObstacleShape[],
 ): GrassObstacleField {
+  const occupied = rasterizeShapes(topology, shapes)
+  const values = encodeObstacleField(topology, occupied)
+  return {
+    origin: [topology.origin[0], topology.origin[1]],
+    spacing: topology.spacing,
+    cols: topology.cols,
+    rows: topology.rows,
+    values,
+  }
+}
+
+/** 1 = the ground is another surface's; 2 = something stands in the lawn; the first wins. */
+const OWNED = 1
+const STOOD_ON = 2
+
+function rasterizeShapes(
+  topology: GrassObstacleTopology,
+  shapes: readonly GrassObstacleShape[],
+): Uint8Array {
   const occupied = new Uint8Array(topology.cols * topology.rows)
   const budget = { left: GRASS_OBSTACLE_WORK_PER_CELL * topology.cols * topology.rows }
   for (const shape of shapes) {
@@ -101,22 +134,39 @@ export function createGrassObstacleField(
       rasterizeShape(topology, occupied, shape, budget)
     }
   }
-
-  const values = encodeObstacleField(topology, occupied)
-  return {
-    origin: [topology.origin[0], topology.origin[1]],
-    spacing: topology.spacing,
-    cols: topology.cols,
-    rows: topology.rows,
-    values,
-  }
+  return occupied
 }
 
+/** Whether a blade or a flower may stand at the nearest cell: the lawn's own ground. */
 export function isGrassAllowedAt(field: GrassObstacleField, x: number, z: number): boolean {
+  return ownerAt(field, x, z) > STANDING
+}
+
+/**
+ * Whether the lawn's ground is still drawn at the nearest cell: its own, or under something that
+ * only stands in it. Paint is laid by this rule, so a hedge planted before or after the lawn has
+ * the same green ground under it.
+ */
+export function isLawnGroundAt(field: GrassObstacleField, x: number, z: number): boolean {
+  return ownerAt(field, x, z) >= STANDING
+}
+
+function ownerAt(field: GrassObstacleField, x: number, z: number): number {
   const col = Math.round((x - field.origin[0]) / field.spacing)
   const row = Math.round((z - field.origin[1]) / field.spacing)
-  if (col < 0 || row < 0 || col >= field.cols || row >= field.rows) return true
-  return (field.values[(row * field.cols + col) * 4 + 3] ?? 255) >= 128
+  if (col < 0 || row < 0 || col >= field.cols || row >= field.rows) return 255
+  return field.values[(row * field.cols + col) * 4 + 3] ?? 255
+}
+
+/**
+ * The cells of `topology` that shapes cover, without the distance field: 1 where a shape owns the
+ * ground, 2 where one only stands on it. For a caller that needs the footprint alone.
+ */
+export function rasterizeObstacleCells(
+  topology: GrassObstacleTopology,
+  shapes: readonly GrassObstacleShape[],
+): Uint8Array {
+  return rasterizeShapes(topology, shapes)
 }
 
 export function sampleGrassObstacle(
@@ -208,7 +258,7 @@ function rasterizeShape(
     }
     if (work > budget.left) return
     budget.left -= work
-    rasterizePolygon(topology, occupied, shape.points, holes, box)
+    rasterizePolygon(topology, occupied, shape.points, holes, box, shape.keepsGround === true)
     return
   }
 
@@ -219,9 +269,15 @@ function rasterizeShape(
     const z = topology.origin[1] + row * topology.spacing
     for (let col = col0; col <= col1; col += 1) {
       const x = topology.origin[0] + col * topology.spacing
-      if (shapeContains(shape, x, z, padding)) occupied[row * topology.cols + col] = 1
+      if (shapeContains(shape, x, z, padding)) claim(occupied, row * topology.cols + col, shape.keepsGround === true)
     }
   }
+}
+
+/** A cell another surface owns stays owned; one only stood on can still become owned. */
+function claim(occupied: Uint8Array, index: number, keepsGround: boolean): void {
+  if (!keepsGround) occupied[index] = OWNED
+  else if (occupied[index] === 0) occupied[index] = STOOD_ON
 }
 
 type Ring = ReadonlyArray<readonly [number, number]>
@@ -278,6 +334,7 @@ function rasterizePolygon(
   outer: Ring,
   holes: ReadonlyArray<{ ring: Ring; box: CellBox }>,
   box: CellBox,
+  keepsGround: boolean,
 ): void {
   const cols = box.col1 - box.col0 + 1
   const rows = box.row1 - box.row0 + 1
@@ -289,7 +346,7 @@ function rasterizePolygon(
     const target = (box.row0 + row) * topology.cols + box.col0
     const source = row * cols
     for (let col = 0; col < cols; col += 1) {
-      if (inside[source + col]) occupied[target + col] = 1
+      if (inside[source + col]) claim(occupied, target + col, keepsGround)
     }
   }
 }
@@ -481,7 +538,7 @@ function encodeObstacleField(topology: GrassObstacleTopology, occupied: Uint8Arr
         values[offset] = 0
         values[offset + 1] = 128
         values[offset + 2] = 128
-        values[offset + 3] = 0
+        values[offset + 3] = occupied[index] === STOOD_ON ? STANDING : 0
         continue
       }
       if (nearestCol < 0 || nearestRow < 0) {

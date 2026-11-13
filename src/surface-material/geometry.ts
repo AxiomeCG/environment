@@ -8,22 +8,21 @@ import {
   type TerrainField,
 } from '@pascal-app/core'
 import { DoubleSide, Group, Mesh, type Object3D } from 'three'
-import { positionGeometry, step, texture, vec2 } from 'three/tsl'
+import { positionGeometry } from 'three/tsl'
 import { MeshStandardNodeMaterial } from 'three/webgpu'
-import { buildGroundOwnerField, collectSiteNodes } from '../ground-cover/obstacle-adapter'
-import { createGrassObstacleTopology } from '../ground-cover/obstacle-field'
-import {
-  createGrassObstacleTexture,
-  disposeGrassObstacleTexture,
-  getGrassObstacleRuntime,
-  updateGrassObstacleTexture,
-} from '../ground-cover/obstacle-texture'
-import { siteBounds } from '../ground-cover/paint-field'
+import { collectGroundOpeningShapes, collectSiteNodes } from '../ground-cover/obstacle-adapter'
+import { rasterizeObstacleCells } from '../ground-cover/obstacle-field'
 import { buildDrapedGroundGeometry } from '../ground-cover/terrain-drape'
 import { resolveSurfaceMaterial } from './field-context'
 import { buildSurfaceMaterialNodes } from './materials'
 import type { SurfaceMaterialNode } from './schema'
-import { createSurfacePaintTexture, disposeSurfacePaintTexture } from './texture'
+import type { SurfaceMaterialField } from './field'
+import {
+  createSurfacePaintTexture,
+  disposeSurfacePaintTexture,
+  getSurfaceSheetField,
+  setSurfaceSheetCut,
+} from './texture'
 
 const SURFACE_MESH_NAME = 'environment-surface-material'
 const SURFACE_TOPOLOGY_KEY = 'surfaceTerrainTopology'
@@ -36,7 +35,13 @@ export function buildSurfaceMaterialGeometry(
   const resolved = resolveSurfaceMaterial(node, context)
   if (!resolved) return group
 
-  const paintTexture = createSurfacePaintTexture(node.id, resolved.field)
+  // The sheet lies 5 mm over the whole lot: where another node opens the ground (a pool cut into
+  // it) the sheet's own paint is cut out, or it would lie over the pool's water as a lid.
+  setSurfaceSheetCut(
+    node.id,
+    surfaceSheetCut(resolved.field, resolved.site, collectSiteNodes(resolved.site, context.resolve)),
+  )
+  const paintTexture = createSurfacePaintTexture(node.id, resolved.field, true)
   const geometry = buildDrapedGroundGeometry(resolved.boundary, resolved.terrain)
   const materialNodes = buildSurfaceMaterialNodes(
     positionGeometry.xz,
@@ -55,24 +60,9 @@ export function buildSurfaceMaterialGeometry(
   material.normalNode = materialNodes.normal
   material.roughnessNode = materialNodes.roughness
   material.aoNode = materialNodes.ao
-  // The sheet lies 5 mm over the whole lot: where another node owns the ground (a pool cut into
-  // it, a paved slab, a house) it is not drawn, or it would lie over a pool's water as a lid.
-  // Environment's own water is no owner here: a pond keeps the surface as its bed.
-  const { field: owners, texture: ownerTexture } = createSurfaceOwnerMask(
-    node,
-    resolved.site,
-    collectSiteNodes(resolved.site, context.resolve),
-  )
-  const ownerUv = positionGeometry.xz.sub(vec2(owners.origin[0], owners.origin[1])).div(
-    vec2(
-      Math.max((owners.cols - 1) * owners.spacing, owners.spacing),
-      Math.max((owners.rows - 1) * owners.spacing, owners.spacing),
-    ),
-  )
-  material.opacityNode = materialNodes.coverage.mul(step(0.5, texture(ownerTexture, ownerUv).a))
+  material.opacityNode = materialNodes.coverage
   material.addEventListener('dispose', () => {
     disposeSurfacePaintTexture(node.id, paintTexture)
-    disposeGrassObstacleTexture(node.id, ownerTexture)
   })
 
   const mesh = new Mesh(geometry, material)
@@ -83,32 +73,35 @@ export function buildSurfaceMaterialGeometry(
   return group
 }
 
-/** Where the surface is cut out for what owns the ground, as the texture its material samples. */
-export function createSurfaceOwnerMask(
-  node: { id: string },
+/**
+ * The paint cells of the Surface's sheet that lie in a ground opening (one flag per cell), or null
+ * when the lot has none. It is applied to the sheet's own paint texture, not sampled as one more
+ * texture: the surface material already binds thirteen of the sixteen a fragment stage may sample
+ * and the host's lighting takes the other three.
+ */
+export function surfaceSheetCut(
+  field: Pick<SurfaceMaterialField, 'origin' | 'spacing' | 'cols' | 'rows'>,
   site: SiteNode,
   nodes: Readonly<Record<string, AnyNode>>,
-) {
-  const field = buildGroundOwnerField(
-    site,
-    nodes,
-    createGrassObstacleTopology(siteBounds(site.polygon.points)),
-  )
-  return { field, texture: createGrassObstacleTexture(node.id, field) }
+): Uint8Array | null {
+  const openings = collectGroundOpeningShapes(site, nodes)
+  if (openings.length === 0) return null
+  return rasterizeObstacleCells(field, openings)
 }
 
 /**
- * Redraw where the mounted surface is cut out for what owns the ground, after a node was placed,
- * moved or removed. False when the surface is not mounted or the lot changed size: rebuild then.
+ * Redraw where the mounted sheet is cut out, after a node that opens the ground was placed, moved
+ * or removed. False when the surface is not mounted: nothing to redraw.
  */
-export function updateSurfaceMaterialObstacles(
+export function updateSurfaceSheetCut(
   node: { id: string },
   site: SiteNode,
   nodes: Readonly<Record<string, AnyNode>>,
 ): boolean {
-  const runtime = getGrassObstacleRuntime(node.id)
-  if (!runtime) return false
-  return updateGrassObstacleTexture(node.id, buildGroundOwnerField(site, nodes, runtime.field))
+  const field = getSurfaceSheetField(node.id)
+  if (!field) return false
+  setSurfaceSheetCut(node.id, surfaceSheetCut(field, site, nodes))
+  return true
 }
 
 export function updateSurfaceMaterialTerrain(root: Object3D, site: SiteNode): boolean {

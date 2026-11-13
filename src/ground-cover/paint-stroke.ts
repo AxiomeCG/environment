@@ -6,7 +6,7 @@ import {
   type GrassPaintField,
   type RgbBytes,
 } from './paint-field'
-import { isGrassAllowedAt, type GrassObstacleField } from './obstacle-field'
+import { isLawnGroundAt, type GrassObstacleField } from './obstacle-field'
 
 const DAB_SPACING_FRACTION = 0.25
 
@@ -106,7 +106,8 @@ export function advancePaintStroke(
         ) {
           continue
         }
-        if (stroke.obstacles && !isGrassAllowedAt(stroke.obstacles, sampleX, sampleZ)) {
+        // Paint runs on under what only stands in the lawn: its ground is drawn there.
+        if (stroke.obstacles && !isLawnGroundAt(stroke.obstacles, sampleX, sampleZ)) {
           continue
         }
 

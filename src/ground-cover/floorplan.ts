@@ -1,7 +1,7 @@
 import type { FloorplanGeometry, GeometryContext } from '@pascal-app/core'
 import { buildPaintFieldFloorplan } from '../paint-field-floorplan'
 import { resolveGroundCoverFields } from './field-context'
-import { sampleGrassObstacle } from './obstacle-field'
+import { GRASS_GROUND_FROM, sampleGrassObstacle } from './obstacle-field'
 import { paintAt } from './paint-field'
 import type { GrassFieldNode } from './schema'
 
@@ -26,7 +26,8 @@ export function buildGrassFieldFloorplan(
       output.blue = paint.b
       output.coverage = paint.a * density
     },
-    acceptsAt: (x, z) => sampleGrassObstacle(fields.obstacles, x, z).allowed >= 0.5,
+    // The plan shows the lawn's ground, which runs on under what only stands in it.
+    acceptsAt: (x, z) => sampleGrassObstacle(fields.obstacles, x, z).allowed >= GRASS_GROUND_FROM,
   })
 }
 

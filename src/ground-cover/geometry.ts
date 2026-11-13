@@ -28,7 +28,12 @@ import { type GrassPaintField } from './paint-field'
 import { createGrassHeightTexture, disposeGrassHeightTexture } from './height-texture'
 import { createGrassPaintTexture, disposeGrassPaintTexture } from './paint-texture'
 import { buildGrassObstacleField } from './obstacle-adapter'
-import { MAX_GRASS_OBSTACLE_DISTANCE, type GrassObstacleField } from './obstacle-field'
+import {
+  GRASS_BLADES_FROM,
+  GRASS_GROUND_FROM,
+  MAX_GRASS_OBSTACLE_DISTANCE,
+  type GrassObstacleField,
+} from './obstacle-field'
 import {
   createGrassObstacleTexture,
   disposeGrassObstacleTexture,
@@ -200,7 +205,8 @@ function createGroundPlane(
     .div(obstacleSize)
   const painted = texture(paintTexture, paintUv)
   const paintColor = painted.rgb.div(max(painted.a, 1 / 255))
-  const allowed = step(0.5, texture(obstacleTexture, obstacleUv).a)
+  // The lawn's ground stays under what only stands in it; another surface takes it away.
+  const allowed = step(GRASS_GROUND_FROM, texture(obstacleTexture, obstacleUv).a)
   const opacity = shapeGrassCoverage(painted.a.mul(density).mul(allowed))
   const surfaceNodes = surface
     ? buildSurfaceUnderlayColorNodes(
@@ -314,7 +320,7 @@ export function buildGrassFieldGeometry(node: GrassFieldNode, context: GeometryC
         )
       : null
   const sampledObstacle = texture(obstacleTexture, obstacleUv) as Node<'vec4'>
-  const obstacleAllowed = step(0.5, sampledObstacle.a)
+  const obstacleAllowed = step(GRASS_BLADES_FROM, sampledObstacle.a)
   const obstacleEnabled = step(0.001, grassFieldUniforms.obstacleBendRadius)
   const obstacleDistance = sampledObstacle.r.mul(MAX_GRASS_OBSTACLE_DISTANCE)
   const obstacleInfluence = sub(

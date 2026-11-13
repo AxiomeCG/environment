@@ -11,16 +11,24 @@ import {
   SiteNode,
 } from '@pascal-app/core'
 import { expect, test } from 'bun:test'
-import { isGrassAllowedAt } from '../ground-cover/obstacle-field'
-import { disposeGrassObstacleTexture, getGrassObstacleRuntime } from '../ground-cover/obstacle-texture'
 import { PondNode } from '../pond/schema'
-import { createSurfaceOwnerMask, updateSurfaceMaterialObstacles } from './geometry'
+import { resolveSurfaceMaterialField } from './field'
+import { surfaceSheetCut, updateSurfaceSheetCut } from './geometry'
 import { SurfaceMaterialNode } from './schema'
+import {
+  createSurfacePaintTexture,
+  disposeSurfacePaintTexture,
+  setSurfaceSheetCut,
+  updateSurfacePaintTextures,
+} from './texture'
 
 /**
- * The Surface is a sheet draped 5 mm over the whole lot. Where another node owns the ground and
- * stands lower than it (a pool cut into the lot), the sheet would lie over it as a lid: it is
- * drawn only where the lawn's own mask leaves ground. Environment's water keeps its bed.
+ * The Surface is a sheet draped 5 mm over the whole lot. Where another node opens the ground (a
+ * pool cut into the lot) the sheet would lie over it as a lid, so its own paint is cut out there.
+ * The cut is made in the paint texture the sheet already samples, not with one more texture: the
+ * material is at the limit a fragment stage may sample. What only stands on the lot (a hedge, a
+ * rock) and Environment's own water leave the sheet whole: the ground under a hedge stays green
+ * and a pond keeps its bed.
  */
 
 type Nodes = Record<string, AnyNode>
@@ -73,38 +81,68 @@ function lot(...extra: AnyNode[]): Nodes {
   return Object.fromEntries(nodes.map((node) => [node.id, node]))
 }
 
-const maskOf = () => {
-  const runtime = getGrassObstacleRuntime(surface.id)
-  if (!runtime) throw new Error('the surface has no ground mask')
-  return runtime.field
+/** A surface painted all over: every cell holds the first material at full weight. */
+function paintedField() {
+  const field = resolveSurfaceMaterialField(undefined, { minX: 0, maxX: 12, minZ: 0, maxZ: 12 })
+  const values = new Uint8Array(field.values.length)
+  for (let offset = 0; offset < values.length; offset += 4) values[offset] = 255
+  return { ...field, values }
 }
 
-test('the surface is not drawn over a pool, whether the pool or the surface came first', () => {
+const paintAtCell = (texture: { image: { data: unknown } }, field: { origin: readonly number[]; spacing: number; cols: number }, x: number, z: number) => {
+  const col = Math.round((x - (field.origin[0] ?? 0)) / field.spacing)
+  const row = Math.round((z - (field.origin[1] ?? 0)) / field.spacing)
+  return (texture.image.data as Uint8Array)[(row * field.cols + col) * 4] ?? 0
+}
+
+test('the sheet is cut out over a pool and nowhere else, whichever came first', () => {
   withPoolKind(() => {
     // Level (6, 4) is site (7, 5): water 5..9 x 4..6, coping 0.3 round it.
     const withPool = lot(pool)
-    // The mask the surface's material samples, as its geometry builder mounts it.
-    const mounted = createSurfaceOwnerMask(surface, withPool.site_lot as SiteNode, withPool)
+    const without = lot()
+    const field = paintedField()
+    setSurfaceSheetCut(surface.id, surfaceSheetCut(field, withPool.site_lot as SiteNode, withPool))
+    const sheet = createSurfacePaintTexture(surface.id, field, true)
+    // The lawn's underlay reads the same paint, uncut: the lawn has its own mask.
+    const underlay = createSurfacePaintTexture(surface.id, field)
     try {
-      expect(isGrassAllowedAt(maskOf(), 7, 5)).toBe(false)
-      expect(isGrassAllowedAt(maskOf(), 9.2, 5)).toBe(false)
-      expect(isGrassAllowedAt(maskOf(), 10, 5)).toBe(true)
-      expect(isGrassAllowedAt(maskOf(), 7, 8)).toBe(true)
+      expect(paintAtCell(sheet, field, 7, 5)).toBe(0)
+      expect(paintAtCell(sheet, field, 9.2, 5)).toBe(0)
+      expect(paintAtCell(sheet, field, 10, 5)).toBe(255)
+      expect(paintAtCell(sheet, field, 7, 8)).toBe(255)
+      expect(paintAtCell(underlay, field, 7, 5)).toBe(255)
 
-      // The pool goes: the same sheet is drawn there again, without a rebuild.
-      const without = lot()
-      expect(updateSurfaceMaterialObstacles(surface, without.site_lot as SiteNode, without)).toBe(true)
-      expect(isGrassAllowedAt(maskOf(), 7, 5)).toBe(true)
-      // And comes back on a surface already drawn.
-      expect(updateSurfaceMaterialObstacles(surface, withPool.site_lot as SiteNode, withPool)).toBe(true)
-      expect(isGrassAllowedAt(maskOf(), 7, 5)).toBe(false)
+      // A paint stroke redraws both from the paint; the sheet keeps its cut.
+      expect(updateSurfacePaintTextures(surface.id, field)).toBe(true)
+      expect(paintAtCell(sheet, field, 7, 5)).toBe(0)
+      expect(paintAtCell(underlay, field, 7, 5)).toBe(255)
+
+      // The pool goes: the sheet is whole again, without a rebuild. And comes back.
+      expect(updateSurfaceSheetCut(surface, without.site_lot as SiteNode, without)).toBe(true)
+      expect(paintAtCell(sheet, field, 7, 5)).toBe(255)
+      expect(updateSurfaceSheetCut(surface, withPool.site_lot as SiteNode, withPool)).toBe(true)
+      expect(paintAtCell(sheet, field, 7, 5)).toBe(0)
+      expect(paintAtCell(sheet, field, 10, 5)).toBe(255)
     } finally {
-      disposeGrassObstacleTexture(surface.id, mounted.texture)
+      disposeSurfacePaintTexture(surface.id, sheet)
+      disposeSurfacePaintTexture(surface.id, underlay)
     }
   })
 })
 
-test('the surface stays under an Environment pond: the water keeps its bed', () => {
+test('a hedge, a rock and a paved slab leave the sheet whole: the ground under them stays', () => {
+  withPoolKind(() => {
+    const hedge = ItemNode.parse({
+      id: 'item_hedge', parentId: 'level_lot', position: [6, 0, 4],
+      asset: { id: 'asset_hedge', category: 'outdoor', name: 'Hedge', thumbnail: '', src: 'asset://hedge', dimensions: [3, 1.2, 0.8] },
+    }) as AnyNode
+    const rock = { id: 'rock_lot', type: 'rock', object: 'node', parentId: 'site_lot', visible: true, metadata: {}, polygon: [[2, 8], [4, 8], [3, 10]] } as unknown as AnyNode
+    const nodes = lot(hedge, rock)
+    expect(surfaceSheetCut(paintedField(), nodes.site_lot as SiteNode, nodes)).toBeNull()
+  })
+})
+
+test('the sheet stays under an Environment pond: the water keeps its bed', () => {
   const terrain = createTerrainField({ origin: [0, 0], spacing: 2, cols: 7, rows: 7, step: 1 })
   terrain.heights.set([
     5, 5, 5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0,
@@ -117,10 +155,5 @@ test('the surface stays under an Environment pond: the water keeps its bed', () 
     children: ['building_lot', surface.id, pond.id],
     terrain: encodeTerrainField(terrain),
   } as AnyNode
-  const mounted = createSurfaceOwnerMask(surface, nodes.site_lot as SiteNode, nodes)
-  try {
-    expect(isGrassAllowedAt(maskOf(), 6, 6)).toBe(true)
-  } finally {
-    disposeGrassObstacleTexture(surface.id, mounted.texture)
-  }
+  expect(surfaceSheetCut(paintedField(), nodes.site_lot as SiteNode, nodes)).toBeNull()
 })

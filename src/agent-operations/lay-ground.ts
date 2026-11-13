@@ -10,7 +10,7 @@ import { encodeLocalHeightScale } from '../ground-cover/height-field'
 import { buildGrassObstacleField } from '../ground-cover/obstacle-adapter'
 import {
   createGrassObstacleTopology,
-  isGrassAllowedAt,
+  isLawnGroundAt,
   type GrassObstacleField,
 } from '../ground-cover/obstacle-field'
 import {
@@ -353,7 +353,8 @@ function measureArea(
       const inside = area.signedDistance(x, z) >= 0
       if (inside) facts.shapeCells += 1
       if (!pointInPolygon(x, z, sitePolygon)) continue
-      const allowed = isGrassAllowedAt(obstacles, x, z)
+      // Blocked is ground another surface owns; under a plant or a bench the lawn's ground runs on.
+      const allowed = isLawnGroundAt(obstacles, x, z)
       if (inside) facts.areaM2 += cellM2
       if (inside && !allowed) facts.blockedM2 += cellM2
       const strength = strengthAt(area, x, z)
@@ -407,7 +408,7 @@ function layArea(
     area.ground !== 'grass' ||
     samplePlantingTerrain(terrain, x, z).slopeDeg < PLANTING_MAX_SLOPE_DEG.grass
   paintLayer(layers.paint.after, area, sitePolygon, grassPaintBlend(area.ground, area.tint), (x, z) =>
-    isGrassAllowedAt(layers.obstacles, x, z) && slopeAllowed(x, z),
+    isLawnGroundAt(layers.obstacles, x, z) && slopeAllowed(x, z),
   )
   paintLayer(layers.surface.after, area, sitePolygon, surfacePaintBlend(area.ground), slopeAllowed)
   if (layers.height && area.grassHeight !== null) {
