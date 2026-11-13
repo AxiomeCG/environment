@@ -1,4 +1,11 @@
-import { segmentsIntersect, type AnyNode, type SiteNode } from '@pascal-app/core'
+import {
+  persistedTerrainFieldOf,
+  segmentsIntersect,
+  surfaceHeightAt,
+  type AnyNode,
+  type SiteNode,
+  type TerrainField,
+} from '@pascal-app/core'
 import { ShapeUtils, Vector2 } from 'three'
 import { refuse } from './refuse'
 import type { PlanPoint, SceneNodes } from './types'
@@ -35,6 +42,51 @@ export function requireSite(nodes: SceneNodes): SiteNode {
   const site = sites[0]
   if (!site) refuse('no_site', 'This scene has no site.')
   return site as SiteNode
+}
+
+/**
+ * Core's persisted-terrain read as a host with tiled terrain declares it. A core released before
+ * tiles takes the site alone, which this type also admits, so no cast stands between the two.
+ */
+const readPersistedTerrain: (site: SiteNode, nodes?: SceneNodes) => TerrainField | null =
+  persistedTerrainFieldOf
+
+/**
+ * The site's persisted ground, never an unfinished sculpt stroke; null is flat ground at 0 m.
+ *
+ * The host keeps authored ground in nodes under the site (terrain tiles, breaks, graded ramps;
+ * its terrain tools write nothing else) and reads them only from the node snapshot it is given.
+ * Read without `nodes`, a lot the tools just shaped is flat. Every agent operation reads here.
+ * The field may be virtual (no dense `heights`, a box wider than the lot): read it through core's
+ * `surfaceHeightAt`, `normalAt` and `heightAtSample`, never through its buffer.
+ */
+export function siteTerrainOf(site: SiteNode, nodes: SceneNodes): TerrainField | null {
+  return readPersistedTerrain(site, nodes)
+}
+
+/** Lowest and highest ground on the terrain's own lattice over a plan box, or null off the field. */
+export function terrainReliefOver(
+  terrain: TerrainField,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+): { minM: number; maxM: number } | null {
+  const index = (value: number, origin: number, count: number, round: (value: number) => number) =>
+    Math.max(0, Math.min(count - 1, round((value - origin) / terrain.spacing)))
+  const col0 = index(bounds.minX, terrain.origin[0], terrain.cols, Math.floor)
+  const col1 = index(bounds.maxX, terrain.origin[0], terrain.cols, Math.ceil)
+  const row0 = index(bounds.minZ, terrain.origin[1], terrain.rows, Math.floor)
+  const row1 = index(bounds.maxZ, terrain.origin[1], terrain.rows, Math.ceil)
+  let minM = Number.POSITIVE_INFINITY
+  let maxM = Number.NEGATIVE_INFINITY
+  for (let row = row0; row <= row1; row += 1) {
+    const z = terrain.origin[1] + row * terrain.spacing
+    for (let col = col0; col <= col1; col += 1) {
+      const height = surfaceHeightAt(terrain, terrain.origin[0] + col * terrain.spacing, z)
+      if (!Number.isFinite(height)) continue
+      if (height < minM) minM = height
+      if (height > maxM) maxM = height
+    }
+  }
+  return maxM >= minM ? { minM, maxM } : null
 }
 
 export function requireSitePolygon(site: SiteNode): PlanPoint[] {

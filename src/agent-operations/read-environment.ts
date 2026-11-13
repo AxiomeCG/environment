@@ -1,4 +1,4 @@
-import { persistedTerrainFieldOf, type SiteNode, type TerrainField } from '@pascal-app/core'
+import type { SiteNode, TerrainField } from '@pascal-app/core'
 import { localGrassHeightScaleAt } from '../ground-cover/height-field'
 import {
   paintAt,
@@ -33,6 +33,7 @@ import {
   roundFact,
   siteChildOfKind,
   siteChildrenOfKind,
+  siteTerrainOf,
 } from './scene'
 import { createTerrainSamples, includeTerrainSample, terrainSampleFacts } from './terrain-facts'
 import type { AgentOperation, PlanPoint, SceneNodes } from './types'
@@ -225,7 +226,7 @@ export const readEnvironment: AgentOperation<ReadEnvironmentInput> = (nodes, inp
   const { area, onLotM2 } = requireArea(input, sitePolygon)
   const region: Region = (x, z) => pointInPolygon(x, z, area) && pointInPolygon(x, z, sitePolygon)
   const bounds = siteBounds(sitePolygon)
-  const terrain = persistedTerrainFieldOf(site)
+  const terrain = siteTerrainOf(site, nodes)
   const hollowsLimit = Math.min(20, Math.max(0, Math.floor(input.hollowsLimit ?? 5)))
   const hollowScan = scanHollows(terrain, sitePolygon, region, hollowsLimit)
   return {

@@ -1,10 +1,5 @@
-import {
-  generateId,
-  persistedTerrainFieldOf,
-  type AnyNode,
-  type SiteNode,
-  type TerrainField,
-} from '@pascal-app/core'
+import { generateId, type AnyNode, type SiteNode, type TerrainField } from '@pascal-app/core'
+import { siteBounds } from '../ground-cover/paint-field'
 import { analyzePondBasin, buildPondSurface, type PondBasin, type PondSurface } from '../pond/basin'
 import { connectedPondsForBasin, mergedProps, preferredPond } from '../pond/connectivity'
 import { MAX_POND_PROPS, pondPropFitsSurface, renderablePondProps } from '../pond/prop-fit'
@@ -23,6 +18,8 @@ import {
   requireSite,
   requireSitePolygon,
   roundFact,
+  siteTerrainOf,
+  terrainReliefOver,
 } from './scene'
 import type { AgentOperation, PlanPoint, SceneChanges, SceneNodes } from './types'
 
@@ -51,18 +48,20 @@ function requirePointOnLot(value: FillPondInput['at'], sitePolygon: PlanPoint[])
   return at
 }
 
-function requireTerrain(site: SiteNode): TerrainField {
-  const terrain = persistedTerrainFieldOf(site)
+/**
+ * The site's ground, refused when none of it on the lot can hold water. The relief is read on
+ * the lot, through the field: tiled ground has no dense buffer to scan, and ground the lot does
+ * not own holds no pond.
+ */
+function requireTerrain(site: SiteNode, nodes: SceneNodes, sitePolygon: PlanPoint[]): TerrainField {
+  const terrain = siteTerrainOf(site, nodes)
   if (!terrain) {
     refuse('no_terrain', 'This site has no persisted terrain, so nothing can hold water.')
   }
-  let min = Number.POSITIVE_INFINITY
-  let max = Number.NEGATIVE_INFINITY
-  for (const height of terrain.heights) {
-    if (height < min) min = height
-    if (height > max) max = height
+  const relief = terrainReliefOver(terrain, siteBounds(sitePolygon))
+  if (!relief || relief.maxM <= relief.minM) {
+    refuse('no_terrain', 'The ground is flat, so nothing can hold water.')
   }
-  if (max <= min) refuse('no_terrain', 'The ground is flat, so nothing can hold water.')
   return terrain
 }
 
@@ -293,7 +292,7 @@ export const fillPond: AgentOperation<FillPondInput> = (nodes, input) => {
   const site = requireSite(nodes)
   const sitePolygon = requireSitePolygon(site)
   const at = requirePointOnLot(input.at, sitePolygon)
-  const basin = requireBasin(requireTerrain(site), sitePolygon, at)
+  const basin = requireBasin(requireTerrain(site, nodes, sitePolygon), sitePolygon, at)
   const level = resolveLevel(basin, input.level)
   refuseImpossibleStocking(basin, level, input)
   const water = targetWater(nodes, String(site.id), basin, level)

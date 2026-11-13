@@ -1,5 +1,4 @@
 import {
-  persistedTerrainFieldOf,
   segmentsIntersect,
   type AnyNode,
   type AnyNodeId,
@@ -58,6 +57,7 @@ import {
   roundFact,
   signedDistanceToPolygon,
   siteChildOfKind,
+  siteTerrainOf,
 } from './scene'
 import {
   createTerrainSamples,
@@ -537,7 +537,7 @@ export const layGround: AgentOperation<LayGroundInput> = (nodes, input) => {
   const sitePolygon = requireSitePolygon(site)
   const areas = resolveAreas(input, sitePolygon)
   const layers = resolveGroundLayers(nodes, site, areas)
-  const terrain = persistedTerrainFieldOf(site)
+  const terrain = siteTerrainOf(site, nodes)
   const areaFacts = areas.map((area) => layArea(area, sitePolygon, layers, terrain))
   const lotGround = lotGroundOf(areas, sitePolygon)
   if (lotGround) coverBeyondLot(layers, lotGround)
