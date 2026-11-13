@@ -5,11 +5,15 @@ import { buildGrassFieldGeometry } from './geometry'
 import { GrassFieldNode } from './schema'
 import { groundCoverStyleDefaults } from './style'
 
+type GrassFieldDefaults = ReturnType<NodeDefinition<typeof GrassFieldNode>['defaults']>
+
 type GrassFieldRenderDefinition = Omit<
   NodeDefinition<typeof GrassFieldNode>,
-  'capabilities' | 'floorplanScope'
+  'capabilities' | 'floorplanScope' | 'defaults'
 > &
   Record<string, unknown> & {
+    /** Without a pose: the schema supplies the origin, and the kind is not placed at a point. */
+    defaults: () => Omit<GrassFieldDefaults, 'position' | 'rotation'>
     bakeGeometry: typeof buildGrassFieldBakeGeometry
     bakeGeometryAsync: typeof buildGrassFieldBakeGeometryAsync
     capabilities: NodeDefinition<typeof GrassFieldNode>['capabilities'] & {
@@ -31,13 +35,13 @@ export const grassFieldRenderDefinition: GrassFieldRenderDefinition = {
   schema: GrassFieldNode,
   category: 'furnish',
 
+  // No position: the lot's one ground cover is laid, not placed at a point. A host's generic
+  // placement reads a position here as "placed at a point" and makes an empty node under a level.
   defaults: () => ({
     object: 'node',
     parentId: null,
     visible: true,
     metadata: {},
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
     ...groundCoverStyleDefaults,
   }),
 
@@ -66,6 +70,7 @@ export const grassFieldRenderDefinition: GrassFieldRenderDefinition = {
   },
 
   mcp: {
-    description: 'Prototype GPU ground cover painted as a persistent RGBA density field.',
+    description:
+      'The lot\'s one ground cover: GPU grass drawn from a painted density field, under the Site. It is not placed at a point: lay_ground lays it (grass, earth, path or paving over the lot or an area), set_ground_cover_style sets its blades, read_environment reads it.',
   },
 }

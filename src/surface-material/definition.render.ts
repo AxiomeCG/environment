@@ -7,11 +7,15 @@ import { buildSurfaceMaterialFloorplan } from './floorplan'
 import { buildSurfaceMaterialGeometry } from './geometry'
 import { SurfaceMaterialNode, SURFACE_MATERIAL_KIND } from './schema'
 
+type SurfaceMaterialDefaults = ReturnType<NodeDefinition<typeof SurfaceMaterialNode>['defaults']>
+
 type SurfaceMaterialRenderDefinition = Omit<
   NodeDefinition<typeof SurfaceMaterialNode>,
-  'capabilities' | 'floorplanScope'
+  'capabilities' | 'floorplanScope' | 'defaults'
 > &
   Record<string, unknown> & {
+    /** Without a pose: the schema supplies the origin, and the kind is not placed at a point. */
+    defaults: () => Omit<SurfaceMaterialDefaults, 'position' | 'rotation'>
     bakeGeometry: typeof buildSurfaceMaterialBakeGeometry
     bakeGeometryAsync: typeof buildSurfaceMaterialBakeGeometryAsync
     capabilities: NodeDefinition<typeof SurfaceMaterialNode>['capabilities'] & {
@@ -38,8 +42,7 @@ export const surfaceMaterialRenderDefinition: SurfaceMaterialRenderDefinition = 
     visible: true,
     metadata: {},
     name: 'Surface',
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
+    // No position: the lot's one surface is laid, not placed at a point (see the ground cover).
     textureSize: 100,
   }),
 
@@ -68,6 +71,7 @@ export const surfaceMaterialRenderDefinition: SurfaceMaterialRenderDefinition = 
   },
 
   mcp: {
-    description: 'Persistent terrain surface painted as a four-material blend.',
+    description:
+      'The lot\'s one ground surface: a four-material blend painted over the terrain, under the Site. It is not placed at a point: lay_ground paints it with the ground it lays; read_environment reads it.',
   },
 }

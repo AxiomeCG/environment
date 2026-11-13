@@ -94,3 +94,34 @@ describe('render-only plugin', () => {
     expect(renderPresentation.pluginId).toBe(environmentRenderPlugin.id)
   })
 })
+
+/**
+ * A host's generic placement (place_plugin_nodes) takes "the kind's defaults carry a position" for
+ * "this kind is placed at a point", and creates the node under the level. The lot's ground cover
+ * and surface are one node each under the Site, drawn from paint: placed at a point they are an
+ * empty node that draws nothing. Like the pond, the river and a paint tile they declare no
+ * position, so that host refuses them, and their description names what lays them.
+ */
+describe('the lot-wide kinds are not placed at a point', () => {
+  const kinds = ['environment:ground-cover', 'environment:surface-material']
+  test.each(kinds)('%s declares no position, and still loads at the origin', (kind) => {
+    const definition = rootNodes.find((def) => def.kind === kind)!
+    const defaults = definition.defaults() as Record<string, unknown>
+    expect(Array.isArray(defaults.position)).toBe(false)
+    const node = (definition.schema as { parse(value: unknown): { position: number[] } }).parse(defaults)
+    expect(node.position).toEqual([0, 0, 0])
+  })
+
+  test.each(kinds)('%s tells an agent what lays it', (kind) => {
+    const definition = rootNodes.find((def) => def.kind === kind)!
+    const description = (definition as { mcp?: { description?: string } }).mcp?.description ?? ''
+    expect(description).toContain('lay_ground')
+    expect(description).toContain('not placed')
+  })
+
+  test('no Environment kind is placed at a point', () => {
+    for (const definition of rootNodes) {
+      expect(Array.isArray((definition.defaults() as Record<string, unknown>).position), definition.kind).toBe(false)
+    }
+  })
+})
