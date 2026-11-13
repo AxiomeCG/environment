@@ -46,6 +46,26 @@ const ROCK_KIND = 'rock'
 const RAMP_KIND = 'ramp'
 const RAMP_ARC_STEP = Math.PI / 18
 
+/**
+ * A scene is data: stored, pasted or written by an agent. Nothing a node holds may make this mask
+ * loop or allocate without limit, or throw, in the renderer of everyone who opens the scene. A
+ * value that is not finite or is out of these bounds drops the shape it would make (the lawn then
+ * grows there); it never stretches one.
+ */
+const MAX_COORDINATE = 1e6
+const MAX_RADIUS = 100
+const MAX_OUTLINE_POINTS = 512
+const MAX_SLAB_POINTS = 4096
+const MAX_HOLES = 256
+const MAX_SHAPES_PER_NODE = 1024
+const MAX_FOOTPRINTS = 64
+const MAX_BANDS = 64
+const MAX_BAND_POLYGONS = 64
+/** Core caps a ramp at 128 segments and refuses a full turn; an arc is walked in 10 degree steps. */
+const MAX_RAMP_SEGMENTS = 128
+const MAX_RAMP_ARC_STEPS = 36
+const MAX_RAMP_POINTS = 1024
+
 type SiteTransform = {
   readonly x: number
   readonly z: number
@@ -209,25 +229,43 @@ function collectLevelShapes(
   for (const child of children) {
     if (child.type === 'slab') {
       const slab = child
-      output.push({
-        kind: 'polygon',
-        points: slab.polygon.map((point) => transformPoint(point, transform)),
-        holes: slab.holes.map((hole) => hole.map((point) => transformPoint(point, transform))),
-      })
+      admitNodeShapes(output, () =>
+        slab.polygon.length > MAX_SLAB_POINTS || slab.holes.length > MAX_HOLES
+          ? null
+          : [
+              {
+                kind: 'polygon',
+                points: slab.polygon.map((point) => transformPoint(point, transform)),
+                holes: slab.holes
+                  .filter((hole) => hole.length <= MAX_SLAB_POINTS)
+                  .map((hole) => hole.map((point) => transformPoint(point, transform))),
+              },
+            ],
+      )
       continue
     }
     if (child.type === 'zone') {
       const zone = child
       if (zone.spaceRole === 'room' && zone.enclosureStatus !== 'open') {
-        output.push({
-          kind: 'polygon',
-          points: zone.polygon.map((point) => transformPoint(point, transform)),
-        })
+        admitNodeShapes(output, () =>
+          zone.polygon.length > MAX_SLAB_POINTS
+            ? null
+            : [
+                {
+                  kind: 'polygon',
+                  points: zone.polygon.map((point) => transformPoint(point, transform)),
+                },
+              ],
+        )
       }
       continue
     }
     if (child.type === 'wall') {
-      addWallShapes(child, transform, output)
+      admitNodeShapes(output, () => {
+        const shapes: GrassObstacleShape[] = []
+        addWallShapes(child, transform, shapes)
+        return shapes
+      })
     }
   }
 
@@ -273,63 +311,123 @@ function collectFloorPlacedShapes(
 ): void {
   for (const node of children) {
     if (node.type === 'slab' || node.type === 'zone' || node.type === 'wall') continue
-    const outline = ownOutline(node, transform)
-    if (outline) {
-      output.push(...outline)
+    // The footprint is another kind's code and the node is scene data: neither may stop the lawn.
+    admitNodeShapes(output, () => groundOwnerShapes(node, nodes, transform))
+  }
+}
+
+function groundOwnerShapes(
+  node: AnyNode,
+  nodes: Record<AnyNodeId, AnyNode>,
+  transform: SiteTransform,
+): GrassObstacleShape[] | null {
+  const outline = ownOutline(node, transform)
+  if (outline) return outline
+  const floorPlaced = nodeRegistry.get(node.type)?.capabilities?.floorPlaced
+  if (!floorPlaced || floorPlaced.applies?.(node) === false) return null
+  const collides = floorPlacedCollides(floorPlaced, node)
+  if (!collides && !isBuiltWithoutCollision(node)) return null
+
+  const footprints = getFloorPlacedFootprints(floorPlaced, node, { nodes }).slice(0, MAX_FOOTPRINTS)
+  if (footprints.length === 0) return null
+  const foliage = hasFoliageHint(node)
+  // What the object really has on the ground, when it says so: no name is read.
+  const standing =
+    standingOutline(node, transform) ??
+    (foliage ? null : footprintOutline(node, footprints, transform))
+  if (standing) return standing
+
+  const shapes: GrassObstacleShape[] = []
+  for (const footprint of footprints) {
+    const position = footprint.position ?? nodePosition(node)
+    if (!position) continue
+    const halfX = Math.abs(footprint.dimensions[0]) / 2
+    const halfZ = Math.abs(footprint.dimensions[2]) / 2
+    if (!(halfX > 0) || !(halfZ > 0)) continue
+    const center = transformPoint([position[0], position[2]], transform)
+    const height = footprint.dimensions[1]
+    if (foliage && height >= TALL_FOLIAGE_HEIGHT) {
+      // A tall plant stands on a trunk: its box is the crown overhead, a square in the lawn.
+      shapes.push({
+        kind: 'capsule',
+        start: center,
+        end: center,
+        radius: Math.min(halfX, halfZ, Math.max(0.15, Math.min(0.5, height * 0.04))),
+      })
       continue
     }
-    const floorPlaced = nodeRegistry.get(node.type)?.capabilities?.floorPlaced
-    if (!floorPlaced || floorPlaced.applies?.(node) === false) continue
-    const collides = floorPlacedCollides(floorPlaced, node)
-    if (!collides && !isBuiltWithoutCollision(node)) continue
-
-    const footprints = getFloorPlacedFootprints(floorPlaced, node, { nodes })
-    const foliage = hasFoliageHint(node)
-    if (!foliage) {
-      // What the object really has on the ground, when it says so: no name is read.
-      const standing =
-        footprints.length > 0
-          ? (standingOutline(node, transform) ?? footprintOutline(node, footprints, transform))
-          : null
-      if (standing) {
-        output.push(...standing)
-        continue
-      }
-    } else {
-      const standing = footprints.length > 0 ? standingOutline(node, transform) : null
-      if (standing) {
-        output.push(...standing)
-        continue
-      }
-    }
-    for (const footprint of footprints) {
-      const position = footprint.position ?? nodePosition(node)
-      if (!position) continue
-      const halfX = Math.abs(footprint.dimensions[0]) / 2
-      const halfZ = Math.abs(footprint.dimensions[2]) / 2
-      if (halfX <= 0 || halfZ <= 0) continue
-      const center = transformPoint([position[0], position[2]], transform)
-      const height = footprint.dimensions[1]
-      if (foliage && height >= TALL_FOLIAGE_HEIGHT) {
-        // A tall plant stands on a trunk: its box is the crown overhead, a square in the lawn.
-        output.push({
-          kind: 'capsule',
-          start: center,
-          end: center,
-          radius: Math.min(halfX, halfZ, Math.max(0.15, Math.min(0.5, height * 0.04))),
-        })
-        continue
-      }
-      // A low plant that blocks no placement stands in the lawn, not on a bare patch.
-      if (foliage && !collides) continue
-      output.push({
-        kind: 'box',
-        center,
-        halfSize: [halfX, halfZ],
-        rotation: transform.rotation + (footprint.rotation[1] ?? 0),
-      })
-    }
+    // A low plant that blocks no placement stands in the lawn, not on a bare patch.
+    if (foliage && !collides) continue
+    shapes.push({
+      kind: 'box',
+      center,
+      halfSize: [halfX, halfZ],
+      rotation: transform.rotation + (footprint.rotation[1] ?? 0),
+    })
   }
+  return shapes
+}
+
+/**
+ * One node's shapes into the mask: derived inside a guard, so a kind's footprint that throws or a
+ * malformed node leaves the lawn drawn, then kept only where every number is finite and bounded.
+ */
+function admitNodeShapes(
+  output: GrassObstacleShape[],
+  derive: () => readonly GrassObstacleShape[] | null,
+): void {
+  let shapes: readonly GrassObstacleShape[] | null
+  try {
+    shapes = derive()
+  } catch {
+    return
+  }
+  if (!shapes) return
+  let admitted = 0
+  for (const shape of shapes) {
+    if (admitted >= MAX_SHAPES_PER_NODE) return
+    if (!isBoundedShape(shape)) continue
+    output.push(shape)
+    admitted += 1
+  }
+}
+
+const bounded = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= MAX_COORDINATE
+
+const boundedPoint = (point: unknown): boolean =>
+  Array.isArray(point) && bounded(point[0]) && bounded(point[1])
+
+const boundedRing = (ring: unknown, most: number): boolean =>
+  Array.isArray(ring) && ring.length >= 3 && ring.length <= most && ring.every(boundedPoint)
+
+function isBoundedShape(shape: GrassObstacleShape): boolean {
+  if (shape.kind === 'triangles') return true
+  if (shape.kind === 'polygon') {
+    const holes = shape.holes ?? []
+    return (
+      boundedRing(shape.points, MAX_SLAB_POINTS) &&
+      holes.length <= MAX_HOLES &&
+      holes.every((hole) => boundedRing(hole, MAX_SLAB_POINTS))
+    )
+  }
+  if (shape.kind === 'capsule') {
+    return (
+      boundedPoint(shape.start) &&
+      boundedPoint(shape.end) &&
+      bounded(shape.radius) &&
+      shape.radius >= 0 &&
+      shape.radius <= MAX_RADIUS
+    )
+  }
+  return (
+    boundedPoint(shape.center) &&
+    bounded(shape.halfSize[0]) &&
+    bounded(shape.halfSize[1]) &&
+    shape.halfSize[0] > 0 &&
+    shape.halfSize[1] > 0 &&
+    Number.isFinite(shape.rotation)
+  )
 }
 
 /** Core's `floorPlacedCollides`: the flag, or the kind's own predicate for this node. */
@@ -359,14 +457,10 @@ function isGroundOwnerKind(node: AnyNode): boolean {
 
 type PlanPoint = readonly [number, number]
 
+/** A plan outline read from a node: 3 to `MAX_OUTLINE_POINTS` finite, bounded points, or null. */
 function planPoints(value: unknown): [number, number][] | null {
-  if (!Array.isArray(value) || value.length < 3) return null
-  const points: [number, number][] = []
-  for (const point of value) {
-    if (!Array.isArray(point) || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) return null
-    points.push([Number(point[0]), Number(point[1])])
-  }
-  return points
+  if (!boundedRing(value, MAX_OUTLINE_POINTS)) return null
+  return (value as [number, number][]).map(([x, z]) => [x, z])
 }
 
 /**
@@ -383,28 +477,33 @@ function ownOutline(node: AnyNode, transform: SiteTransform): GrassObstacleShape
   }
   if (kind !== RAMP_KIND) return null
   const ramp = node as { start?: unknown; segments?: unknown; width?: unknown }
-  const start = Array.isArray(ramp.start) ? ramp.start : null
-  const radius = typeof ramp.width === 'number' && ramp.width > 0 ? ramp.width / 2 : 0
-  if (!start || !Number.isFinite(start[0]) || !Number.isFinite(start[1]) || radius <= 0) return []
-  const line: [number, number][] = [[Number(start[0]), Number(start[1])]]
-  for (const segment of Array.isArray(ramp.segments) ? ramp.segments : []) {
+  const radius = bounded(ramp.width) ? ramp.width / 2 : 0
+  if (!boundedPoint(ramp.start) || !(radius > 0) || radius > MAX_RADIUS) return []
+  const start = ramp.start as [number, number]
+  const line: [number, number][] = [[start[0], start[1]]]
+  const segments = Array.isArray(ramp.segments) ? ramp.segments.slice(0, MAX_RAMP_SEGMENTS) : []
+  for (const segment of segments as { type?: unknown; end?: unknown; center?: unknown; sweep?: unknown }[]) {
     const from = line[line.length - 1] as [number, number]
-    if (segment?.type === 'line' && Array.isArray(segment.end)) {
-      line.push([Number(segment.end[0]), Number(segment.end[1])])
-    } else if (segment?.type === 'arc' && Array.isArray(segment.center)) {
+    if (segment?.type === 'line') {
+      if (!boundedPoint(segment.end)) return []
+      const end = segment.end as [number, number]
+      line.push([end[0], end[1]])
+    } else if (segment?.type === 'arc') {
       // As core walks it: about the centre, from where the last segment ended, through `sweep`.
-      const [cx, cz] = [Number(segment.center[0]), Number(segment.center[1])]
+      // Core refuses a full turn; a sweep that is not a finite part of one is no ramp.
+      const sweep = segment.sweep
+      if (!boundedPoint(segment.center) || !bounded(sweep) || Math.abs(sweep) > Math.PI * 2) return []
+      const [cx, cz] = segment.center as [number, number]
       const arcRadius = Math.hypot(from[0] - cx, from[1] - cz)
       const angle = Math.atan2(from[1] - cz, from[0] - cx)
-      const sweep = Number(segment.sweep)
-      const steps = Math.max(1, Math.ceil(Math.abs(sweep) / RAMP_ARC_STEP))
+      const steps = Math.min(MAX_RAMP_ARC_STEPS, Math.max(1, Math.ceil(Math.abs(sweep) / RAMP_ARC_STEP)))
       for (let step = 1; step <= steps; step += 1) {
         const at = angle + (sweep * step) / steps
         line.push([cx + arcRadius * Math.cos(at), cz + arcRadius * Math.sin(at)])
       }
     }
+    if (line.length > MAX_RAMP_POINTS) return []
   }
-  if (line.some(([x, z]) => !Number.isFinite(x) || !Number.isFinite(z))) return []
   const shapes: GrassObstacleShape[] = []
   for (let index = 0; index + 1 < line.length; index += 1) {
     shapes.push({
@@ -446,7 +545,8 @@ function footprintOutline(
     ) / 2
   const points = polygon.map(place)
   const shapes: GrassObstacleShape[] = [{ kind: 'polygon', points }]
-  if (margin > 1e-6) {
+  // A margin that is no finite, plausible coping leaves the outline alone.
+  if (margin > 1e-6 && margin <= MAX_RADIUS) {
     for (let index = 0; index < points.length; index += 1) {
       shapes.push({
         kind: 'capsule',
@@ -491,8 +591,9 @@ type ScriptedShape = { source?: { manifest?: { shape?: { bands?: ShapeBand[] } }
  */
 function standingOutline(node: AnyNode, transform: SiteTransform): GrassObstacleShape[] | null {
   if (node.type !== 'item') return null
-  const bands = (node as ScriptedShape).source?.manifest?.shape?.bands
-  if (!bands?.length) return null
+  const allBands = (node as ScriptedShape).source?.manifest?.shape?.bands
+  if (!Array.isArray(allBands) || allBands.length === 0) return null
+  const bands = allBands.slice(0, MAX_BANDS)
   const tilted = (rotation: readonly number[]) =>
     Math.abs(rotation[0] ?? 0) > TILT_EPSILON || Math.abs(rotation[2] ?? 0) > TILT_EPSILON
   if (tilted(node.rotation) || tilted(node.asset.rotation)) return null
@@ -512,17 +613,22 @@ function standingOutline(node: AnyNode, transform: SiteTransform): GrassObstacle
     )
     return transformPoint([px + node.position[0], pz + node.position[2]], transform)
   }
-  const shapes = bands
-    .filter((band) => (band.y0 - base) * metresPerUnit < GRASS_REACH)
-    .flatMap((band) =>
-      band.polygons
-        .filter((polygon) => polygon.outer.length >= 3)
-        .map((polygon) => ({
-          kind: 'polygon' as const,
-          points: polygon.outer.map(point),
-          holes: (polygon.holes ?? []).map((hole) => hole.map(point)),
-        })),
-    )
+  if (!Number.isFinite(base)) return null
+  const shapes: GrassObstacleShape[] = []
+  for (const band of bands) {
+    if (!((band.y0 - base) * metresPerUnit < GRASS_REACH) || !Array.isArray(band.polygons)) continue
+    for (const polygon of band.polygons.slice(0, MAX_BAND_POLYGONS)) {
+      // An outline this mask cannot bound is no outline: the caller falls back to the box.
+      if (!boundedRing(polygon?.outer, MAX_OUTLINE_POINTS)) return null
+      const holes = (Array.isArray(polygon.holes) ? polygon.holes : []).slice(0, MAX_HOLES)
+      if (!holes.every((hole) => boundedRing(hole, MAX_OUTLINE_POINTS))) return null
+      shapes.push({
+        kind: 'polygon',
+        points: polygon.outer.map(point),
+        holes: holes.map((hole) => hole.map(point)),
+      })
+    }
+  }
   return shapes.length > 0 ? shapes : null
 }
 

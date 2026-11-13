@@ -64,6 +64,8 @@ export function siteTerrainOf(site: SiteNode, nodes: SceneNodes): TerrainField |
   return readPersistedTerrain(site, nodes)
 }
 
+const MAX_RELIEF_SAMPLES = 1_000_000
+
 /** Lowest and highest ground on the terrain's own lattice over a plan box, or null off the field. */
 export function terrainReliefOver(
   terrain: TerrainField,
@@ -75,11 +77,14 @@ export function terrainReliefOver(
   const col1 = index(bounds.maxX, terrain.origin[0], terrain.cols, Math.ceil)
   const row0 = index(bounds.minZ, terrain.origin[1], terrain.rows, Math.floor)
   const row1 = index(bounds.maxZ, terrain.origin[1], terrain.rows, Math.ceil)
+  if (!Number.isFinite(col0 + col1 + row0 + row1)) return null
+  // A field's box is scene data (a virtual one spans every tile): read at most a million samples.
+  const stride = Math.max(1, Math.ceil(Math.sqrt(((col1 - col0 + 1) * (row1 - row0 + 1)) / MAX_RELIEF_SAMPLES)))
   let minM = Number.POSITIVE_INFINITY
   let maxM = Number.NEGATIVE_INFINITY
-  for (let row = row0; row <= row1; row += 1) {
+  for (let row = row0; row <= row1; row += stride) {
     const z = terrain.origin[1] + row * terrain.spacing
-    for (let col = col0; col <= col1; col += 1) {
+    for (let col = col0; col <= col1; col += stride) {
       const height = surfaceHeightAt(terrain, terrain.origin[0] + col * terrain.spacing, z)
       if (!Number.isFinite(height)) continue
       if (height < minM) minM = height
