@@ -26,7 +26,14 @@ import {
 } from './obstacle-field'
 
 const CURVED_WALL_SEGMENTS = 24
-const FOLIAGE_NAME = /plant|palm|foliage|tree|shrub|hedge|grass|fern|flower|bouquet|vase of|landscape/i
+/** The words core's usage field files foliage under (`spatial/usage-field/pieces.ts`). */
+const FOLIAGE_WORDS = /plant|palm|foliage|tree|shrub|hedge|grass|fern|flower|bouquet|vase of|landscape/i
+/** From this height (m) a plant's box is its crown, not what it has on the ground. */
+const TALL_FOLIAGE_HEIGHT = 2
+/** Grass stands in the lowest half metre: only what an object has there clears it. */
+const GRASS_REACH = 0.5
+/** A pose turned about a horizontal axis has no plan outline to read (core reads its box too). */
+const TILT_EPSILON = 1e-9
 
 type SiteTransform = {
   readonly x: number
@@ -222,34 +229,34 @@ function collectFloorPlacedShapes(
     if (!floorPlaced?.collides || floorPlaced.applies?.(node) === false) continue
 
     const footprints = getFloorPlacedFootprints(floorPlaced, node, { nodes })
+    // What the object really has in the grass, when it says so: no name is read.
+    const standing = footprints.length > 0 ? standingOutline(node, transform) : []
+    if (standing.length > 0) {
+      output.push(...standing)
+      continue
+    }
+    const foliage = hasFoliageHint(node)
     for (const footprint of footprints) {
       const position = footprint.position ?? nodePosition(node)
       if (!position) continue
       const halfX = Math.abs(footprint.dimensions[0]) / 2
       const halfZ = Math.abs(footprint.dimensions[2]) / 2
       if (halfX <= 0 || halfZ <= 0) continue
-      if (
-        node.type === 'item' &&
-        footprint.dimensions[1] >= 2 &&
-        FOLIAGE_NAME.test([node.name, node.asset.name, node.asset.category].join(' '))
-      ) {
-        const outline = groundOutline(node, transform)
-        if (outline.length) {
-          output.push(...outline)
-          continue
-        }
-        const center = transformPoint([position[0], position[2]], transform)
+      const center = transformPoint([position[0], position[2]], transform)
+      const height = footprint.dimensions[1]
+      if (foliage && height >= TALL_FOLIAGE_HEIGHT) {
+        // A tall plant stands on a trunk: its box is the crown overhead, a square in the lawn.
         output.push({
           kind: 'capsule',
           start: center,
           end: center,
-          radius: Math.min(halfX, halfZ, Math.max(0.15, Math.min(0.5, footprint.dimensions[1] * 0.04))),
+          radius: Math.min(halfX, halfZ, Math.max(0.15, Math.min(0.5, height * 0.04))),
         })
         continue
       }
       output.push({
         kind: 'box',
-        center: transformPoint([position[0], position[2]], transform),
+        center,
         halfSize: [halfX, halfZ],
         rotation: transform.rotation + (footprint.rotation[1] ?? 0),
       })
@@ -257,16 +264,46 @@ function collectFloorPlacedShapes(
   }
 }
 
-type OutlineBand = {
-  y0: number
-  polygons: { outer: [number, number][]; holes?: [number, number][][] }[]
+/**
+ * Whether a node is a plant, where nothing better than words says so: an item by its name,
+ * category and tags (the catalogue's models carry no outline here), another plugin's kind by its
+ * kind name and label. The plugin's own id is not read: a plugin of plants also ships its pots.
+ */
+function hasFoliageHint(node: AnyNode): boolean {
+  if (node.type === 'item') {
+    return FOLIAGE_WORDS.test(
+      [node.name, node.asset.name, node.asset.category, ...(node.asset.tags ?? [])].join(' '),
+    )
+  }
+  const kind = String(node.type)
+  const label = nodeRegistry.get(node.type)?.presentation?.label
+  return FOLIAGE_WORDS.test(`${kind.slice(kind.indexOf(':') + 1)} ${label ?? ''} ${node.name ?? ''}`)
 }
 
-function groundOutline(node: Extract<AnyNode, { type: 'item' }>, transform: SiteTransform): GrassObstacleShape[] {
-  const source = (node as unknown as { source?: { manifest?: { shape?: { bands?: OutlineBand[] } } } }).source
-  const bands = source?.manifest?.shape?.bands
+type PlanRing = [number, number][]
+type ShapeBand = {
+  y0: number
+  polygons: { outer: PlanRing; holes?: PlanRing[] }[]
+}
+/** The outline a scripted object's compiler traced from its meshes, height band by height band. */
+type ScriptedShape = { source?: { manifest?: { shape?: { bands?: ShapeBand[] } } } }
+
+/**
+ * What a scripted object has standing in the grass: the outlines of its height bands that start
+ * within the grass's reach of its base, mapped as core maps them (the corrective asset pose, then
+ * the node's). A palm clears its trunk and a clipped ball its foot, whatever they are called.
+ * Empty when the object carries no outline or is tilted, so the caller falls back to its box.
+ */
+function standingOutline(node: AnyNode, transform: SiteTransform): GrassObstacleShape[] {
+  if (node.type !== 'item') return []
+  const bands = (node as ScriptedShape).source?.manifest?.shape?.bands
   if (!bands?.length) return []
-  const lowest = Math.min(...bands.map((band) => band.y0))
+  const tilted = (rotation: readonly number[]) =>
+    Math.abs(rotation[0] ?? 0) > TILT_EPSILON || Math.abs(rotation[2] ?? 0) > TILT_EPSILON
+  if (tilted(node.rotation) || tilted(node.asset.rotation)) return []
+  const metresPerUnit = Math.abs(node.asset.scale[1] * node.scale[1])
+  if (!(metresPerUnit > 0)) return []
+  const base = Math.min(...bands.map((band) => band.y0))
   const turn = (x: number, z: number, angle: number): [number, number] => [
     x * Math.cos(angle) + z * Math.sin(angle),
     -x * Math.sin(angle) + z * Math.cos(angle),
@@ -280,13 +317,17 @@ function groundOutline(node: Extract<AnyNode, { type: 'item' }>, transform: Site
     )
     return transformPoint([px + node.position[0], pz + node.position[2]], transform)
   }
-  return bands.filter((band) => band.y0 === lowest).flatMap((band) =>
-    band.polygons.filter((polygon) => polygon.outer.length >= 3).map((polygon) => ({
-      kind: 'polygon' as const,
-      points: polygon.outer.map(point),
-      holes: (polygon.holes ?? []).map((hole) => hole.map(point)),
-    })),
-  )
+  return bands
+    .filter((band) => (band.y0 - base) * metresPerUnit < GRASS_REACH)
+    .flatMap((band) =>
+      band.polygons
+        .filter((polygon) => polygon.outer.length >= 3)
+        .map((polygon) => ({
+          kind: 'polygon' as const,
+          points: polygon.outer.map(point),
+          holes: (polygon.holes ?? []).map((hole) => hole.map(point)),
+        })),
+    )
 }
 
 function directChildren(parent: AnyNode, nodes: Readonly<Record<string, AnyNode>>): AnyNode[] {

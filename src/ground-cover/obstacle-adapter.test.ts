@@ -22,6 +22,203 @@ function scene(...nodes: AnyNode[]): Record<string, AnyNode> {
   return Object.fromEntries(nodes.map((node) => [node.id, node]))
 }
 
+/** The item kind and the plant kinds of other plugins, as their hosts register them. */
+function withPlantKinds(run: () => void): void {
+  const registryDefinitions = Array.from(nodeRegistry.entries(), ([, definition]) => definition)
+  const kind = (name: string, floorPlaced: unknown, label?: string) =>
+    registerNode({
+      kind: name,
+      schemaVersion: 1,
+      schema: ItemNode,
+      category: 'utility',
+      defaults: () => ({}) as never,
+      capabilities: { floorPlaced },
+      ...(label ? { presentation: { label } } : {}),
+    } as unknown as AnyNodeDefinition)
+  /** plugin-trees: a trunk-sized footprint that does not collide (tree, flower and grass alike). */
+  const trunk = (share: number) => ({
+    collides: false,
+    footprint: (node: { height: number; rotation: [number, number, number] }) => ({
+      dimensions: [node.height * share, node.height, node.height * share],
+      rotation: node.rotation,
+    }),
+  })
+  /** A plugin kind that collides over the box of its whole crown. */
+  const crown = {
+    collides: true,
+    footprint: (node: { size: [number, number, number]; rotation: [number, number, number] }) => ({
+      dimensions: node.size,
+      rotation: node.rotation,
+    }),
+  }
+  try {
+    kind('item', {
+      collides: true,
+      footprint: (node: ItemNode) => ({
+        position: node.position,
+        dimensions: node.asset.dimensions,
+        rotation: node.rotation,
+      }),
+    })
+    kind('trees:tree', trunk(0.07), 'Tree')
+    kind('trees:flower', trunk(0.25), 'Flower')
+    kind('trees:grass', trunk(0.3), 'Grass')
+    kind('garden:palm', crown, 'Palm')
+    kind('garden:specimen', crown, 'Ornamental tree')
+    kind('garden:shed', crown, 'Shed')
+    run()
+  } finally {
+    nodeRegistry._reset()
+    for (const definition of registryDefinitions) registerNode(definition)
+  }
+}
+
+type Ring = [number, number][]
+type Band = { y0: number; y1: number; polygons: { outer: Ring; holes?: Ring[] }[] }
+
+const square = (half: number): Ring => [[-half, -half], [half, -half], [half, half], [-half, half]]
+const TRUNK: Ring = [[-0.1, -0.2], [0.1, -0.2], [0.1, 0.2], [-0.1, 0.2]]
+/** A trunk under a crown that starts a metre up. */
+const TREE_BANDS: Band[] = [
+  { y0: 0, y1: 1, polygons: [{ outer: TRUNK }] },
+  { y0: 1, y1: 5, polygons: [{ outer: square(2) }] },
+]
+/** A clipped ball: a foot, the swell of the ball inside the grass, the ball above it. */
+const BALL_BANDS: Band[] = [
+  { y0: 0, y1: 0.25, polygons: [{ outer: square(0.15) }] },
+  { y0: 0.25, y1: 0.75, polygons: [{ outer: square(0.4) }] },
+  { y0: 0.75, y1: 1, polygons: [{ outer: square(0.5) }] },
+]
+
+function expectShape(actual: unknown, expected: unknown, path = 'shape'): void {
+  if (typeof expected === 'number') {
+    expect(typeof actual, path).toBe('number')
+    expect(actual as number, path).toBeCloseTo(expected, 9)
+    return
+  }
+  if (Array.isArray(expected)) {
+    expect(Array.isArray(actual), path).toBe(true)
+    expect((actual as unknown[]).length, path).toBe(expected.length)
+    expected.forEach((value, index) => expectShape((actual as unknown[])[index], value, `${path}[${index}]`))
+    return
+  }
+  if (expected && typeof expected === 'object') {
+    expect(Object.keys(actual as object).sort(), path).toEqual(Object.keys(expected).sort())
+    for (const [key, value] of Object.entries(expected)) {
+      expectShape((actual as Record<string, unknown>)[key], value, `${path}.${key}`)
+    }
+    return
+  }
+  expect(actual, path).toEqual(expected)
+}
+
+describe('what a plant clears in the grass', () => {
+  const site = SiteNode.parse({ id: 'site_plants' })
+  const at: [number, number, number] = [2, 0, 3]
+  const disc = (radius: number) => ({ kind: 'capsule', start: [2, 3], end: [2, 3], radius })
+  const box = (halfX: number, halfZ: number) => ({
+    kind: 'box', center: [2, 3], halfSize: [halfX, halfZ], rotation: 0,
+  })
+  const polygon = (points: Ring) => ({ kind: 'polygon', points, holes: [] })
+
+  type ItemOptions = {
+    category?: string
+    tags?: string[]
+    bands?: Band[]
+    rotation?: [number, number, number]
+    scale?: [number, number, number]
+    asset?: Record<string, unknown>
+  }
+  const item = (name: string, dimensions: [number, number, number], options: ItemOptions = {}) => {
+    const node = ItemNode.parse({
+      id: 'item_plant',
+      parentId: site.id,
+      position: at,
+      rotation: options.rotation ?? [0, 0, 0],
+      scale: options.scale ?? [1, 1, 1],
+      asset: {
+        id: 'asset_plant', category: options.category ?? 'outdoor', name, thumbnail: '',
+        src: 'asset://test', dimensions,
+        ...(options.tags ? { tags: options.tags } : {}),
+        ...options.asset,
+      },
+    })
+    return (
+      options.bands ? { ...node, source: { manifest: { shape: { bands: options.bands } } } } : node
+    ) as AnyNode
+  }
+  const plugin = (type: string, fields: Record<string, unknown>) =>
+    ({
+      id: 'plant_plugin', type, object: 'node', parentId: site.id, visible: true, metadata: {},
+      position: at, rotation: [0, 0, 0], ...fields,
+    }) as unknown as AnyNode
+
+  const cases: [string, AnyNode, unknown[]][] = [
+    // Other plugins' plants. plugin-trees declares a trunk footprint that does not collide.
+    ['a plugin-trees tree clears nothing', plugin('trees:tree', { height: 7 }), []],
+    ['a plugin-trees flower clears nothing', plugin('trees:flower', { height: 0.6 }), []],
+    ['a plugin-trees grass tuft clears nothing', plugin('trees:grass', { height: 0.5 }), []],
+    ['a colliding plant kind clears a trunk disc, by its kind',
+      plugin('garden:palm', { size: [4, 6, 4] }), [disc(6 * 0.04)]],
+    ['a colliding plant kind clears a trunk disc, by its label',
+      plugin('garden:specimen', { size: [5, 10, 5] }), [disc(0.4)]],
+    ['a low colliding plant kind keeps its box', plugin('garden:palm', { size: [1.2, 1, 1.2] }), [box(0.6, 0.6)]],
+    ['a tall colliding kind that is no plant keeps its box',
+      plugin('garden:shed', { size: [3, 2.5, 2] }), [box(1.5, 1)]],
+    // Objects an agent scripts carry the outline of every height band: no name is read.
+    ['a scripted "Coastal palm" clears its trunk',
+      item('Coastal palm', [4, 5, 4], { bands: TREE_BANDS }), [polygon([[1.9, 2.8], [2.1, 2.8], [2.1, 3.2], [1.9, 3.2]])]],
+    ['a scripted tree with no plant word in its name clears its trunk',
+      item('Jacaranda', [4, 5, 4], { category: 'custom', bands: TREE_BANDS }),
+      [polygon([[1.9, 2.8], [2.1, 2.8], [2.1, 3.2], [1.9, 3.2]])]],
+    ['a scripted "Olive tree", scaled and turned a quarter, clears its trunk where it stands',
+      item('Olive tree', [4, 5, 4], { bands: TREE_BANDS, scale: [2, 1, 2], rotation: [0, Math.PI / 2, 0] }),
+      [polygon([[1.6, 3.2], [1.6, 2.8], [2.4, 2.8], [2.4, 3.2]])]],
+    ['a scripted tree whose asset is corrected (scale, turn, offset) clears its trunk where it is drawn',
+      item('Fig', [4, 5, 4], {
+        bands: TREE_BANDS,
+        asset: { scale: [0.5, 0.5, 0.5], rotation: [0, Math.PI, 0], offset: [1, 0, -1] },
+      }),
+      [polygon([[3.05, 2.1], [2.95, 2.1], [2.95, 1.9], [3.05, 1.9]])]],
+    ['a scripted "Boxwood" ball clears what it has inside the grass, not its box',
+      item('Boxwood', [1, 1, 1], { bands: BALL_BANDS }),
+      [
+        polygon([[1.85, 2.85], [2.15, 2.85], [2.15, 3.15], [1.85, 3.15]]),
+        polygon([[1.6, 2.6], [2.4, 2.6], [2.4, 3.4], [1.6, 3.4]]),
+      ]],
+    ['a scripted object keeps the holes of its outline',
+      item('Planter ring', [2, 2.4, 2], {
+        category: 'custom',
+        bands: [{ y0: 0, y1: 0.4, polygons: [{ outer: square(1), holes: [square(0.5)] }] }],
+      }),
+      [{
+        kind: 'polygon',
+        points: [[1, 2], [3, 2], [3, 4], [1, 4]],
+        holes: [[[1.5, 2.5], [2.5, 2.5], [2.5, 3.5], [1.5, 3.5]]],
+      }]],
+    ['a leaning scripted palm has no plan outline to read: a trunk disc, by its name',
+      item('Leaning palm', [4, 5, 4], { bands: TREE_BANDS, rotation: [0.3, 0, 0] }), [disc(0.2)]],
+    ['a leaning scripted object that is no plant keeps its box',
+      item('Mast', [1, 5, 1], { category: 'custom', bands: TREE_BANDS, rotation: [0.3, 0, 0] }), [box(0.5, 0.5)]],
+    // Catalogue models have no outline here: the words core files foliage under, tags included.
+    ['a tall catalogue plant known by its tags clears a trunk disc',
+      item('Kentia', [3, 4, 3], { tags: ['indoor-plant'] }), [disc(0.16)]],
+    ['a tall catalogue plant known by its category clears a trunk disc',
+      item('Kentia', [3, 4, 3], { category: 'plants' }), [disc(0.16)]],
+    ['a tall catalogue model that is no plant keeps its box', item('Wardrobe', [1.2, 2.2, 0.6]), [box(0.6, 0.3)]],
+    ['a slender tall plant never clears more than its own footprint',
+      item('Bamboo plant', [0.2, 3, 0.24]), [disc(0.1)]],
+  ]
+
+  test.each(cases)('%s', (_name, node, expected) => {
+    withPlantKinds(() => {
+      const shapes = collectGrassObstacleShapes(site, scene(site, node))
+      expect(shapes.length).toBe(expected.length)
+      expected.forEach((shape, index) => expectShape(shapes[index], shape, `shapes[${index}]`))
+    })
+  })
+})
+
 describe('Pascal plan obstacle adapter', () => {
   test('tall foliage clears a trunk disc while low foliage and furniture keep their boxes', () => {
     const registryDefinitions = Array.from(nodeRegistry.entries(), ([, definition]) => definition)
