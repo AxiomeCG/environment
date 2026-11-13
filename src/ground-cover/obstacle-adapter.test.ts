@@ -154,8 +154,9 @@ describe('what a plant clears in the grass', () => {
     }) as unknown as AnyNode
 
   const cases: [string, AnyNode, unknown[]][] = [
-    // Other plugins' plants. plugin-trees declares a trunk footprint that does not collide.
-    ['a plugin-trees tree clears nothing', plugin('trees:tree', { height: 7 }), []],
+    // Other plugins' plants. plugin-trees declares a trunk footprint that does not collide:
+    // a tree clears that trunk, a flower and a tuft stand in the lawn.
+    ['a plugin-trees tree clears its trunk', plugin('trees:tree', { height: 7 }), [disc((7 * 0.07) / 2)]],
     ['a plugin-trees flower clears nothing', plugin('trees:flower', { height: 0.6 }), []],
     ['a plugin-trees grass tuft clears nothing', plugin('trees:grass', { height: 0.5 }), []],
     ['a colliding plant kind clears a trunk disc, by its kind',

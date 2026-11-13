@@ -2,6 +2,7 @@ import {
   type AnyNode,
   type AnyNodeId,
   type BuildingNode,
+  type FloorPlacedConfig,
   getFloorPlacedFootprints,
   getLevelElevations,
   getWallThickness,
@@ -36,6 +37,14 @@ const TALL_FOLIAGE_HEIGHT = 2
 const GRASS_REACH = 0.5
 /** A pose turned about a horizontal axis has no plan outline to read (core reads its box too). */
 const TILT_EPSILON = 1e-9
+/**
+ * Core kinds that are built on the ground yet leave floor collision off (it is about furniture
+ * placement): steps declare a footprint, a rock and a ramp carry their outline in the Site's frame.
+ */
+const STEPS_KIND = 'stair'
+const ROCK_KIND = 'rock'
+const RAMP_KIND = 'ramp'
+const RAMP_ARC_STEP = Math.PI / 18
 
 type SiteTransform = {
   readonly x: number
@@ -225,6 +234,17 @@ function addWallShapes(
   }
 }
 
+/**
+ * What stands on the ground among `children` (a grade level's or the Site's), other than slabs,
+ * rooms and walls: the lawn's paint, blades and flowers keep off it.
+ *
+ * A node owns the ground under it when its kind opts into floor collision (solid furniture,
+ * columns, a block resting on the floor), when it is built steps, or when it is a node of another
+ * plugin that declares a footprint (a pool, a street fixture): floor collision is about placing
+ * furniture, and a pool declares none. A rock and a ramp carry their own outline. A plant is not an
+ * owner: a tall one clears its trunk, a low one that does not collide (a flower, a tuft) stands in
+ * the lawn. Markers of the core with a footprint (a spawn point) own nothing.
+ */
 function collectFloorPlacedShapes(
   children: readonly AnyNode[],
   nodes: Record<AnyNodeId, AnyNode>,
@@ -233,17 +253,35 @@ function collectFloorPlacedShapes(
 ): void {
   for (const node of children) {
     if (node.type === 'slab' || node.type === 'zone' || node.type === 'wall') continue
-    const floorPlaced = nodeRegistry.get(node.type)?.capabilities?.floorPlaced
-    if (!floorPlaced?.collides || floorPlaced.applies?.(node) === false) continue
-
-    const footprints = getFloorPlacedFootprints(floorPlaced, node, { nodes })
-    // What the object really has in the grass, when it says so: no name is read.
-    const standing = footprints.length > 0 ? standingOutline(node, transform) : []
-    if (standing.length > 0) {
-      output.push(...standing)
+    const outline = ownOutline(node, transform)
+    if (outline) {
+      output.push(...outline)
       continue
     }
+    const floorPlaced = nodeRegistry.get(node.type)?.capabilities?.floorPlaced
+    if (!floorPlaced || floorPlaced.applies?.(node) === false) continue
+    const collides = floorPlacedCollides(floorPlaced, node)
+    if (!collides && !isBuiltWithoutCollision(node)) continue
+
+    const footprints = getFloorPlacedFootprints(floorPlaced, node, { nodes })
     const foliage = hasFoliageHint(node)
+    if (!foliage) {
+      // What the object really has on the ground, when it says so: no name is read.
+      const standing =
+        footprints.length > 0
+          ? (standingOutline(node, transform) ?? footprintOutline(node, footprints, transform))
+          : null
+      if (standing) {
+        output.push(...standing)
+        continue
+      }
+    } else {
+      const standing = footprints.length > 0 ? standingOutline(node, transform) : null
+      if (standing) {
+        output.push(...standing)
+        continue
+      }
+    }
     for (const footprint of footprints) {
       const position = footprint.position ?? nodePosition(node)
       if (!position) continue
@@ -262,6 +300,8 @@ function collectFloorPlacedShapes(
         })
         continue
       }
+      // A low plant that blocks no placement stands in the lawn, not on a bare patch.
+      if (foliage && !collides) continue
       output.push({
         kind: 'box',
         center,
@@ -270,6 +310,133 @@ function collectFloorPlacedShapes(
       })
     }
   }
+}
+
+/** Core's `floorPlacedCollides`: the flag, or the kind's own predicate for this node. */
+function floorPlacedCollides(floorPlaced: FloorPlacedConfig, node: AnyNode): boolean {
+  const collides: unknown = floorPlaced.collides
+  return typeof collides === 'function' ? collides(node) === true : collides === true
+}
+
+/**
+ * Built on the ground though its kind leaves floor collision off: steps, and any node of another
+ * plugin that declares a footprint. A plugin kind is namespaced (`pool:pool`); the core's are not.
+ */
+function isBuiltWithoutCollision(node: AnyNode): boolean {
+  const kind = String(node.type)
+  return kind === STEPS_KIND || (kind.includes(':') && !kind.startsWith('environment:'))
+}
+
+function isGroundOwnerKind(node: AnyNode): boolean {
+  const kind = String(node.type)
+  if (kind === ROCK_KIND || kind === RAMP_KIND) return true
+  const floorPlaced = nodeRegistry.get(node.type)?.capabilities?.floorPlaced
+  if (!floorPlaced) return false
+  // A kind that can collide can own ground, whichever of its nodes do just now.
+  const collides: unknown = floorPlaced.collides
+  return collides === true || typeof collides === 'function' || isBuiltWithoutCollision(node)
+}
+
+type PlanPoint = readonly [number, number]
+
+function planPoints(value: unknown): [number, number][] | null {
+  if (!Array.isArray(value) || value.length < 3) return null
+  const points: [number, number][] = []
+  for (const point of value) {
+    if (!Array.isArray(point) || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) return null
+    points.push([Number(point[0]), Number(point[1])])
+  }
+  return points
+}
+
+/**
+ * The outline of a kind that stands on the ground without declaring a footprint: a rock's plan
+ * polygon, a ramp's centreline at its width, each in its parent's frame. Null for any other kind.
+ */
+function ownOutline(node: AnyNode, transform: SiteTransform): GrassObstacleShape[] | null {
+  const kind = String(node.type)
+  if (kind === ROCK_KIND) {
+    const polygon = planPoints((node as { polygon?: unknown }).polygon)
+    return polygon
+      ? [{ kind: 'polygon', points: polygon.map((point) => transformPoint(point, transform)) }]
+      : []
+  }
+  if (kind !== RAMP_KIND) return null
+  const ramp = node as { start?: unknown; segments?: unknown; width?: unknown }
+  const start = Array.isArray(ramp.start) ? ramp.start : null
+  const radius = typeof ramp.width === 'number' && ramp.width > 0 ? ramp.width / 2 : 0
+  if (!start || !Number.isFinite(start[0]) || !Number.isFinite(start[1]) || radius <= 0) return []
+  const line: [number, number][] = [[Number(start[0]), Number(start[1])]]
+  for (const segment of Array.isArray(ramp.segments) ? ramp.segments : []) {
+    const from = line[line.length - 1] as [number, number]
+    if (segment?.type === 'line' && Array.isArray(segment.end)) {
+      line.push([Number(segment.end[0]), Number(segment.end[1])])
+    } else if (segment?.type === 'arc' && Array.isArray(segment.center)) {
+      // As core walks it: about the centre, from where the last segment ended, through `sweep`.
+      const [cx, cz] = [Number(segment.center[0]), Number(segment.center[1])]
+      const arcRadius = Math.hypot(from[0] - cx, from[1] - cz)
+      const angle = Math.atan2(from[1] - cz, from[0] - cx)
+      const sweep = Number(segment.sweep)
+      const steps = Math.max(1, Math.ceil(Math.abs(sweep) / RAMP_ARC_STEP))
+      for (let step = 1; step <= steps; step += 1) {
+        const at = angle + (sweep * step) / steps
+        line.push([cx + arcRadius * Math.cos(at), cz + arcRadius * Math.sin(at)])
+      }
+    }
+  }
+  if (line.some(([x, z]) => !Number.isFinite(x) || !Number.isFinite(z))) return []
+  const shapes: GrassObstacleShape[] = []
+  for (let index = 0; index + 1 < line.length; index += 1) {
+    shapes.push({
+      kind: 'capsule',
+      start: transformPoint(line[index] as PlanPoint, transform),
+      end: transformPoint(line[index + 1] as PlanPoint, transform),
+      radius,
+    })
+  }
+  return shapes
+}
+
+/**
+ * The outline of a node that carries its own plan polygon about its position (a pool), grown to
+ * the footprint its kind declares: the box of a pool is its outline plus its coping, so the margin
+ * between the two is the coping, cleared along every edge. A kidney pool then clears a kidney, not
+ * the square round it. Null when the node has no such polygon: the caller uses its box.
+ */
+function footprintOutline(
+  node: AnyNode,
+  footprints: ReturnType<typeof getFloorPlacedFootprints>,
+  transform: SiteTransform,
+): GrassObstacleShape[] | null {
+  const polygon = planPoints((node as { polygon?: unknown }).polygon)
+  const position = nodePosition(node)
+  const footprint = footprints[0]
+  if (!polygon || !position || footprints.length !== 1 || !footprint || footprint.position) return null
+  const yaw = footprint.rotation[1] ?? 0
+  const cos = Math.cos(yaw)
+  const sin = Math.sin(yaw)
+  const place = ([x, z]: PlanPoint): [number, number] =>
+    transformPoint([position[0] + x * cos + z * sin, position[2] - x * sin + z * cos], transform)
+  const xs = polygon.map(([x]) => x)
+  const zs = polygon.map(([, z]) => z)
+  const margin =
+    Math.min(
+      Math.abs(footprint.dimensions[0]) - (Math.max(...xs) - Math.min(...xs)),
+      Math.abs(footprint.dimensions[2]) - (Math.max(...zs) - Math.min(...zs)),
+    ) / 2
+  const points = polygon.map(place)
+  const shapes: GrassObstacleShape[] = [{ kind: 'polygon', points }]
+  if (margin > 1e-6) {
+    for (let index = 0; index < points.length; index += 1) {
+      shapes.push({
+        kind: 'capsule',
+        start: points[index] as PlanPoint,
+        end: points[(index + 1) % points.length] as PlanPoint,
+        radius: margin,
+      })
+    }
+  }
+  return shapes
 }
 
 /**
@@ -300,17 +467,17 @@ type ScriptedShape = { source?: { manifest?: { shape?: { bands?: ShapeBand[] } }
  * What a scripted object has standing in the grass: the outlines of its height bands that start
  * within the grass's reach of its base, mapped as core maps them (the corrective asset pose, then
  * the node's). A palm clears its trunk and a clipped ball its foot, whatever they are called.
- * Empty when the object carries no outline or is tilted, so the caller falls back to its box.
+ * Null when the object carries no outline or is tilted, so the caller falls back to its box.
  */
-function standingOutline(node: AnyNode, transform: SiteTransform): GrassObstacleShape[] {
-  if (node.type !== 'item') return []
+function standingOutline(node: AnyNode, transform: SiteTransform): GrassObstacleShape[] | null {
+  if (node.type !== 'item') return null
   const bands = (node as ScriptedShape).source?.manifest?.shape?.bands
-  if (!bands?.length) return []
+  if (!bands?.length) return null
   const tilted = (rotation: readonly number[]) =>
     Math.abs(rotation[0] ?? 0) > TILT_EPSILON || Math.abs(rotation[2] ?? 0) > TILT_EPSILON
-  if (tilted(node.rotation) || tilted(node.asset.rotation)) return []
+  if (tilted(node.rotation) || tilted(node.asset.rotation)) return null
   const metresPerUnit = Math.abs(node.asset.scale[1] * node.scale[1])
-  if (!(metresPerUnit > 0)) return []
+  if (!(metresPerUnit > 0)) return null
   const base = Math.min(...bands.map((band) => band.y0))
   const turn = (x: number, z: number, angle: number): [number, number] => [
     x * Math.cos(angle) + z * Math.sin(angle),
@@ -325,7 +492,7 @@ function standingOutline(node: AnyNode, transform: SiteTransform): GrassObstacle
     )
     return transformPoint([px + node.position[0], pz + node.position[2]], transform)
   }
-  return bands
+  const shapes = bands
     .filter((band) => (band.y0 - base) * metresPerUnit < GRASS_REACH)
     .flatMap((band) =>
       band.polygons
@@ -336,6 +503,7 @@ function standingOutline(node: AnyNode, transform: SiteTransform): GrassObstacle
           holes: (polygon.holes ?? []).map((hole) => hole.map(point)),
         })),
     )
+  return shapes.length > 0 ? shapes : null
 }
 
 function directChildren(parent: AnyNode, nodes: Readonly<Record<string, AnyNode>>): AnyNode[] {
@@ -408,7 +576,7 @@ function isGrassObstacleNode(node: AnyNode | undefined): boolean {
   ) {
     return true
   }
-  return nodeRegistry.get(node.type)?.capabilities?.floorPlaced?.collides === true
+  return isGroundOwnerKind(node)
 }
 
 function siteAncestorId(node: AnyNode, nodes: Readonly<Record<string, AnyNode>>): string | null {
