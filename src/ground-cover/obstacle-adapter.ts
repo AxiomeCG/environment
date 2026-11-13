@@ -270,17 +270,22 @@ function collectLevelShapes(
     }
     if (child.type === 'zone') {
       const zone = child
-      if (zone.spaceRole === 'room' && zone.enclosureStatus !== 'open') {
-        admitNodeShapes(output, () =>
-          zone.polygon.length > MAX_SLAB_POINTS
-            ? null
-            : [
-                {
-                  kind: 'polygon',
-                  points: zone.polygon.map((point) => transformPoint(point, transform)),
-                },
-              ],
-        )
+      if (roomOwnsGround(zone)) {
+        admitNodeShapes(output, () => {
+          const holes = (zone as RoomZone).holes
+          if (zone.polygon.length > MAX_SLAB_POINTS) return null
+          if (holes !== undefined && (!Array.isArray(holes) || holes.length > MAX_HOLES)) return null
+          return [
+            {
+              kind: 'polygon',
+              points: zone.polygon.map((point) => transformPoint(point, transform)),
+              // A courtyard the room's outline leaves out is not the room's.
+              holes: (holes ?? []).map((hole) =>
+                hole.slice(0, MAX_OUTLINE_POINTS + 1).map((point) => transformPoint(point, transform)),
+              ),
+            },
+          ]
+        })
       }
       continue
     }
@@ -294,6 +299,38 @@ function collectLevelShapes(
   }
 
   collectFloorPlacedShapes(children, nodes, transform, output)
+}
+
+/** What a host with outdoor rooms records on a room zone; a core before them records none of it. */
+type RoomZone = {
+  roomType?: unknown
+  floor?: unknown
+  floorFinish?: unknown
+  boundaryWallIds?: unknown
+  holes?: [number, number][][]
+}
+
+/**
+ * Whether a zone is the house's ground: no blade, no flower, no lawn ground and no lawn paint in
+ * it, all together.
+ *
+ * A room is, enclosed or not. An open room is still a room when it is an outdoor room (a porch, a
+ * deck, a patio: the host draws its floor from the zone, with no slab node), when a floor is
+ * recorded for it, or when the house's walls bound it (a recess under the roof). With only part of
+ * the lawn taken there, the rest shows through the floor: blades stood through a porch floor as a
+ * dark rectangle against the wall. A zone that is no room marks a piece of the site, and an open
+ * room that nothing builds is a name on the garden: the lawn runs through both, whole.
+ */
+function roomOwnsGround(zone: ZoneNode): boolean {
+  if (zone.spaceRole !== 'room') return false
+  if (zone.enclosureStatus !== 'open') return true
+  const room = zone as RoomZone
+  return (
+    typeof room.roomType === 'string' ||
+    (typeof room.floor === 'object' && room.floor !== null) ||
+    (typeof room.floorFinish === 'string' && room.floorFinish.trim() !== '') ||
+    (Array.isArray(room.boundaryWallIds) && room.boundaryWallIds.length > 0)
+  )
 }
 
 function addWallShapes(

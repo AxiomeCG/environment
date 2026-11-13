@@ -12,6 +12,8 @@ import {
   registerNode,
   SiteNode,
   SlabNode,
+  WallNode,
+  ZoneNode,
 } from '@pascal-app/core'
 import { describe, expect, test } from 'bun:test'
 import { layGround } from '../agent-operations/lay-ground'
@@ -416,5 +418,110 @@ describe('the lawn meets a pond at the water you can see, on a smooth line', () 
     // On the rim the film of water is the lawn's: blades and ground right up to the visible water.
     expect(isGrassAllowedAt(mask, 8 + 3.9, 8)).toBe(true)
     expect(isLawnGroundAt(mask, 8 + 3.9, 8)).toBe(true)
+  })
+})
+
+/**
+ * A room is the house's ground, enclosed or not. A porch, a deck and a patio are rooms outside the
+ * walls with a floor of their own (the host draws it from the zone: there need be no slab node),
+ * and a recess under the roof is bounded by the house's walls. The lawn must be all gone there:
+ * with only its ground hidden, its blades stood through the porch floor as a dark rectangle
+ * against the wall. A zone that is no room, or an open room that nothing builds, is a name on the
+ * garden: the lawn runs through it whole. Never one without the other.
+ */
+describe('a room owns the ground, a named piece of garden does not', () => {
+  // Level (4..8, 6..9) is site (6..10, 8..11).
+  const outline: Point[] = [[4, 6], [8, 6], [8, 9], [4, 9]]
+  const inside: Point[] = [[8, 9.5], [6.3, 8.3], [9.7, 10.7]]
+  const beside: Point[] = [[8, 12.5], [4.5, 9.5], [11.5, 9.5]]
+  const zone = (fields: Record<string, unknown>) =>
+    ({
+      ...ZoneNode.parse({ id: 'zone_case', parentId: 'level_garden', name: 'Zone', polygon: outline, spaceRole: 'room' }),
+      ...fields,
+    }) as AnyNode
+  const porchWall = WallNode.parse({ id: 'wall_recess', parentId: 'level_garden', start: [4, 6], end: [8, 6], thickness: 0.2 }) as AnyNode
+
+  const rooms: [string, AnyNode[], 'owned' | 'lawn'][] = [
+    ['an enclosed room', [zone({ enclosureStatus: 'enclosed' })], 'owned'],
+    ['a room whose enclosure is detected', [zone({ enclosureStatus: 'auto' })], 'owned'],
+    ['an open porch with a floor a step under the house and no slab (the alfresco)',
+      [zone({ enclosureStatus: 'open', roomType: 'porch', floor: { drop: 0.0381, finish: 'library:flooring' }, autoFromWalls: true })], 'owned'],
+    ['an open porch that says nothing of its floor', [zone({ enclosureStatus: 'open', roomType: 'porch' })], 'owned'],
+    ['an open deck', [zone({ enclosureStatus: 'open', roomType: 'deck' })], 'owned'],
+    ['an open patio', [zone({ enclosureStatus: 'open', roomType: 'patio' })], 'owned'],
+    ['an open room with a floor recorded for it', [zone({ enclosureStatus: 'open', floor: { finish: 'library:pavers' } })], 'owned'],
+    ['an open room with a floor finish named', [zone({ enclosureStatus: 'open', floorFinish: 'Exposed aggregate' })], 'owned'],
+    ['an open recess the house\'s walls bound, with no floor of its own',
+      [porchWall, zone({ enclosureStatus: 'open', hasFloor: false, boundaryWallIds: ['wall_recess'] })], 'owned'],
+    ['an open room nothing builds (a name on the garden)', [zone({ enclosureStatus: 'open', name: 'Garden' })], 'lawn'],
+    ['a zone that is no room', [zone({ spaceRole: 'generic', enclosureStatus: 'enclosed', name: 'Setback' })], 'lawn'],
+  ]
+
+  /** Blades, lawn ground and paint agree at a point: all there or all gone. */
+  function expectWhole(nodes: Nodes, point: Point, state: 'owned' | 'lawn', painted: number): void {
+    const mask = maskOf(nodes)
+    const lawn = state === 'lawn'
+    expect(isGrassAllowedAt(mask, ...point), `blade at ${point}`).toBe(lawn)
+    expect(isLawnGroundAt(mask, ...point), `lawn ground at ${point}`).toBe(lawn)
+    expect(paintedAt(nodes, point), `paint at ${point}`).toBe(painted)
+  }
+
+  test.each(rooms)('%s, the house there before the lawn', (_name, nodes, state) => {
+    const laid = layLawn(withNodes(garden(), nodes))
+    for (const point of inside) expectWhole(laid, point, state, state === 'lawn' ? 1 : 0)
+    for (const point of beside) expectWhole(laid, point, 'lawn', 1)
+  })
+
+  test.each(rooms)('%s, the lawn there before the house', (_name, nodes, state) => {
+    const before = layLawn(garden())
+    const after = withNodes(before, nodes)
+    if (state === 'owned') expect(changedGrassObstacleSiteIds(after, before)).toEqual(new Set(['site_garden']))
+    // The paint stays where it was laid; the mask alone takes blades and ground together.
+    for (const point of inside) expectWhole(after, point, state, 1)
+    for (const point of beside) expectWhole(after, point, 'lawn', 1)
+    const flowers = flowersOf(after)
+    for (const point of inside) {
+      if (state === 'owned') expect(near(flowers, point, 0.3), `flower at ${point}`).toBe(false)
+      else expect(near(flowers, point, 0.6), `flowers by ${point}`).toBe(true)
+    }
+  })
+
+  test('a room keeps the courtyard its outline leaves out', () => {
+    const ring = zone({ enclosureStatus: 'enclosed', holes: [[[5.5, 7], [6.5, 7], [6.5, 8], [5.5, 8]]] })
+    const laid = layLawn(withNodes(garden(), [ring]))
+    expectWhole(laid, [8, 9.5], 'lawn', 1)
+    expectWhole(laid, [6.3, 8.3], 'owned', 0)
+  })
+
+  test('nowhere on a lot with a house, a porch and a garden do blades stand without the lawn\'s ground', () => {
+    const house = [
+      SlabNode.parse({ id: 'slab_plate', parentId: 'level_garden', polygon: [[0, 0], [4, 0], [4, 9], [0, 9]], elevation: 0.05 }) as AnyNode,
+      { ...zone({ enclosureStatus: 'enclosed' }), id: 'zone_living', polygon: [[0, 0], [4, 0], [4, 9], [0, 9]] } as AnyNode,
+      zone({ enclosureStatus: 'open', roomType: 'porch', floor: { drop: 0.0381 } }),
+      WallNode.parse({ id: 'wall_side', parentId: 'level_garden', start: [4, 0], end: [4, 9], thickness: 0.2 }) as AnyNode,
+    ]
+    const laid = layLawn(withNodes(garden(), house))
+    const mask = maskOf(laid)
+    const paint = resolveGroundCoverPaint(lawnOf(laid), Object.values(laid), siteBounds(siteOf(laid).polygon.points))
+    let samples = 0
+    let mixed = 0
+    let disagree = 0
+    for (let x = 0.25; x < 16; x += 0.25) {
+      for (let z = 0.25; z < 16; z += 0.25) {
+        samples += 1
+        const blades = isGrassAllowedAt(mask, x, z)
+        const ground = isLawnGroundAt(mask, x, z)
+        if (blades && !ground) mixed += 1
+        // Laid after the house, the paint is where the lawn's ground is.
+        if (paintAt(paint, x, z).a > 0.5 !== ground) disagree += 1
+      }
+    }
+    expect(samples).toBe(63 * 63)
+    expect(mixed).toBe(0)
+    // Only on the outlines themselves, where the paint's lattice and the mask's differ by a cell.
+    expect(disagree).toBeLessThan(samples * 0.02)
+    expectWhole(laid, [8, 9.5], 'owned', 0)
+    expectWhole(laid, [4, 6], 'owned', 0)
+    expectWhole(laid, [13, 13], 'lawn', 1)
   })
 })
